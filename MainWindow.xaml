@@ -1,0 +1,77 @@
+<Window x:Class="NCHops.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NC_Hops" WindowState="Maximized"
+        Width="1200" Height="700">
+    <Window.Resources>
+        <Style TargetType="TextBox">
+            <Setter Property="Padding" Value="3,2"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="Label">
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- Menüleiste -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="Datei">
+                <MenuItem Header="Speichern" Click="OnSpeichern"/>
+                <Separator/>
+                <MenuItem Header="Beenden" Click="OnBeenden"/>
+            </MenuItem>
+            <MenuItem Header="Fräsen">
+                <MenuItem Header="Planfräsen"  Click="OnPlanfraesen"/>
+                <MenuItem Header="Umfahren"    Click="OnPlanfraesen"/>
+                <MenuItem Header="Nut"         Click="OnPlanfraesen"/>
+                <MenuItem Header="Tasche"      Click="OnPlanfraesen"/>
+                <MenuItem Header="Zapfen"      Click="OnPlanfraesen"/>
+            </MenuItem>
+            <MenuItem Header="Bohren">
+                <MenuItem Header="Bohrung"           Click="OnBohrung"/>
+                <MenuItem Header="Reihenlochbohrung" Click="OnPlanfraesen"/>
+            </MenuItem>
+            <MenuItem Header="Hilfe">
+                <MenuItem Header="Info" Click="OnInfo"/>
+            </MenuItem>
+        </Menu>
+
+        <!-- Eingabebereich unten -->
+        <Border DockPanel.Dock="Bottom" BorderBrush="#CCC" BorderThickness="0,1,0,0" Padding="8,6">
+            <StackPanel Orientation="Horizontal">
+                <Label Content="X:"/>
+                <TextBox x:Name="TxtX" Text="800" Width="70" Margin="0,0,12,0"/>
+                <Label Content="Y:"/>
+                <TextBox x:Name="TxtY" Text="400" Width="70" Margin="0,0,12,0"/>
+                <Label Content="Z:"/>
+                <TextBox x:Name="TxtZ" Text="19"  Width="70" Margin="0,0,16,0"/>
+                <Button Content="Aktualisieren" Padding="10,2" Click="OnAktualisieren"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Haupt-Splitter -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*" MinWidth="200"/>
+                <ColumnDefinition Width="4"/>
+                <ColumnDefinition Width="*"  MinWidth="180"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Canvas (Zeichenbereich) -->
+            <Canvas x:Name="DrawCanvas" Grid.Column="0" Background="White"
+                    SizeChanged="OnCanvasSizeChanged" ClipToBounds="True"/>
+
+            <!-- Splitter -->
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                          Background="#DDD" ResizeBehavior="PreviousAndNext"/>
+
+            <!-- G-Code Textfeld -->
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <TextBox x:Name="GCodeBox" AcceptsReturn="True" TextWrapping="NoWrap"
+                         FontFamily="Consolas" FontSize="12" VerticalAlignment="Stretch"
+                         TextChanged="OnGCodeChanged"/>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

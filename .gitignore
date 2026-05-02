@@ -1,0 +1,54 @@
+# Claude Code (lokaler Benutzer-/Maschinen-State, auf beliebiger Tiefe)
+**/.claude/settings.local.json
+**/.claude/worktrees/
+
+# .NET
+bin/
+obj/
+publish/
+*.zip
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.dbmdl
+*.jfm
+.vs/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+
+# Angular / Node
+node_modules/
+dist/
+.angular/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# OS
+.DS_Store
+
+# Temporäre Dateien
+tmp/
+temp/
+*.tmp
+*.bak
+*.log
+
+# Deployment-Artefakte (ZIP-Pakete zum manuellen Ausrollen)
+BIZInfEra/Deployment/

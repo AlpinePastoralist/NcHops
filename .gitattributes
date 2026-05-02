@@ -1,0 +1,39 @@
+# Zeilenenden-Normalisierung für das Repo
+# Git normalisiert Textdateien beim Commit auf LF und checkt sie je nach
+# core.autocrlf-Setting konsistent aus. Damit verschwinden LF/CRLF-Warnungen
+# wie "LF will be replaced by CRLF the next time Git touches it".
+
+* text=auto
+
+# Quellcode und Konfiguration explizit als Text (LF im Repo, plattform-nativ im Working Copy)
+*.cs       text diff=csharp
+*.ts       text
+*.tsx      text
+*.js       text
+*.jsx      text
+*.json     text
+*.html     text
+*.css      text
+*.scss     text
+*.md       text
+*.yml      text
+*.yaml     text
+*.xml      text
+*.sql      text
+*.csproj   text
+*.sln      text eol=crlf
+*.ps1      text eol=crlf
+*.cmd      text eol=crlf
+*.bat      text eol=crlf
+*.sh       text eol=lf
+
+# Binärdateien explizit markieren
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.pdf      binary
+*.zip      binary
+*.dll      binary
+*.exe      binary
