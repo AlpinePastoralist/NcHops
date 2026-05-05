@@ -7,6 +7,12 @@
         <Style TargetType="TextBox">
             <Setter Property="Padding" Value="3,2"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="TextBox_PreviewMouseLeftButtonDown"/>
+            <EventSetter Event="GotKeyboardFocus" Handler="TextBox_GotKeyboardFocus"/>
+        </Style>
+        <Style x:Key="NoSelectAllTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Padding" Value="3,2"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
         <Style TargetType="Label">
             <Setter Property="VerticalContentAlignment" Value="Center"/>
@@ -23,14 +29,14 @@
             </MenuItem>
             <MenuItem Header="Fräsen">
                 <MenuItem Header="Planfräsen"  Click="OnPlanfraesen"/>
-                <MenuItem Header="Umfahren"    Click="OnPlanfraesen"/>
+                <MenuItem Header="Umfahren"    Click="OnUmfahren"/>
                 <MenuItem Header="Nut"         Click="OnPlanfraesen"/>
                 <MenuItem Header="Tasche"      Click="OnPlanfraesen"/>
                 <MenuItem Header="Zapfen"      Click="OnPlanfraesen"/>
             </MenuItem>
             <MenuItem Header="Bohren">
                 <MenuItem Header="Bohrung"           Click="OnBohrung"/>
-                <MenuItem Header="Reihenlochbohrung" Click="OnPlanfraesen"/>
+                <MenuItem Header="Reihenlochbohrung" Click="OnReihenlochbohrung"/>
             </MenuItem>
             <MenuItem Header="Hilfe">
                 <MenuItem Header="Info" Click="OnInfo"/>
@@ -67,11 +73,34 @@
                           Background="#DDD" ResizeBehavior="PreviousAndNext"/>
 
             <!-- G-Code Textfeld -->
-            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
-                <TextBox x:Name="GCodeBox" AcceptsReturn="True" TextWrapping="NoWrap"
-                         FontFamily="Consolas" FontSize="12" VerticalAlignment="Stretch"
-                         TextChanged="OnGCodeChanged"/>
-            </ScrollViewer>
+            <Grid Grid.Column="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="40"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="#F5F5F5" BorderBrush="#DDD" BorderThickness="0,0,1,0">
+                    <RichTextBox x:Name="GCodeLineNumbersBox"
+                                 IsReadOnly="True"
+                                 IsDocumentEnabled="False"
+                                 FontFamily="Consolas" FontSize="12"
+                                 Foreground="#666"
+                                 VerticalScrollBarVisibility="Hidden"
+                                 HorizontalScrollBarVisibility="Hidden"
+                                 Padding="0"
+                                 BorderThickness="0"
+                                 Margin="0"
+                                 Background="Transparent"/>
+                </Border>
+
+                <RichTextBox x:Name="GCodeBox" Grid.Column="1" AcceptsReturn="True" FontFamily="Consolas" FontSize="12"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                             Padding="0"
+                             BorderThickness="0"
+                             Margin="0"
+                             Loaded="OnGCodeBoxLoaded"
+                             TextChanged="OnGCodeChanged"/>
+            </Grid>
         </Grid>
     </DockPanel>
 </Window>

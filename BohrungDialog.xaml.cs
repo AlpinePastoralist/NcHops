@@ -30,6 +30,7 @@ public partial class BohrungDialog : Window
             XRel: double.Parse(TxtXRel.Text, System.Globalization.CultureInfo.InvariantCulture),
             YRel: double.Parse(TxtYRel.Text, System.Globalization.CultureInfo.InvariantCulture),
             Bohrtiefe: double.Parse(TxtBohrtiefe.Text, System.Globalization.CultureInfo.InvariantCulture),
+            Zustellung: double.Parse(TxtZustellung.Text, System.Globalization.CultureInfo.InvariantCulture),
             Durchmesser: double.Parse(TxtDurchmesser.Text, System.Globalization.CultureInfo.InvariantCulture),
             Bezugspunkte: bezugs
         );
@@ -40,5 +41,5 @@ public partial class BohrungDialog : Window
 }
 
 public record BohrungParams(
-    double XRel, double YRel, double Bohrtiefe, double Durchmesser,
+    double XRel, double YRel, double Bohrtiefe, double Zustellung, double Durchmesser,
     List<string> Bezugspunkte);

@@ -1,19 +1,40 @@
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace NCHops;
 
 public partial class MainWindow : Window
 {
+    private static readonly Regex GCodeTokenRegex = new(
+        "([A-Za-z][+-]?\\d*\\.?\\d*)|(\\s+)|(.+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private readonly DispatcherTimer _refreshTimer;
     private Rect _topRect;
     private Rect _bottomRect;
+    private ScrollViewer? _gcodeScrollViewer;
+    private ScrollViewer? _lineNumbersScrollViewer;
+    private bool _isUpdatingGCode;
+    private bool _suppressGCodeUiUpdate;
 
     public MainWindow()
     {
         InitializeComponent();
         Loaded += (_, _) => UpdateAll();
+
+        _refreshTimer = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(250), DispatcherPriority.Background,
+            (_, _) => UpdateAll(), Dispatcher);
+        _refreshTimer.Stop();
     }
 
     // ── Werkstückmaße ────────────────────────────────────────────
@@ -27,7 +48,30 @@ public partial class MainWindow : Window
 
     // ── Menü ─────────────────────────────────────────────────────
 
-    private void OnSpeichern(object sender, RoutedEventArgs e) { }
+    private void OnSpeichern(object sender, RoutedEventArgs e)
+    {
+        var dlg = new SaveFileDialog
+        {
+            Title = "G-Code speichern",
+            Filter = "G-Code (*.nc)|*.nc|Text (*.txt)|*.txt|Alle Dateien (*.*)|*.*",
+            DefaultExt = ".nc",
+            AddExtension = true,
+            OverwritePrompt = true
+        };
+
+        if (dlg.ShowDialog(this) != true)
+            return;
+
+        try
+        {
+            var text = GCodeText.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+            File.WriteAllText(dlg.FileName, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Speichern fehlgeschlagen:\n{ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 
     private void OnBeenden(object sender, RoutedEventArgs e) => Close();
 
@@ -36,16 +80,34 @@ public partial class MainWindow : Window
         var dlg = new PlanfräsenDialog(WorkX, WorkY) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var gcode = GCodeGenerator.Planfräsen(dlg.Result!);
-        GCodeBox.Text = gcode + GCodeBox.Text;
+        PrependGeneratedGCode(gcode);
         UpdateAll();
     }
 
     private void OnBohrung(object sender, RoutedEventArgs e)
     {
-        var dlg = new BohrungDialog(WorkZ) { Owner = this };
+        var dlg = new BohrungDialog(WorkZ + 3) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var gcode = GCodeGenerator.Bohrung(dlg.Result!, WorkX, WorkY);
-        GCodeBox.Text = gcode + GCodeBox.Text;
+        GCodeText = gcode + GCodeText;
+        UpdateAll();
+    }
+
+    private void OnReihenlochbohrung(object sender, RoutedEventArgs e)
+    {
+        var dlg = new ReihenlochbohrungDialog(WorkZ + 3) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        var gcode = GCodeGenerator.Reihenlochbohrung(dlg.Result!);
+        PrependGeneratedGCode(gcode);
+        UpdateAll();
+    }
+
+    private void OnUmfahren(object sender, RoutedEventArgs e)
+    {
+        var dlg = new UmfahrenDialog(WorkZ) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        var gcode = GCodeGenerator.Umfahren(dlg.Result!, WorkX, WorkY);
+        PrependGeneratedGCode(gcode);
         UpdateAll();
     }
 
@@ -58,7 +120,299 @@ public partial class MainWindow : Window
 
     private void OnCanvasSizeChanged(object sender, SizeChangedEventArgs e) => UpdateAll();
 
-    private void OnGCodeChanged(object sender, TextChangedEventArgs e) => UpdateAll();
+    private string GCodeText
+    {
+        get => new TextRange(GCodeBox.Document.ContentStart, GCodeBox.Document.ContentEnd).Text.TrimEnd('\r', '\n');
+        //.TrimEnd('\r', '\n')
+        set => SetGCodeText(value);
+    }
+
+    private void OnGCodeChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_isUpdatingGCode)
+            return;
+        if (_suppressGCodeUiUpdate)
+            return;
+
+        _refreshTimer.Stop();
+        _refreshTimer.Start();
+        UpdateGCodeEditor();
+    }
+
+    private void OnGCodeBoxLoaded(object sender, RoutedEventArgs e)
+    {
+        // Ensure the text starts at the very top/left so line numbers align visually.
+        GCodeBox.Document.PagePadding = new Thickness(0);
+        GCodeBox.Document.LineHeight = 24;
+        GCodeBox.Document.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+
+        GCodeLineNumbersBox.Document.PagePadding = new Thickness(4, 0, 4, 0);
+        GCodeLineNumbersBox.Document.LineHeight = 24;
+        GCodeLineNumbersBox.Document.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+
+        _gcodeScrollViewer = GetDescendantScrollViewer(GCodeBox);
+        _lineNumbersScrollViewer = GetDescendantScrollViewer(GCodeLineNumbersBox);
+        if (_gcodeScrollViewer != null)
+            _gcodeScrollViewer.ScrollChanged += OnGCodeScrollChanged;
+
+        UpdateGCodeEditor();
+    }
+
+    private void OnGCodeScrollChanged(object? sender, ScrollChangedEventArgs e)
+    {
+        if (e.VerticalChange != 0)
+            _lineNumbersScrollViewer?.ScrollToVerticalOffset(e.VerticalOffset);
+    }
+
+    private void UpdateGCodeEditor()
+    {
+        _isUpdatingGCode = true;
+        try
+        {
+            var plainText = GCodeText;
+            UpdateLineNumbers(plainText);
+            UpdateGCodeHighlighting(plainText);
+        }
+        finally
+        {
+            _isUpdatingGCode = false;
+        }
+    }
+
+    private void SetGCodeText(string text)
+    {
+        var selectionStart = GCodeBox.CaretPosition;
+        var offset = GetTextOffset(GCodeBox.Document.ContentStart, selectionStart);
+
+        GCodeBox.Document.Blocks.Clear();
+        foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
+            GCodeBox.Document.Blocks.Add(CreateHighlightedParagraph(line));
+
+        var position = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, offset);
+        if (position != null)
+            GCodeBox.CaretPosition = position;
+    }
+
+    private void UpdateLineNumbers(string text)
+    {
+        var lineCount = text.Replace("\r\n", "\n").Split('\n').Length;
+        GCodeLineNumbersBox.Document.Blocks.Clear();
+        for (int i = 1; i <= lineCount; i++)
+        {
+            var p = new Paragraph(new Run(i.ToString()))
+            {
+                Margin = new Thickness(0),
+                Padding = new Thickness(0),
+                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                LineHeight = 24,
+                TextAlignment = TextAlignment.Right
+            };
+            GCodeLineNumbersBox.Document.Blocks.Add(p);
+        }
+    }
+
+    private void PrependGeneratedGCode(string gcode)
+    {
+        var normalized = gcode.Replace("\r\n", "\n").TrimEnd('\n');
+        if (string.IsNullOrEmpty(normalized))
+            return;
+
+        var newLines = normalized.Split('\n');
+
+        _suppressGCodeUiUpdate = true;
+        try
+        {
+            var firstNum = GCodeLineNumbersBox.Document.Blocks.FirstBlock;
+
+            var first = GCodeBox.Document.Blocks.FirstBlock;
+            // Insert in natural order so the first generated line ends up at the very top.
+            for (int i = 0; i < newLines.Length; i++)
+            {
+                var p = CreateHighlightedParagraph(newLines[i]);
+                if (first == null)
+                    GCodeBox.Document.Blocks.Add(p);
+                else
+                    GCodeBox.Document.Blocks.InsertBefore(first, p);
+            }
+
+            // Renumber existing lines first, then prepend the new 1..N numbers.
+            ShiftLineNumbersDown(newLines.Length);
+            for (int n = 1; n <= newLines.Length; n++)
+            {
+                var p = new Paragraph(new Run(n.ToString()))
+                {
+                    Margin = new Thickness(0),
+                    Padding = new Thickness(0),
+                    LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                    LineHeight = 24,
+                    TextAlignment = TextAlignment.Right
+                };
+
+                if (firstNum == null)
+                    GCodeLineNumbersBox.Document.Blocks.Add(p);
+                else
+                    GCodeLineNumbersBox.Document.Blocks.InsertBefore(firstNum, p);
+            }
+
+            GCodeBox.CaretPosition = GCodeBox.Document.ContentStart;
+            // RichTextBox may auto-scroll to the bottom after large inserts; force view back to the top on next layout pass.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _gcodeScrollViewer?.ScrollToHome();
+                _lineNumbersScrollViewer?.ScrollToHome();
+            }), DispatcherPriority.Loaded);
+        }
+        finally
+        {
+            // RichTextBox raises TextChanged after this method returns; keep suppression for that callback too.
+            Dispatcher.BeginInvoke(new Action(() => { _suppressGCodeUiUpdate = false; }), DispatcherPriority.Background);
+        }
+    }
+
+    private void ShiftLineNumbersDown(int delta)
+    {
+        if (delta <= 0)
+            return;
+
+        // Don't mutate paragraph inlines while enumerating Blocks (can throw / destabilize the collection).
+        var paragraphs = GCodeLineNumbersBox.Document.Blocks.OfType<Paragraph>().ToList();
+
+        int idx = delta + 1;
+        foreach (var p in paragraphs)
+        {
+            p.Inlines.Clear();
+            p.Inlines.Add(new Run(idx.ToString()));
+            idx++;
+        }
+    }
+
+    private void UpdateGCodeHighlighting(string text)
+    {
+        var selectionStart = GCodeBox.Selection.Start;
+        var selectionEnd = GCodeBox.Selection.End;
+        var startOffset = GetTextOffset(GCodeBox.Document.ContentStart, selectionStart);
+        var endOffset = GetTextOffset(GCodeBox.Document.ContentStart, selectionEnd);
+
+        GCodeBox.Document.Blocks.Clear();
+        foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
+            GCodeBox.Document.Blocks.Add(CreateHighlightedParagraph(line));
+
+        var startPos = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, startOffset);
+        var endPos = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, endOffset);
+        if (startPos != null && endPos != null)
+            GCodeBox.Selection.Select(startPos, endPos);
+    }
+
+    private Paragraph CreateHighlightedParagraph(string line)
+    {
+        var paragraph = new Paragraph
+        {
+            Margin = new Thickness(0),
+            Padding = new Thickness(0),
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            LineHeight = 24
+        };
+        if (string.IsNullOrEmpty(line))
+        {
+            //paragraph.Inlines.Add(new Run(" "));
+            return paragraph;
+        }
+
+        var commentIndex = line.IndexOf('(');
+        string codePart = line;
+        string commentPart = string.Empty;
+        if (commentIndex >= 0)
+        {
+            codePart = line.Substring(0, commentIndex);
+            commentPart = line.Substring(commentIndex);
+        }
+
+        foreach (Match match in GCodeTokenRegex.Matches(codePart))
+        {
+            var token = match.Value;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                paragraph.Inlines.Add(new Run(token));
+                continue;
+            }
+
+            var run = new Run(token);
+            var code = char.ToUpperInvariant(token[0]);
+            if (code == 'G' || code == 'M')
+                run.Foreground = Brushes.DarkBlue;
+            else if (code == 'X' || code == 'Y' || code == 'Z' || code == 'I' || code == 'J' || code == 'F' || code == 'A' || code == 'S' || code == 'T' || code == 'R')
+                run.Foreground = Brushes.DarkRed;
+            else
+                run.Foreground = Brushes.Black;
+
+            paragraph.Inlines.Add(run);
+        }
+
+        if (!string.IsNullOrEmpty(commentPart))
+            paragraph.Inlines.Add(new Run(commentPart) { Foreground = Brushes.Green });
+
+        return paragraph;
+    }
+
+    private static int GetTextOffset(TextPointer start, TextPointer position)
+    {
+        return new TextRange(start, position).Text.Length;
+    }
+
+    private static TextPointer? GetTextPositionAtOffset(TextPointer start, int offset)
+    {
+        var navigator = start;
+        int remaining = offset;
+        while (navigator != null && remaining > 0)
+        {
+            if (navigator.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.Text)
+            {
+                string textRun = navigator.GetTextInRun(LogicalDirection.Forward);
+                int count = Math.Min(textRun.Length, remaining);
+                navigator = navigator.GetPositionAtOffset(count);
+                remaining -= count;
+            }
+            else
+            {
+                navigator = navigator.GetNextContextPosition(LogicalDirection.Forward);
+            }
+        }
+
+        return navigator;
+    }
+
+    private static ScrollViewer? GetDescendantScrollViewer(DependencyObject element)
+    {
+        if (element == null)
+            return null;
+
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+        {
+            var child = VisualTreeHelper.GetChild(element, i);
+            if (child is ScrollViewer viewer)
+                return viewer;
+
+            var result = GetDescendantScrollViewer(child);
+            if (result != null)
+                return result;
+        }
+        return null;
+    }
+
+    private void TextBox_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is TextBox textBox && !textBox.IsKeyboardFocusWithin)
+        {
+            e.Handled = true;
+            textBox.Focus();
+        }
+    }
+
+    private void TextBox_GotKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox textBox)
+            textBox.SelectAll();
+    }
 
     // ── Zeichnen ─────────────────────────────────────────────────
 
@@ -118,7 +472,7 @@ public partial class MainWindow : Window
 
     private void DrawGCodeTopView()
     {
-        var moves = GCodeParser.ParseTopView(GCodeBox.Text);
+        var moves = GCodeParser.ParseTopView(GCodeText);
         if (moves.Count == 0 || _topRect.IsEmpty) return;
 
         double wx = WorkX, wy = WorkY;
@@ -166,13 +520,29 @@ public partial class MainWindow : Window
                 last = MmToPx(m.Xe, m.Ye);
             }
         }
+
+        foreach (var hole in GCodeParser.ParseDrillPoints(GCodeText))
+        {
+            var center = MmToPx(hole.X, hole.Y);
+            var circle = new Ellipse
+            {
+                Width = 12,
+                Height = 12,
+                Fill = Brushes.Yellow,
+                Stroke = Brushes.Black,
+                StrokeThickness = 2
+            };
+            Canvas.SetLeft(circle, center.X - circle.Width / 2);
+            Canvas.SetTop(circle, center.Y - circle.Height / 2);
+            DrawCanvas.Children.Add(circle);
+        }
     }
 
     // ── Seitenansicht G-Code ─────────────────────────────────────
 
     private void DrawGCodeSideView()
     {
-        var moves = GCodeParser.ParseSideView(GCodeBox.Text);
+        var moves = GCodeParser.ParseSideView(GCodeText);
         if (moves.Count == 0 || _bottomRect.IsEmpty) return;
 
         double wx = WorkX, wz = WorkZ;

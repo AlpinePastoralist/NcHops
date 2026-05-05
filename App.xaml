@@ -4,6 +4,9 @@
              xmlns:local="clr-namespace:NCHops"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+        <Style TargetType="TextBox">
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="TextBox_PreviewMouseLeftButtonDown"/>
+            <EventSetter Event="GotKeyboardFocus" Handler="TextBox_GotKeyboardFocus"/>
+        </Style>
     </Application.Resources>
 </Application>

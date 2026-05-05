@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Text.RegularExpressions;
+using System.Windows;
 
 namespace NCHops;
 
@@ -11,7 +13,34 @@ public record SideMove(string Cmd, double X, double Z);
 
 public static class GCodeParser
 {
-    private static readonly Regex TokenRx = new(@"[XYIJ]-?\d+\.?\d*", RegexOptions.Compiled);
+    // Matches typical G-code words with signed decimals (e.g. X12, Y-3.5, Z.25).
+    private static readonly Regex TokenRx = new(
+        @"[XYZIJKZFASRT]-?(?:\d+(?:\.\d*)?|\.\d+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static string StripComment(string line)
+    {
+        var i = line.IndexOf('(');
+        return i >= 0 ? line[..i].Trim() : line;
+    }
+
+    private static Dictionary<char, double> ParseWords(string line)
+    {
+        var dict = new Dictionary<char, double>();
+        foreach (Match m in TokenRx.Matches(line))
+        {
+            var key = char.ToUpperInvariant(m.Value[0]);
+            if (double.TryParse(
+                    m.Value[1..],
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var value))
+            {
+                dict[key] = value;
+            }
+        }
+        return dict;
+    }
 
     public static List<Move> ParseTopView(string text)
     {
@@ -21,7 +50,7 @@ public static class GCodeParser
 
         foreach (var raw in text.Split('\n'))
         {
-            var line = raw.Trim();
+            var line = StripComment(raw.Trim());
             if (string.IsNullOrEmpty(line)) continue;
 
             MoveType? mode = null;
@@ -32,8 +61,7 @@ public static class GCodeParser
 
             if (mode == null) continue;
 
-            var vals = TokenRx.Matches(line)
-                .ToDictionary(m => m.Value[0], m => double.Parse(m.Value[1..], System.Globalization.CultureInfo.InvariantCulture));
+            var vals = ParseWords(line);
 
             if (mode is MoveType.Rapid or MoveType.Line)
             {
@@ -56,6 +84,34 @@ public static class GCodeParser
         return moves;
     }
 
+    public static List<Point> ParseDrillPoints(string text)
+    {
+        var points = new List<Point>();
+        double x = 0, y = 0;
+
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = StripComment(raw.Trim());
+            if (string.IsNullOrEmpty(line)) continue;
+
+            bool hasX = false, hasY = false, hasZ = false;
+            double z = 0;
+            var vals = ParseWords(line);
+            if (vals.TryGetValue('X', out var vx)) { x = vx; hasX = true; }
+            if (vals.TryGetValue('Y', out var vy)) { y = vy; hasY = true; }
+            if (vals.TryGetValue('Z', out var vz)) { z = vz; hasZ = true; }
+
+            if (hasZ && !hasX && !hasY && z < 0)
+            {
+                var point = new Point(x, y);
+                if (!points.Any(p => Math.Abs(p.X - point.X) < 0.0001 && Math.Abs(p.Y - point.Y) < 0.0001))
+                    points.Add(point);
+            }
+        }
+
+        return points;
+    }
+
     public static List<SideMove> ParseSideView(string text)
     {
         var moves = new List<SideMove>();
@@ -63,8 +119,8 @@ public static class GCodeParser
 
         foreach (var raw in text.Split('\n'))
         {
-            var line = raw.Trim();
-            if (string.IsNullOrEmpty(line) || line.StartsWith("(")) continue;
+            var line = StripComment(raw.Trim());
+            if (string.IsNullOrEmpty(line)) continue;
 
             string? cmd = null;
             foreach (var part in line.Split(' '))
@@ -72,6 +128,8 @@ public static class GCodeParser
                 var up = part.ToUpper();
                 if (up.StartsWith("G00") || up == "G0") cmd = "G0";
                 else if (up.StartsWith("G01") || up == "G1") cmd = "G1";
+                else if (up.StartsWith("G02") || up == "G2") cmd = "G2";
+                else if (up.StartsWith("G03") || up == "G3") cmd = "G3";
                 else if (up.StartsWith("X")) double.TryParse(up[1..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out x);
                 else if (up.StartsWith("Z")) double.TryParse(up[1..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out z);
             }

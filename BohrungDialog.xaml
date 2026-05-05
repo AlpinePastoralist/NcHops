@@ -21,6 +21,7 @@
                 <RowDefinition Height="36"/>
                 <RowDefinition Height="36"/>
                 <RowDefinition Height="36"/>
+                <RowDefinition Height="36"/>
             </Grid.RowDefinitions>
 
             <Label Grid.Row="0" Grid.Column="0" Content="X relativ:" VerticalAlignment="Center"/>
@@ -32,8 +33,11 @@
             <Label Grid.Row="2" Grid.Column="0" Content="Bohrtiefe:" VerticalAlignment="Center"/>
             <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtBohrtiefe" VerticalAlignment="Center"/>
 
-            <Label Grid.Row="3" Grid.Column="0" Content="Durchmesser:" VerticalAlignment="Center"/>
-            <TextBox Grid.Row="3" Grid.Column="1" x:Name="TxtDurchmesser" Text="5" VerticalAlignment="Center"/>
+            <Label Grid.Row="3" Grid.Column="0" Content="Zustellung:" VerticalAlignment="Center"/>
+            <TextBox Grid.Row="3" Grid.Column="1" x:Name="TxtZustellung" Text="10" VerticalAlignment="Center"/>
+
+            <Label Grid.Row="4" Grid.Column="0" Content="Durchmesser:" VerticalAlignment="Center"/>
+            <TextBox Grid.Row="4" Grid.Column="1" x:Name="TxtDurchmesser" Text="5" VerticalAlignment="Center"/>
         </Grid>
 
         <!-- Bezugspunkte -->
