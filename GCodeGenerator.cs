@@ -447,6 +447,47 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    public static string PfadFräsen(PfadFräsenParams p, double workW, double workH)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("(Pfad Fräsen)");
+        sb.AppendLine($"(Punkte: {p.Punkte.Count}, Koordinaten absolut)");
+        sb.AppendLine($"(D={p.FraeserD})");
+        sb.AppendLine();
+        sb.AppendLine($"M03 S{p.Drehzahl}");
+        sb.AppendLine("G00 Z5.0000");
+
+        // Punkte sind bereits in absoluten Werkstück-Koords
+        var (x0, y0) = p.Punkte[0];
+        sb.AppendLine($"G00 X{F(x0)} Y{F(y0)}");
+
+        // Tiefe schrittweise anfahren (Zustellung)
+        double depth = -Math.Abs(p.Z);
+        double step  = Math.Abs(p.Zustellung);
+        double currentZ = 0;
+
+        while (currentZ > depth)
+        {
+            currentZ = Math.Max(depth, currentZ - step);
+            sb.AppendLine($"G01 Z{F(currentZ)} F{p.Vorschub}");
+
+            // Pfad abfahren
+            for (int i = 1; i < p.Punkte.Count; i++)
+            {
+                var (xi, yi) = p.Punkte[i];
+                sb.AppendLine($"G01 X{F(xi)} Y{F(yi)}");
+            }
+
+            // Zurück zum ersten Punkt für nächste Zustellung
+            if (currentZ > depth)
+                sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
+        }
+
+        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
     private static (double x, double y) ConvertBezugspunkt(string ref_, double xRel, double yRel, double w, double h)
         => ref_ switch
         {

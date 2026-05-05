@@ -1,11 +1,14 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -26,6 +29,72 @@ public partial class MainWindow : Window
     private bool _isUpdatingGCode;
     private bool _suppressGCodeUiUpdate;
 
+    [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
+
+    // ── Pfad Fräsen ──────────────────────────────────────────────
+    private readonly ObservableCollection<PfadPunkt> _pfadPunkte = [];
+    private int    _pfadHoverIdx      = -1;
+    private int    _pfadDragIdx       = -1;
+    private bool   _arrowJustClicked  = false;
+    private double _pfadScale         = 1.0;
+    private Rect   _pfadCanvasRect    = Rect.Empty;
+
+    private double PfadSchritt => double.TryParse(PfadTxtSchritt?.Text,
+        System.Globalization.NumberStyles.Float,
+        System.Globalization.CultureInfo.InvariantCulture, out var v) ? Math.Max(0.1, v) : 5.0;
+
+    // Absolute mm ↔ Canvas-Pixel  (Ursprung = unten_links des Werkstücks)
+    private Point AbsMmToPx(double absX, double absY) => new(
+        _pfadCanvasRect.Left   + absX * _pfadScale,
+        _pfadCanvasRect.Bottom - absY * _pfadScale);
+
+    private (double absX, double absY) PxToAbsMm(Point px) => (
+        (px.X - _pfadCanvasRect.Left)   / _pfadScale,
+        (_pfadCanvasRect.Bottom - px.Y) / _pfadScale);
+
+    // Relative Punkt-Koordinaten → absolute Werkstück-mm
+    private static (double absX, double absY) RelToAbs(
+        string bezug, double relX, double relY, double w, double h)
+        => bezug switch
+        {
+            "unten_links"  => (relX,         relY),
+            "oben_links"   => (relX,         h - relY),
+            "unten_rechts" => (w - relX,     relY),
+            "oben_rechts"  => (w - relX,     h - relY),
+            "links_mitte"  => (relX,         h / 2 + relY),
+            "rechts_mitte" => (w - relX,     h / 2 + relY),
+            "oben_mitte"   => (w / 2 + relX, h - relY),
+            "unten_mitte"  => (w / 2 + relX, relY),
+            "mitte_mitte"  => (w / 2 + relX, h / 2 + relY),
+            _              => (relX, relY)
+        };
+
+    // Absolute mm → relative Koordinaten (Umkehrung von RelToAbs)
+    private static (double relX, double relY) AbsToRel(
+        string bezug, double absX, double absY, double w, double h)
+        => bezug switch
+        {
+            "unten_links"  => (absX,         absY),
+            "oben_links"   => (absX,         h - absY),
+            "unten_rechts" => (w - absX,     absY),
+            "oben_rechts"  => (w - absX,     h - absY),
+            "links_mitte"  => (absX,         absY - h / 2),
+            "rechts_mitte" => (w - absX,     absY - h / 2),
+            "oben_mitte"   => (absX - w / 2, h - absY),
+            "unten_mitte"  => (absX - w / 2, absY),
+            "mitte_mitte"  => (absX - w / 2, absY - h / 2),
+            _              => (absX, absY)
+        };
+
+    // Pixel-Position eines PfadPunkts (berücksichtigt seinen Bezug)
+    private Point PunktToPx(PfadPunkt p)
+    {
+        double relX = double.Parse(p.X, System.Globalization.CultureInfo.InvariantCulture);
+        double relY = double.Parse(p.Y, System.Globalization.CultureInfo.InvariantCulture);
+        var (absX, absY) = RelToAbs(p.Bezug, relX, relY, WorkX, WorkY);
+        return AbsMmToPx(absX, absY);
+    }
+
     public MainWindow()
     {
         InitializeComponent();
@@ -35,6 +104,9 @@ public partial class MainWindow : Window
             TimeSpan.FromMilliseconds(250), DispatcherPriority.Background,
             (_, _) => UpdateAll(), Dispatcher);
         _refreshTimer.Stop();
+
+        PfadLvPunkte.ItemsSource = _pfadPunkte;
+        _pfadPunkte.CollectionChanged += (_, _) => UpdateAll();
     }
 
     // ── Werkstückmaße ────────────────────────────────────────────
@@ -109,6 +181,311 @@ public partial class MainWindow : Window
         var gcode = GCodeGenerator.Umfahren(dlg.Result!, WorkX, WorkY);
         PrependGeneratedGCode(gcode);
         UpdateAll();
+    }
+
+    // ── Pfad Fräsen Panel ────────────────────────────────────────
+
+    private void OnPfadAnzeigenChanged(object sender, RoutedEventArgs e)
+    {
+        PfadPanel.Visibility = CbPfadAnzeigen.IsChecked == true
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (CbPfadAnzeigen.IsChecked == true)
+            PfadTxtZ.Text = (-Math.Abs(WorkZ)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        UpdateAll();
+    }
+
+    private void OnPfadParamChanged(object sender, SelectionChangedEventArgs e) => UpdateAll();
+
+    private void OnPfadPunktKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Return) PfadPunktHinzufügen();
+    }
+
+    private void OnPfadHinzufügen(object sender, RoutedEventArgs e) => PfadPunktHinzufügen();
+
+    private void PfadPunktHinzufügen()
+    {
+        if (!double.TryParse(PfadTxtX.Text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var x) ||
+            !double.TryParse(PfadTxtY.Text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var y))
+            return;
+
+        string bezug = (PfadCbBezug?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "unten_links";
+        _pfadPunkte.Add(new PfadPunkt
+        {
+            Nr    = _pfadPunkte.Count + 1,
+            X     = x.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Y     = y.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Bezug = bezug
+        });
+        PfadLvPunkte.SelectedIndex = _pfadPunkte.Count - 1;
+        PfadLvPunkte.ScrollIntoView(PfadLvPunkte.SelectedItem);
+        PfadTxtX.Focus(); PfadTxtX.SelectAll();
+    }
+
+    private void OnPfadHoch(object sender, RoutedEventArgs e)
+    {
+        int i = PfadLvPunkte.SelectedIndex;
+        if (i <= 0) return;
+        (_pfadPunkte[i], _pfadPunkte[i - 1]) = (_pfadPunkte[i - 1], _pfadPunkte[i]);
+        PfadLvPunkte.SelectedIndex = i - 1;
+        PfadAktualisiereNummern();
+    }
+
+    private void OnPfadRunter(object sender, RoutedEventArgs e)
+    {
+        int i = PfadLvPunkte.SelectedIndex;
+        if (i < 0 || i >= _pfadPunkte.Count - 1) return;
+        (_pfadPunkte[i], _pfadPunkte[i + 1]) = (_pfadPunkte[i + 1], _pfadPunkte[i]);
+        PfadLvPunkte.SelectedIndex = i + 1;
+        PfadAktualisiereNummern();
+    }
+
+    private void OnPfadLöschen(object sender, RoutedEventArgs e)
+    {
+        int i = PfadLvPunkte.SelectedIndex;
+        if (i < 0) return;
+        _pfadPunkte.RemoveAt(i);
+        PfadAktualisiereNummern();
+        PfadLvPunkte.SelectedIndex = Math.Min(i, _pfadPunkte.Count - 1);
+    }
+
+    private void OnWindowKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete) return;
+        if (CbPfadAnzeigen?.IsChecked != true) return;
+        // Nicht löschen wenn Fokus in einem Texteingabefeld liegt
+        if (Keyboard.FocusedElement is TextBox or RichTextBox) return;
+
+        int i = PfadLvPunkte.SelectedIndex;
+        if (i < 0) return;
+        _pfadPunkte.RemoveAt(i);
+        PfadAktualisiereNummern();
+        PfadLvPunkte.SelectedIndex = Math.Min(i, _pfadPunkte.Count - 1);
+        e.Handled = true;
+    }
+
+    private void OnPfadAlleLöschen(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show("Alle Punkte löschen?", "Bestätigung",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            _pfadPunkte.Clear();
+    }
+
+    private void OnPfadSelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateAll();
+
+    private void OnPfadCellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        // Nach Commit der Zelle Zeichnung aktualisieren
+        Dispatcher.BeginInvoke(UpdateAll, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    // ── Canvas: Klick / Drag ─────────────────────────────────────
+
+    private void OnCanvasMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (CbPfadAnzeigen?.IsChecked != true) return;
+        if (_pfadCanvasRect.IsEmpty) return;
+
+        var pos = e.GetPosition(DrawCanvas);
+        if (!_pfadCanvasRect.Contains(pos)) return;
+
+        // Nähe zu bestehendem Punkt? → Drag starten
+        for (int i = 0; i < _pfadPunkte.Count; i++)
+        {
+            var px = PunktToPx(_pfadPunkte[i]);
+            if (Math.Sqrt(Math.Pow(pos.X - px.X, 2) + Math.Pow(pos.Y - px.Y, 2)) < 14)
+            {
+                _pfadDragIdx = i;
+                _pfadHoverIdx = i;
+                PfadLvPunkte.SelectedIndex = i;
+                DrawCanvas.CaptureMouse();
+                DrawCanvas.Cursor = Cursors.SizeAll;
+                return;
+            }
+        }
+
+        // Kein Punkt in der Nähe → neuen Punkt hinzufügen (auf Raster, abs Koords)
+        var (absX, absY) = PxToAbsMm(pos);
+        double snap = PfadSchritt;
+        absX = Math.Round(absX / snap) * snap;
+        absY = Math.Round(absY / snap) * snap;
+
+        string defaultBezug = (PfadCbBezug?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "unten_links";
+        var (relX, relY) = AbsToRel(defaultBezug, absX, absY, WorkX, WorkY);
+
+        _pfadPunkte.Add(new PfadPunkt
+        {
+            Nr    = _pfadPunkte.Count + 1,
+            X     = relX.ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
+            Y     = relY.ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
+            Bezug = defaultBezug
+        });
+        PfadLvPunkte.SelectedIndex = _pfadPunkte.Count - 1;
+        PfadLvPunkte.ScrollIntoView(PfadLvPunkte.SelectedItem);
+    }
+
+    private void OnCanvasMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_pfadDragIdx >= 0)
+        {
+            _pfadDragIdx = -1;
+            DrawCanvas.ReleaseMouseCapture();
+        }
+    }
+
+    private void OnCanvasMouseMove(object sender, MouseEventArgs e)
+    {
+        if (CbPfadAnzeigen?.IsChecked != true) return;
+
+        var pos = e.GetPosition(DrawCanvas);
+
+        // ── Drag-Modus ──────────────────────────────────────────
+        if (_pfadDragIdx >= 0)
+        {
+            var (absX, absY) = PxToAbsMm(pos);
+            double snap = PfadSchritt;
+            absX = Math.Round(absX / snap) * snap;
+            absY = Math.Round(absY / snap) * snap;
+            string dragBezug = _pfadPunkte[_pfadDragIdx].Bezug;
+            var (relX, relY) = AbsToRel(dragBezug, absX, absY, WorkX, WorkY);
+            _pfadPunkte[_pfadDragIdx].X = relX.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+            _pfadPunkte[_pfadDragIdx].Y = relY.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+
+            UpdateAll();
+            return;
+        }
+
+        // ── Hover-Erkennung ─────────────────────────────────────
+        if (_arrowJustClicked) { _arrowJustClicked = false; return; }
+        if (_pfadCanvasRect.IsEmpty) return;
+
+        int newHover = -1;
+        for (int i = 0; i < _pfadPunkte.Count; i++)
+        {
+            var px = PunktToPx(_pfadPunkte[i]);
+            if (Math.Sqrt(Math.Pow(pos.X - px.X, 2) + Math.Pow(pos.Y - px.Y, 2)) < 20)
+            { newHover = i; break; }
+        }
+
+        if (newHover != _pfadHoverIdx)
+        {
+            _pfadHoverIdx = newHover;
+            UpdateAll();
+        }
+
+        DrawCanvas.Cursor = newHover >= 0
+            ? Cursors.SizeAll
+            : (_pfadCanvasRect.Contains(pos) ? Cursors.Cross : Cursors.Arrow);
+    }
+
+    private void OnCanvasMouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_pfadDragIdx >= 0) return; // Drag läuft noch
+        DrawCanvas.Cursor = Cursors.Arrow;
+        if (_pfadHoverIdx >= 0) { _pfadHoverIdx = -1; UpdateAll(); }
+    }
+
+    // ── Pfeilklick: Punkt verschieben + Maus nachführen ──────────
+
+    private void OnPfadArrowClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is not FrameworkElement el) return;
+        var parts = (el.Tag as string ?? "").Split(':');
+        if (parts.Length < 2 || !int.TryParse(parts[0], out int idx)) return;
+        var dir = parts[1];
+        if (idx < 0 || idx >= _pfadPunkte.Count) return;
+
+        double relX = double.Parse(_pfadPunkte[idx].X, System.Globalization.CultureInfo.InvariantCulture);
+        double relY = double.Parse(_pfadPunkte[idx].Y, System.Globalization.CultureInfo.InvariantCulture);
+        string bezug = _pfadPunkte[idx].Bezug;
+        double s = PfadSchritt;
+
+        // Verschiebung in absoluten Koords (oben = +absY, unten = -absY)
+        var (absX, absY) = RelToAbs(bezug, relX, relY, WorkX, WorkY);
+        (absX, absY) = dir switch
+        {
+            "U" => (absX,     absY + s),
+            "D" => (absX,     absY - s),
+            "L" => (absX - s, absY),
+            "R" => (absX + s, absY),
+            _   => (absX, absY)
+        };
+
+        // Zurück in relative Koords für diesen Bezug
+        var (newRelX, newRelY) = AbsToRel(bezug, absX, absY, WorkX, WorkY);
+        _pfadPunkte[idx].X = newRelX.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        _pfadPunkte[idx].Y = newRelY.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        _pfadHoverIdx = idx;
+        _arrowJustClicked = true;
+
+        // Cursor um genau den Pixel-Betrag des Schritts verschieben
+        // → bleibt relativ zur Klickposition, kein Voreilung
+        var clickPos = e.GetPosition(DrawCanvas);
+        double stepPx = s * _pfadScale;
+        (double cdx, double cdy) = dir switch
+        {
+            "U" => (0.0,    -stepPx),
+            "D" => (0.0,     stepPx),
+            "L" => (-stepPx, 0.0),
+            _   => (stepPx,  0.0)
+        };
+        var screen = DrawCanvas.PointToScreen(new Point(clickPos.X + cdx, clickPos.Y + cdy));
+        SetCursorPos((int)screen.X, (int)screen.Y);
+
+        PfadLvPunkte.Items.Refresh();
+        UpdateAll();
+    }
+
+    private void PfadAktualisiereNummern()
+    {
+        for (int i = 0; i < _pfadPunkte.Count; i++) _pfadPunkte[i].Nr = i + 1;
+        PfadLvPunkte.Items.Refresh();
+        UpdateAll();
+    }
+
+    private void OnPfadGCodeErzeugen(object sender, RoutedEventArgs e)
+    {
+        if (_pfadPunkte.Count < 2)
+        {
+            MessageBox.Show("Mindestens 2 Punkte erforderlich.", "Hinweis",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var p = BuildPfadParams();
+        if (p == null) return;
+        var gcode = GCodeGenerator.PfadFräsen(p, WorkX, WorkY);
+        PrependGeneratedGCode(gcode);
+        UpdateAll();
+    }
+
+    private PfadFräsenParams? BuildPfadParams()
+    {
+        if (_pfadPunkte.Count == 0) return null;
+        if (!double.TryParse(PfadTxtZ.Text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var z)) return null;
+        if (!double.TryParse(PfadTxtZustellung.Text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var zu)) return null;
+        if (!double.TryParse(PfadTxtVorschub.Text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v)) return null;
+        if (!double.TryParse(PfadTxtDrehzahl.Text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var d)) return null;
+        if (!double.TryParse(PfadTxtFraeserD.Text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var fd)) return null;
+
+        double wx = WorkX, wy = WorkY;
+        // Jeden Punkt in absolute Werkstück-Koords umrechnen (per-Punkt-Bezug)
+        var punkte = _pfadPunkte.Select(p =>
+        {
+            double relX = double.Parse(p.X, System.Globalization.CultureInfo.InvariantCulture);
+            double relY = double.Parse(p.Y, System.Globalization.CultureInfo.InvariantCulture);
+            var (absX, absY) = RelToAbs(p.Bezug, relX, relY, wx, wy);
+            return (X: absX, Y: absY);
+        }).ToList();
+
+        return new PfadFräsenParams(punkte, z, zu, v, d, fd, "absolut");
     }
 
     private void OnInfo(object sender, RoutedEventArgs e)
@@ -418,10 +795,13 @@ public partial class MainWindow : Window
 
     private void UpdateAll()
     {
+        if (DrawCanvas == null) return;
         DrawCanvas.Children.Clear();
         DrawWorkpieces();
         DrawGCodeTopView();
         DrawGCodeSideView();
+        if (CbPfadAnzeigen?.IsChecked == true)
+            DrawPfadFräsen();
     }
 
     private void DrawWorkpieces()
@@ -562,6 +942,146 @@ public partial class MainWindow : Window
                     m.Cmd == "G0" ? Brushes.Gray : Brushes.Red,
                     m.Cmd == "G0"));
             last = cur;
+        }
+    }
+
+    // ── Pfad Fräsen zeichnen ─────────────────────────────────────
+
+    private void DrawPfadFräsen()
+    {
+        if (_topRect.IsEmpty) return;
+
+        double wx = WorkX, wy = WorkY;
+        if (wx <= 0 || wy <= 0) return;
+
+        // State immer setzen — auch ohne Punkte, damit Klicken sofort funktioniert
+        _pfadScale      = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+        _pfadCanvasRect = _topRect;
+
+        if (_pfadPunkte.Count == 0) return;
+
+        int selIdx = PfadLvPunkte.SelectedIndex;
+
+        // Linien mit Richtungspfeil-Mitte
+        for (int i = 0; i < _pfadPunkte.Count - 1; i++)
+        {
+            var a = PunktToPx(_pfadPunkte[i]);
+            var b = PunktToPx(_pfadPunkte[i + 1]);
+            bool hi = (i == selIdx || i + 1 == selIdx);
+            DrawCanvas.Children.Add(new Line
+            {
+                X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y,
+                Stroke = hi ? Brushes.OrangeRed : Brushes.DarkViolet,
+                StrokeThickness = hi ? 3 : 2
+            });
+
+            // Kleiner Richtungspfeil in der Linienmitte
+            double mx = (a.X + b.X) / 2, my = (a.Y + b.Y) / 2;
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len > 20)
+            {
+                dx /= len; dy /= len;
+                double sz = 6;
+                DrawCanvas.Children.Add(new Polygon
+                {
+                    Points = new PointCollection
+                    {
+                        new(mx, my),
+                        new(mx - dx * sz + dy * sz / 2, my - dy * sz - dx * sz / 2),
+                        new(mx - dx * sz - dy * sz / 2, my - dy * sz + dx * sz / 2)
+                    },
+                    Fill = hi ? Brushes.OrangeRed : Brushes.DarkViolet,
+                    IsHitTestVisible = false
+                });
+            }
+        }
+
+        // Punkte + Nummern
+        for (int i = 0; i < _pfadPunkte.Count; i++)
+        {
+            var px = PunktToPx(_pfadPunkte[i]);
+            bool sel  = i == selIdx;
+            bool hov  = i == _pfadHoverIdx;
+            double r  = (sel || hov) ? 7 : 5;
+
+            var dot = new Ellipse
+            {
+                Width = r * 2, Height = r * 2,
+                Fill = i == 0 ? Brushes.LimeGreen : (hov ? Brushes.Orange : (sel ? Brushes.Gold : Brushes.DarkViolet)),
+                Stroke = Brushes.White, StrokeThickness = 1.5,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(dot, px.X - r);
+            Canvas.SetTop(dot, px.Y - r);
+            DrawCanvas.Children.Add(dot);
+
+            var lbl = new TextBlock
+            {
+                Text = (i + 1).ToString(),
+                FontSize = 10, FontWeight = FontWeights.Bold,
+                Foreground = Brushes.DarkViolet,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(lbl, px.X + r + 2);
+            Canvas.SetTop(lbl, px.Y - 8);
+            DrawCanvas.Children.Add(lbl);
+
+            // Hover-Pfeile
+            if (hov)
+                DrawHoverArrows(px, i);
+        }
+    }
+
+    private void DrawHoverArrows(Point center, int punktIdx)
+    {
+        double dist = 24;   // px vom Mittelpunkt
+        double sz   = 9;    // Pfeilgröße
+
+        (double dx, double dy, string dir)[] dirs =
+        [
+            ( 0,   -dist, "U"),   // ↑
+            ( 0,    dist, "D"),   // ↓
+            (-dist, 0,    "L"),   // ←
+            ( dist, 0,    "R"),   // →
+        ];
+
+        foreach (var (dx, dy, dir) in dirs)
+        {
+            var tip = new Point(center.X + dx, center.Y + dy);
+
+            // Pfeil-Dreieck
+            PointCollection pts = dir switch
+            {
+                "U" => [new(tip.X, tip.Y), new(tip.X - sz/2, tip.Y + sz), new(tip.X + sz/2, tip.Y + sz)],
+                "D" => [new(tip.X, tip.Y), new(tip.X - sz/2, tip.Y - sz), new(tip.X + sz/2, tip.Y - sz)],
+                "L" => [new(tip.X, tip.Y), new(tip.X + sz, tip.Y - sz/2), new(tip.X + sz, tip.Y + sz/2)],
+                _   => [new(tip.X, tip.Y), new(tip.X - sz, tip.Y - sz/2), new(tip.X - sz, tip.Y + sz/2)],
+            };
+
+            // Transparenter Klickbereich (größer als der Pfeil)
+            var hitArea = new Ellipse
+            {
+                Width = 22, Height = 22,
+                Fill = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                Tag = $"{punktIdx}:{dir}"
+            };
+            hitArea.MouseLeftButtonDown += OnPfadArrowClick;
+            Canvas.SetLeft(hitArea, tip.X - 11);
+            Canvas.SetTop(hitArea,  tip.Y - 11);
+            DrawCanvas.Children.Add(hitArea);
+
+            var arrow = new Polygon
+            {
+                Points = pts,
+                Fill = Brushes.DarkOrange,
+                Stroke = Brushes.White, StrokeThickness = 1,
+                Cursor = Cursors.Hand,
+                Tag = $"{punktIdx}:{dir}"
+            };
+            arrow.MouseLeftButtonDown += OnPfadArrowClick;
+            DrawCanvas.Children.Add(arrow);
         }
     }
 
