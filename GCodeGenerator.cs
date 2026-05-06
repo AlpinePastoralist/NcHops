@@ -447,23 +447,103 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    // Berechnet versetzte Segmentpunkte und liefert (Startpunkt, Liste von G-Code-Moves).
+    // Konvexe Ecken → G02/G03-Bogen; konkave Ecken → Miter-Schnittpunkt.
+    private static ((double X, double Y) Start, List<string> Moves) BuildOffsetMoves(
+        List<(double X, double Y)> pts, double offset, double feed)
+    {
+        int n = pts.Count;
+
+        // Einheitsnormalen pro Segment (links-Normal: (-dy, dx))
+        var norms = new (double x, double y)[n - 1];
+        for (int i = 0; i < n - 1; i++)
+        {
+            double dx = pts[i + 1].X - pts[i].X;
+            double dy = pts[i + 1].Y - pts[i].Y;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            norms[i] = len < 1e-9 ? (0, 0) : (-dy / len, dx / len);
+        }
+
+        // Segment-Start- und Endpunkte im versetzten Pfad
+        var segS = new (double X, double Y)[n - 1];
+        var segE = new (double X, double Y)[n - 1];
+        for (int i = 0; i < n - 1; i++)
+        {
+            segS[i] = (pts[i].X     + norms[i].x * offset, pts[i].Y     + norms[i].y * offset);
+            segE[i] = (pts[i + 1].X + norms[i].x * offset, pts[i + 1].Y + norms[i].y * offset);
+        }
+
+        // 0=Miter, 1=G02(CW), 2=G03(CCW) pro innerer Ecke
+        var cornerKind = new int[n - 2];
+        for (int i = 0; i < n - 2; i++)
+        {
+            double d1x = pts[i + 1].X - pts[i].X,     d1y = pts[i + 1].Y - pts[i].Y;
+            double d2x = pts[i + 2].X - pts[i + 1].X, d2y = pts[i + 2].Y - pts[i + 1].Y;
+            double cross = d1x * d2y - d1y * d2x;
+
+            if (Math.Abs(offset) > 1e-9 && cross * offset < 0)
+            {
+                // Konvexe Ecke: Bogen um pts[i+1]
+                // segE[i] und segS[i+1] bleiben wie berechnet (je auf ihrer Segmentnormalen)
+                cornerKind[i] = cross < 0 ? 1 : 2;
+            }
+            else
+            {
+                // Konkave Ecke oder Mitte: Miter-Schnittpunkt
+                var (n1x, n1y) = norms[i];
+                var (n2x, n2y) = norms[i + 1];
+                double bx  = n1x + n2x, by = n1y + n2y;
+                double dot = bx * n1x + by * n1y;
+                double mx, my;
+                if (dot < 1e-9) { mx = pts[i+1].X + n1x * offset; my = pts[i+1].Y + n1y * offset; }
+                else             { mx = pts[i+1].X + bx * (offset / dot); my = pts[i+1].Y + by * (offset / dot); }
+                segE[i]     = (mx, my);
+                segS[i + 1] = (mx, my);
+                cornerKind[i] = 0;
+            }
+        }
+
+        var moves = new List<string>();
+        for (int i = 0; i < n - 1; i++)
+        {
+            moves.Add($"G01 X{F(segE[i].X)} Y{F(segE[i].Y)} F{feed}");
+
+            if (i < n - 2 && cornerKind[i] != 0)
+            {
+                // Bogen: Zentrum = pts[i+1], aktuelle Pos = segE[i], Ziel = segS[i+1]
+                double ix = pts[i + 1].X - segE[i].X;
+                double ij = pts[i + 1].Y - segE[i].Y;
+                string cmd = cornerKind[i] == 1 ? "G02" : "G03";
+                moves.Add($"{cmd} X{F(segS[i+1].X)} Y{F(segS[i+1].Y)} I{F(ix)} J{F(ij)} F{feed}");
+            }
+        }
+
+        return (segS[0], moves);
+    }
+
     public static string PfadFräsen(PfadFräsenParams p, double workW, double workH)
     {
         var sb = new StringBuilder();
         sb.AppendLine("(Pfad Fräsen)");
         sb.AppendLine($"(Punkte: {p.Punkte.Count}, Koordinaten absolut)");
-        sb.AppendLine($"(D={p.FraeserD})");
+        sb.AppendLine($"(D={p.FraeserD}, Seite={p.Seite})");
         sb.AppendLine();
         sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine("G00 Z5.0000");
 
-        // Punkte sind bereits in absoluten Werkstück-Koords
-        var (x0, y0) = p.Punkte[0];
-        sb.AppendLine($"G00 X{F(x0)} Y{F(y0)}");
+        double radius = p.FraeserD / 2.0;
+        double offset = p.Seite switch
+        {
+            "Links"  =>  radius,
+            "Rechts" => -radius,
+            _        =>  0.0,
+        };
 
-        // Tiefe schrittweise anfahren (Zustellung)
-        double depth = -Math.Abs(p.Z);
-        double step  = Math.Abs(p.Zustellung);
+        var (start, moves) = BuildOffsetMoves(p.Punkte, offset, p.Vorschub);
+        sb.AppendLine($"G00 X{F(start.X)} Y{F(start.Y)}");
+
+        double depth    = -Math.Abs(p.Z);
+        double step     = Math.Abs(p.Zustellung);
         double currentZ = 0;
 
         while (currentZ > depth)
@@ -471,16 +551,14 @@ public static class GCodeGenerator
             currentZ = Math.Max(depth, currentZ - step);
             sb.AppendLine($"G01 Z{F(currentZ)} F{p.Vorschub}");
 
-            // Pfad abfahren
-            for (int i = 1; i < p.Punkte.Count; i++)
-            {
-                var (xi, yi) = p.Punkte[i];
-                sb.AppendLine($"G01 X{F(xi)} Y{F(yi)}");
-            }
+            foreach (var move in moves)
+                sb.AppendLine(move);
 
-            // Zurück zum ersten Punkt für nächste Zustellung
             if (currentZ > depth)
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
+            {
+                sb.AppendLine("G00 Z1.0000");
+                sb.AppendLine($"G00 X{F(start.X)} Y{F(start.Y)}");
+            }
         }
 
         sb.AppendLine("G00 Z5.0000");

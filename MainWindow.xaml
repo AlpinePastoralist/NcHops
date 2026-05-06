@@ -233,6 +233,14 @@
                     <TextBox x:Name="PfadTxtDrehzahl"   Text="18000" Width="60" Margin="0,0,10,0"/>
                     <Label Content="Fräser D:"    Padding="0,0,4,0"/>
                     <TextBox x:Name="PfadTxtFraeserD"   Text="10"    Width="45" Margin="0,0,10,0"/>
+                    <Label Content="Seite:" Padding="0,0,4,0"/>
+                    <ComboBox x:Name="PfadCbSeite" SelectedIndex="1" Width="65"
+                              VerticalAlignment="Center" Margin="0,0,10,0"
+                              SelectionChanged="OnPfadParamChanged">
+                        <ComboBoxItem Content="Links"/>
+                        <ComboBoxItem Content="Mitte"/>
+                        <ComboBoxItem Content="Rechts"/>
+                    </ComboBox>
                     <Label Content="Standard-Bezug:" Padding="0,0,4,0"/>
                     <ComboBox x:Name="PfadCbBezug" SelectedIndex="0" Width="110"
                               VerticalAlignment="Center" Margin="0,0,16,0"

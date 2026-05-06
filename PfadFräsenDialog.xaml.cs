@@ -304,4 +304,5 @@ public record PfadFräsenParams(
     double Vorschub,
     double Drehzahl,
     double FraeserD,
-    string Bezugspunkt);
+    string Bezugspunkt,
+    string Seite = "Mitte");

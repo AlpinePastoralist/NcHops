@@ -486,7 +486,8 @@ Loaded += (_, _) => UpdateAll();
             return (X: absX, Y: absY);
         }).ToList();
 
-        return new PfadFräsenParams(punkte, z, zu, v, d, fd, "absolut");
+        string seite = (PfadCbSeite.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "Mitte";
+        return new PfadFräsenParams(punkte, z, zu, v, d, fd, "absolut", seite);
     }
 
     private void OnInfo(object sender, RoutedEventArgs e)
