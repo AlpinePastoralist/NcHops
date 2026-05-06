@@ -99,16 +99,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // Grössten Frame aus icon.ico als Hintergrund laden
-        var decoder = new System.Windows.Media.Imaging.IconBitmapDecoder(
-            new Uri("pack://application:,,,/icon.ico"),
-            System.Windows.Media.Imaging.BitmapCreateOptions.None,
-            System.Windows.Media.Imaging.BitmapCacheOption.Default);
-        BgIcon.Source = decoder.Frames
-            .OrderByDescending(f => f.PixelWidth)
-            .First();
-
-        Loaded += (_, _) => UpdateAll();
+Loaded += (_, _) => UpdateAll();
 
         _refreshTimer = new DispatcherTimer(
             TimeSpan.FromMilliseconds(250), DispatcherPriority.Background,
@@ -910,12 +901,8 @@ public partial class MainWindow : Window
         _topRect    = new Rect(x0, gap,              w, h1);
         _bottomRect = new Rect(x0, gap * 2 + h1,     w, h2);
 
-        // Fluchtpunkt: oben rechts ausserhalb der Rects
-        var vp = new Point(cw * 0.93, ch * 0.04);
-
-        var vpSide = new Point(cw * 0.93, ch * 0.72); // flacherer Winkel für Seitenansicht
-        AddWood3DBlock(_topRect,    vp,     depthFactor: 0.07);
-        AddWood3DBlock(_bottomRect, vpSide, depthFactor: 0.14);
+        DrawCanvas.Children.Add(MakeWoodRect(_topRect));
+        DrawCanvas.Children.Add(MakeWoodRect(_bottomRect));
     }
 
     private void AddWood3DBlock(Rect r, Point vp, double depthFactor)
