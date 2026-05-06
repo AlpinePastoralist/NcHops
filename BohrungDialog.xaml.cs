@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 
 namespace NCHops;
@@ -16,15 +16,15 @@ public partial class BohrungDialog : Window
     private void OnOk(object sender, RoutedEventArgs e)
     {
         var bezugs = new List<string>();
-        if (CbUntenLinks.IsChecked == true)  bezugs.Add("unten_links");
-        if (CbObenLinks.IsChecked == true)   bezugs.Add("oben_links");
-        if (CbUntenRechts.IsChecked == true) bezugs.Add("unten_rechts");
-        if (CbObenRechts.IsChecked == true)  bezugs.Add("oben_rechts");
-        if (CbLinksMitte.IsChecked == true)  bezugs.Add("links_mitte");
-        if (CbRechtsMitte.IsChecked == true) bezugs.Add("rechts_mitte");
-        if (CbObenMitte.IsChecked == true)   bezugs.Add("oben_mitte");
-        if (CbUntenMitte.IsChecked == true)  bezugs.Add("unten_mitte");
-        if (CbMitteMitte.IsChecked == true)  bezugs.Add("mitte_mitte");
+        if (CbUntenLinks.IsChecked == true)  bezugs.Add("Unten links");
+        if (CbObenLinks.IsChecked == true)   bezugs.Add("Oben links");
+        if (CbUntenRechts.IsChecked == true) bezugs.Add("Unten rechts");
+        if (CbObenRechts.IsChecked == true)  bezugs.Add("Oben rechts");
+        if (CbLinksMitte.IsChecked == true)  bezugs.Add("Links Mitte");
+        if (CbRechtsMitte.IsChecked == true) bezugs.Add("Rechts Mitte");
+        if (CbObenMitte.IsChecked == true)   bezugs.Add("Oben Mitte");
+        if (CbUntenMitte.IsChecked == true)  bezugs.Add("Unten Mitte");
+        if (CbMitteMitte.IsChecked == true)  bezugs.Add("Mitte");
 
         Result = new BohrungParams(
             XRel: double.Parse(TxtXRel.Text, System.Globalization.CultureInfo.InvariantCulture),

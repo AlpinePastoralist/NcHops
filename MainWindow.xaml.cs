@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -57,15 +57,15 @@ public partial class MainWindow : Window
         string bezug, double relX, double relY, double w, double h)
         => bezug switch
         {
-            "unten_links"  => (relX,         relY),
-            "oben_links"   => (relX,         h - relY),
-            "unten_rechts" => (w - relX,     relY),
-            "oben_rechts"  => (w - relX,     h - relY),
-            "links_mitte"  => (relX,         h / 2 + relY),
-            "rechts_mitte" => (w - relX,     h / 2 + relY),
-            "oben_mitte"   => (w / 2 + relX, h - relY),
-            "unten_mitte"  => (w / 2 + relX, relY),
-            "mitte_mitte"  => (w / 2 + relX, h / 2 + relY),
+            "Unten links"  => (relX,         relY),
+            "Oben links"   => (relX,         h - relY),
+            "Unten rechts" => (w - relX,     relY),
+            "Oben rechts"  => (w - relX,     h - relY),
+            "Links Mitte"  => (relX,         h / 2 + relY),
+            "Rechts Mitte" => (w - relX,     h / 2 + relY),
+            "Oben Mitte"   => (w / 2 + relX, h - relY),
+            "Unten Mitte"  => (w / 2 + relX, relY),
+            "Mitte"  => (w / 2 + relX, h / 2 + relY),
             _              => (relX, relY)
         };
 
@@ -74,15 +74,15 @@ public partial class MainWindow : Window
         string bezug, double absX, double absY, double w, double h)
         => bezug switch
         {
-            "unten_links"  => (absX,         absY),
-            "oben_links"   => (absX,         h - absY),
-            "unten_rechts" => (w - absX,     absY),
-            "oben_rechts"  => (w - absX,     h - absY),
-            "links_mitte"  => (absX,         absY - h / 2),
-            "rechts_mitte" => (w - absX,     absY - h / 2),
-            "oben_mitte"   => (absX - w / 2, h - absY),
-            "unten_mitte"  => (absX - w / 2, absY),
-            "mitte_mitte"  => (absX - w / 2, absY - h / 2),
+            "Unten links"  => (absX,         absY),
+            "Oben links"   => (absX,         h - absY),
+            "Unten rechts" => (w - absX,     absY),
+            "Oben rechts"  => (w - absX,     h - absY),
+            "Links Mitte"  => (absX,         absY - h / 2),
+            "Rechts Mitte" => (w - absX,     absY - h / 2),
+            "Oben Mitte"   => (absX - w / 2, h - absY),
+            "Unten Mitte"  => (absX - w / 2, absY),
+            "Mitte"  => (absX - w / 2, absY - h / 2),
             _              => (absX, absY)
         };
 
@@ -98,6 +98,16 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        // Grössten Frame aus icon.ico als Hintergrund laden
+        var decoder = new System.Windows.Media.Imaging.IconBitmapDecoder(
+            new Uri("pack://application:,,,/icon.ico"),
+            System.Windows.Media.Imaging.BitmapCreateOptions.None,
+            System.Windows.Media.Imaging.BitmapCacheOption.Default);
+        BgIcon.Source = decoder.Frames
+            .OrderByDescending(f => f.PixelWidth)
+            .First();
+
         Loaded += (_, _) => UpdateAll();
 
         _refreshTimer = new DispatcherTimer(
@@ -211,7 +221,7 @@ public partial class MainWindow : Window
                 System.Globalization.CultureInfo.InvariantCulture, out var y))
             return;
 
-        string bezug = (PfadCbBezug?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "unten_links";
+        string bezug = (PfadCbBezug?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "Unten links";
         _pfadPunkte.Add(new PfadPunkt
         {
             Nr    = _pfadPunkte.Count + 1,
@@ -312,7 +322,7 @@ public partial class MainWindow : Window
         absX = Math.Round(absX / snap) * snap;
         absY = Math.Round(absY / snap) * snap;
 
-        string defaultBezug = (PfadCbBezug?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "unten_links";
+        string defaultBezug = (PfadCbBezug?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "Unten links";
         var (relX, relY) = AbsToRel(defaultBezug, absX, absY, WorkX, WorkY);
 
         _pfadPunkte.Add(new PfadPunkt
@@ -489,7 +499,81 @@ public partial class MainWindow : Window
     }
 
     private void OnInfo(object sender, RoutedEventArgs e)
-        => MessageBox.Show("NC_Hops – G-Code Generator & Visualisierer", "Info");
+    {
+        var dlg = new Window
+        {
+            Title           = "Info",
+            SizeToContent   = SizeToContent.WidthAndHeight,
+            ResizeMode      = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner           = this,
+            Background      = new System.Windows.Media.SolidColorBrush(
+                                  (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                                  .ConvertFromString("#d8e0ea")),
+        };
+
+        // Grössten Frame aus der ICO-Datei laden
+        var decoder = new System.Windows.Media.Imaging.IconBitmapDecoder(
+            new Uri("pack://application:,,,/icon.ico"),
+            System.Windows.Media.Imaging.BitmapCreateOptions.None,
+            System.Windows.Media.Imaging.BitmapCacheOption.Default);
+        var bestFrame = decoder.Frames
+            .OrderByDescending(f => f.PixelWidth)
+            .First();
+
+        var img = new System.Windows.Controls.Image
+        {
+            Width   = 128,
+            Height  = 128,
+            Margin  = new Thickness(0, 0, 0, 12),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Source  = bestFrame,
+        };
+        System.Windows.Media.RenderOptions.SetBitmapScalingMode(
+            img, System.Windows.Media.BitmapScalingMode.HighQuality);
+
+        var txt = new System.Windows.Controls.TextBlock
+        {
+            Text            = "NC Studio – G-Code Generator & Visualisierer\n\n" +
+                              "NC Studio ist ein CNC-Hilfsprogramm für die Holzbearbeitung und das Fräsen. " +
+                              "Es unterstützt bei der Erstellung und Visualisierung von G-Code für CNC-Maschinen.\n\n" +
+                              "G-Code ist eine weit verbreitete Programmiersprache zur Steuerung von CNC-Maschinen. " +
+                              "Er beschreibt Bewegungen, Geschwindigkeiten und Werkzeugbefehle in einer Abfolge von Befehlen – " +
+                              "zum Beispiel bestimmt G0 eine schnelle Leerfahrt und G1 eine gefräste Linie mit definiertem Vorschub.\n\n" +
+                              "\"NC\" steht für Numerical Control (Numerische Steuerung), " +
+                              "die technologische Grundlage moderner CNC-Maschinen-Steuerung.\n\n" +
+                              "Entwickler: Joel Suter",
+            TextAlignment   = TextAlignment.Center,
+            Foreground      = new System.Windows.Media.SolidColorBrush(
+                                  (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                                  .ConvertFromString("#1a1a1a")),
+            FontSize        = 13,
+            Margin          = new Thickness(0, 0, 0, 16),
+            MaxWidth        = 480,
+            TextWrapping    = System.Windows.TextWrapping.Wrap,
+        };
+
+        var btn = new System.Windows.Controls.Button
+        {
+            Content             = "OK",
+            Width               = 80,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Background          = new System.Windows.Media.SolidColorBrush(
+                                      (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                                      .ConvertFromString("#5c4400")),
+            Foreground          = System.Windows.Media.Brushes.White,
+            BorderThickness     = new Thickness(0),
+            Padding             = new Thickness(8, 4, 8, 4),
+        };
+        btn.Click += (_, __) => dlg.Close();
+
+        var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(32, 24, 32, 24) };
+        panel.Children.Add(img);
+        panel.Children.Add(txt);
+        panel.Children.Add(btn);
+        dlg.Content = panel;
+        dlg.ShowDialog();
+    }
 
     // ── Aktualisieren ─────────────────────────────────────────────
 
@@ -814,39 +898,106 @@ public partial class MainWindow : Window
         if (wx <= 0 || wy <= 0 || wz <= 0) return;
 
         double minGap = 40;
-        double scaleW = (cw * 0.9) / wx;
-        double scale = Math.Min(scaleW, 1.0);
-        double w = wx * scale, h1 = wy * scale, h2 = wz * scale;
+        double scale  = Math.Min((cw * 0.82) / wx, (ch * 0.82) / (wy + wz));
+        scale = Math.Min(scale, 1.0);
+        double w  = wx * scale;
+        double h1 = wy * scale;
+        double h2 = wz * scale;
 
-        double needed = h1 + h2 + 3 * minGap;
-        double gap;
-        if (needed > ch)
-        {
-            double sh = ch / needed;
-            w *= sh; h1 *= sh; h2 *= sh;
-            gap = minGap * sh;
-        }
-        else
-        {
-            gap = (ch - h1 - h2) / 3;
-        }
+        double x0  = (cw - w) / 2;
+        double gap = Math.Max((ch - h1 - h2) / 3, minGap * 0.5);
 
-        double x0 = (cw - w) / 2;
+        _topRect    = new Rect(x0, gap,              w, h1);
+        _bottomRect = new Rect(x0, gap * 2 + h1,     w, h2);
 
-        _topRect    = new Rect(x0, gap,          w, h1);
-        _bottomRect = new Rect(x0, gap * 2 + h1, w, h2);
+        // Fluchtpunkt: oben rechts ausserhalb der Rects
+        var vp = new Point(cw * 0.93, ch * 0.04);
 
-        DrawCanvas.Children.Add(MakeRect(_topRect,    Brushes.SkyBlue));
-        DrawCanvas.Children.Add(MakeRect(_bottomRect, Brushes.LightGreen));
+        var vpSide = new Point(cw * 0.93, ch * 0.72); // flacherer Winkel für Seitenansicht
+        AddWood3DBlock(_topRect,    vp,     depthFactor: 0.07);
+        AddWood3DBlock(_bottomRect, vpSide, depthFactor: 0.14);
     }
 
-    private static Rectangle MakeRect(Rect r, Brush fill)
+    private void AddWood3DBlock(Rect r, Point vp, double depthFactor)
     {
-        var rect = new Rectangle { Width = r.Width, Height = r.Height, Fill = fill };
+        var tl = new Point(r.Left,  r.Top);
+        var tr = new Point(r.Right, r.Top);
+        var br = new Point(r.Right, r.Bottom);
+        var bl = new Point(r.Left,  r.Bottom);
+
+        // Perspektivische Projektion: Punkte laufen auf Fluchtpunkt zu
+        Point ToVP(Point p) => new(
+            p.X + (vp.X - p.X) * depthFactor,
+            p.Y + (vp.Y - p.Y) * depthFactor);
+
+        var tlo = ToVP(tl);
+        var tro = ToVP(tr);
+        var bro = ToVP(br);
+        var blo = ToVP(bl);
+
+        var border = new SolidColorBrush(Color.FromRgb(0x48, 0x24, 0x06));
+
+        void AddFace(PointCollection pts, byte shadowAlpha)
+        {
+            DrawCanvas.Children.Add(new Polygon { Points = pts, Fill = GetWoodBrush() });
+            DrawCanvas.Children.Add(new Polygon
+            {
+                Points           = pts,
+                Fill             = new SolidColorBrush(Color.FromArgb(shadowAlpha, 0, 0, 0)),
+                Stroke           = border,
+                StrokeThickness  = 0.1,
+                IsHitTestVisible = false,
+            });
+        }
+
+        // Obere Fläche (VP liegt oberhalb → sichtbar)
+        if (vp.Y < r.Top)
+            AddFace(new PointCollection { tl, tr, tro, tlo }, 70);
+
+        // Rechte Seitenfläche (VP liegt rechts → sichtbar)
+        if (vp.X > r.Right)
+            AddFace(new PointCollection { tr, tro, bro, br }, 130);
+
+        // Vorderfläche – volle Textur
+        DrawCanvas.Children.Add(MakeWoodRect(r));
+    }
+
+    private static ImageBrush? _woodBrush;
+    private static ImageBrush GetWoodBrush()
+    {
+        if (_woodBrush is null)
+        {
+            var bmp = new System.Windows.Media.Imaging.BitmapImage(
+                new Uri("pack://application:,,,/wood.jpg"));
+            _woodBrush = new ImageBrush(bmp)
+            {
+                Stretch       = Stretch.UniformToFill,
+                TileMode      = TileMode.Tile,
+                ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
+                Viewport      = new Rect(0, 0, 1, 1),
+            };
+        }
+        return _woodBrush;
+    }
+
+    private static UIElement MakeWoodRect(Rect r)
+    {
+        var rect = new Rectangle
+        {
+            Width           = r.Width,
+            Height          = r.Height,
+            Fill            = GetWoodBrush(),
+            Stroke          = new SolidColorBrush(Color.FromRgb(0x6B, 0x3A, 0x12)),
+            StrokeThickness = 0.1,
+        };
         Canvas.SetLeft(rect, r.Left);
-        Canvas.SetTop(rect, r.Top);
+        Canvas.SetTop(rect,  r.Top);
         return rect;
     }
+
+    /// <summary>
+    /// Prozedurale Holztextur via Fraktalem Rauschen + Jahresring-Sinus.
+    /// </summary>
 
     // ── Draufsicht G-Code ────────────────────────────────────────
 

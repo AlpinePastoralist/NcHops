@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -14,7 +14,7 @@ public class PfadPunkt : INotifyPropertyChanged
     private int    _nr;
     private string _x     = "0";
     private string _y     = "0";
-    private string _bezug = "unten_links";
+    private string _bezug = "Unten links";
 
     public int    Nr    { get => _nr;    set { _nr    = value; Notify(); } }
     public string X     { get => _x;     set { _x     = value; Notify(); } }
@@ -289,7 +289,7 @@ public partial class PfadFräsenDialog : Window
             Vorschub: double.Parse(TxtVorschub.Text, System.Globalization.CultureInfo.InvariantCulture),
             Drehzahl: double.Parse(TxtDrehzahl.Text, System.Globalization.CultureInfo.InvariantCulture),
             FraeserD: double.Parse(TxtFraeserD.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Bezugspunkt: (CbBezug.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "unten_links"
+            Bezugspunkt: (CbBezug.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "Unten links"
         );
         DialogResult = true;
     }

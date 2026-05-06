@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 
 namespace NCHops;
@@ -491,15 +491,15 @@ public static class GCodeGenerator
     private static (double x, double y) ConvertBezugspunkt(string ref_, double xRel, double yRel, double w, double h)
         => ref_ switch
         {
-            "unten_links"  => (xRel, yRel),
-            "oben_links"   => (xRel, h - yRel),
-            "unten_rechts" => (w - xRel, yRel),
-            "oben_rechts"  => (w - xRel, h - yRel),
-            "links_mitte"  => (xRel, h / 2 + yRel),
-            "rechts_mitte" => (w - xRel, h / 2 + yRel),
-            "oben_mitte"   => (w / 2 + xRel, h - yRel),
-            "unten_mitte"  => (w / 2 + xRel, yRel),
-            "mitte_mitte"  => (w / 2 + xRel, h / 2 + yRel),
+            "Unten links"  => (xRel, yRel),
+            "Oben links"   => (xRel, h - yRel),
+            "Unten rechts" => (w - xRel, yRel),
+            "Oben rechts"  => (w - xRel, h - yRel),
+            "Links Mitte"  => (xRel, h / 2 + yRel),
+            "Rechts Mitte" => (w - xRel, h / 2 + yRel),
+            "Oben Mitte"   => (w / 2 + xRel, h - yRel),
+            "Unten Mitte"  => (w / 2 + xRel, yRel),
+            "Mitte"  => (w / 2 + xRel, h / 2 + yRel),
             _              => (xRel, yRel)
         };
 }

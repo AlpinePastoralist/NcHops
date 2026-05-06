@@ -1,4 +1,4 @@
-<Window x:Class="NCHops.BohrungDialog"
+﻿<Window x:Class="NCHops.BohrungDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Bohrung" Width="420" Height="440"
@@ -48,17 +48,17 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
-                    <CheckBox x:Name="CbUntenLinks"  Content="unten_links"   Margin="0,4"/>
-                    <CheckBox x:Name="CbObenLinks"   Content="oben_links"    Margin="0,4"/>
-                    <CheckBox x:Name="CbUntenRechts" Content="unten_rechts"  Margin="0,4"/>
-                    <CheckBox x:Name="CbObenRechts"  Content="oben_rechts"   Margin="0,4"/>
+                    <CheckBox x:Name="CbUntenLinks"  Content="Unten links"   Margin="0,4"/>
+                    <CheckBox x:Name="CbObenLinks"   Content="Oben links"    Margin="0,4"/>
+                    <CheckBox x:Name="CbUntenRechts" Content="Unten rechts"  Margin="0,4"/>
+                    <CheckBox x:Name="CbObenRechts"  Content="Oben rechts"   Margin="0,4"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1">
-                    <CheckBox x:Name="CbLinksMitte"  Content="links_mitte"   Margin="0,4"/>
-                    <CheckBox x:Name="CbRechtsMitte" Content="rechts_mitte"  Margin="0,4"/>
-                    <CheckBox x:Name="CbObenMitte"   Content="oben_mitte"    Margin="0,4"/>
-                    <CheckBox x:Name="CbUntenMitte"  Content="unten_mitte"   Margin="0,4"/>
-                    <CheckBox x:Name="CbMitteMitte"  Content="mitte_mitte"   Margin="0,4"/>
+                    <CheckBox x:Name="CbLinksMitte"  Content="Links Mitte"   Margin="0,4"/>
+                    <CheckBox x:Name="CbRechtsMitte" Content="Rechts Mitte"  Margin="0,4"/>
+                    <CheckBox x:Name="CbObenMitte"   Content="Oben Mitte"    Margin="0,4"/>
+                    <CheckBox x:Name="CbUntenMitte"  Content="Unten Mitte"   Margin="0,4"/>
+                    <CheckBox x:Name="CbMitteMitte"  Content="Mitte"   Margin="0,4"/>
                 </StackPanel>
             </Grid>
         </GroupBox>

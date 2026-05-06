@@ -1,4 +1,4 @@
-<Window x:Class="NCHops.PfadFräsenDialog"
+﻿<Window x:Class="NCHops.PfadFräsenDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Pfad Fräsen" Width="820" Height="620"
@@ -66,15 +66,15 @@
                     </Grid.ColumnDefinitions>
                     <Label Grid.Column="0" Content="Bezugspunkt:" VerticalAlignment="Center" FontSize="11"/>
                     <ComboBox Grid.Column="1" x:Name="CbBezug" VerticalAlignment="Center" SelectedIndex="0" Margin="0,0,8,0">
-                        <ComboBoxItem Content="unten_links"/>
-                        <ComboBoxItem Content="oben_links"/>
-                        <ComboBoxItem Content="unten_rechts"/>
-                        <ComboBoxItem Content="oben_rechts"/>
-                        <ComboBoxItem Content="mitte_mitte"/>
-                        <ComboBoxItem Content="links_mitte"/>
-                        <ComboBoxItem Content="rechts_mitte"/>
-                        <ComboBoxItem Content="oben_mitte"/>
-                        <ComboBoxItem Content="unten_mitte"/>
+                        <ComboBoxItem Content="Unten links"/>
+                        <ComboBoxItem Content="Oben links"/>
+                        <ComboBoxItem Content="Unten rechts"/>
+                        <ComboBoxItem Content="Oben rechts"/>
+                        <ComboBoxItem Content="Mitte"/>
+                        <ComboBoxItem Content="Links Mitte"/>
+                        <ComboBoxItem Content="Rechts Mitte"/>
+                        <ComboBoxItem Content="Oben Mitte"/>
+                        <ComboBoxItem Content="Unten Mitte"/>
                     </ComboBox>
                     <Label Grid.Column="2" Content="Fräser D:" VerticalAlignment="Center" FontSize="11"/>
                     <TextBox Grid.Column="3" x:Name="TxtFraeserD" Text="10" VerticalAlignment="Center"/>
