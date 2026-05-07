@@ -28,10 +28,11 @@ public partial class MainWindow : Window
     private ScrollViewer? _lineNumbersScrollViewer;
     private bool _isUpdatingGCode;
     private bool _suppressGCodeUiUpdate;
+    private readonly ObservableCollection<HistoryEntry> _history = [];
 
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
 
-    // ── Pfad Fräsen ──────────────────────────────────────────────
+#if false // ── Pfad Fräsen (deaktiviert) ─────────────────────────
     private readonly ObservableCollection<PfadPunkt> _pfadPunkte = [];
     private int    _pfadHoverIdx      = -1;
     private int    _pfadDragIdx       = -1;
@@ -43,7 +44,6 @@ public partial class MainWindow : Window
         System.Globalization.NumberStyles.Float,
         System.Globalization.CultureInfo.InvariantCulture, out var v) ? Math.Max(0.1, v) : 5.0;
 
-    // Absolute mm ↔ Canvas-Pixel  (Ursprung = unten_links des Werkstücks)
     private Point AbsMmToPx(double absX, double absY) => new(
         _pfadCanvasRect.Left   + absX * _pfadScale,
         _pfadCanvasRect.Bottom - absY * _pfadScale);
@@ -52,7 +52,6 @@ public partial class MainWindow : Window
         (px.X - _pfadCanvasRect.Left)   / _pfadScale,
         (_pfadCanvasRect.Bottom - px.Y) / _pfadScale);
 
-    // Relative Punkt-Koordinaten → absolute Werkstück-mm
     private static (double absX, double absY) RelToAbs(
         string bezug, double relX, double relY, double w, double h)
         => bezug switch
@@ -65,11 +64,10 @@ public partial class MainWindow : Window
             "Rechts Mitte" => (w - relX,     h / 2 + relY),
             "Oben Mitte"   => (w / 2 + relX, h - relY),
             "Unten Mitte"  => (w / 2 + relX, relY),
-            "Mitte"  => (w / 2 + relX, h / 2 + relY),
+            "Mitte"        => (w / 2 + relX, h / 2 + relY),
             _              => (relX, relY)
         };
 
-    // Absolute mm → relative Koordinaten (Umkehrung von RelToAbs)
     private static (double relX, double relY) AbsToRel(
         string bezug, double absX, double absY, double w, double h)
         => bezug switch
@@ -82,11 +80,10 @@ public partial class MainWindow : Window
             "Rechts Mitte" => (w - absX,     absY - h / 2),
             "Oben Mitte"   => (absX - w / 2, h - absY),
             "Unten Mitte"  => (absX - w / 2, absY),
-            "Mitte"  => (absX - w / 2, absY - h / 2),
+            "Mitte"        => (absX - w / 2, absY - h / 2),
             _              => (absX, absY)
         };
 
-    // Pixel-Position eines PfadPunkts (berücksichtigt seinen Bezug)
     private Point PunktToPx(PfadPunkt p)
     {
         double relX = double.Parse(p.X, System.Globalization.CultureInfo.InvariantCulture);
@@ -94,6 +91,7 @@ public partial class MainWindow : Window
         var (absX, absY) = RelToAbs(p.Bezug, relX, relY, WorkX, WorkY);
         return AbsMmToPx(absX, absY);
     }
+#endif
 
     public MainWindow()
     {
@@ -106,8 +104,12 @@ Loaded += (_, _) => UpdateAll();
             (_, _) => UpdateAll(), Dispatcher);
         _refreshTimer.Stop();
 
+        HistoryList.ItemsSource = _history;
+        _history.CollectionChanged += (_, _) => RegenerateGCodeFromHistory();
+#if false
         PfadLvPunkte.ItemsSource = _pfadPunkte;
         _pfadPunkte.CollectionChanged += (_, _) => UpdateAll();
+#endif
     }
 
     // ── Werkstückmaße ────────────────────────────────────────────
@@ -152,39 +154,220 @@ Loaded += (_, _) => UpdateAll();
     {
         var dlg = new PlanfräsenDialog(WorkX, WorkY) { Owner = this };
         if (dlg.ShowDialog() != true) return;
-        var gcode = GCodeGenerator.Planfräsen(dlg.Result!);
-        PrependGeneratedGCode(gcode);
-        UpdateAll();
+        var p = dlg.Result!;
+        _history.Add(new HistoryEntry("Planfräsen",
+            $"{(p.Horizontal ? "Horizontal" : "Vertikal")}, Z={p.Z}, Ø{p.FraeserD}", p));
     }
 
     private void OnBohrung(object sender, RoutedEventArgs e)
     {
         var dlg = new BohrungDialog(WorkZ + 3) { Owner = this };
         if (dlg.ShowDialog() != true) return;
-        var gcode = GCodeGenerator.Bohrung(dlg.Result!, WorkX, WorkY);
-        GCodeText = gcode + GCodeText;
-        UpdateAll();
+        var p = dlg.Result!;
+        _history.Add(new HistoryEntry("Bohrung",
+            $"X={p.XRel} Y={p.YRel}, Ø{p.Durchmesser}, Z={p.Bohrtiefe}, {p.Bezugspunkt}", p));
     }
 
     private void OnReihenlochbohrung(object sender, RoutedEventArgs e)
     {
         var dlg = new ReihenlochbohrungDialog(WorkZ + 3) { Owner = this };
         if (dlg.ShowDialog() != true) return;
-        var gcode = GCodeGenerator.Reihenlochbohrung(dlg.Result!);
-        PrependGeneratedGCode(gcode);
-        UpdateAll();
+        var p = dlg.Result!;
+        _history.Add(new HistoryEntry("Reihenlochbohrung",
+            $"{p.CountX}×{p.CountY}, Ø{p.Diameter}, Z={p.Bohrtiefe}", p));
     }
 
     private void OnUmfahren(object sender, RoutedEventArgs e)
     {
         var dlg = new UmfahrenDialog(WorkZ) { Owner = this };
         if (dlg.ShowDialog() != true) return;
-        var gcode = GCodeGenerator.Umfahren(dlg.Result!, WorkX, WorkY);
-        PrependGeneratedGCode(gcode);
+        var p = dlg.Result!;
+        _history.Add(new HistoryEntry("Umfahren",
+            $"A={p.A}, Ø{p.Diameter}, Z={p.Z}", p));
+    }
+
+    private bool IsPfadAktiv()
+    {
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            if (_history[i].Params is PfadPunktParams)
+                return true;
+            if (_history[i].Params is not null)
+                return false;
+        }
+        return false;
+    }
+
+    private void UpdatePfadMenuState()
+    {
+        MnuPfadPunkt.IsEnabled = IsPfadAktiv();
+    }
+
+    private void OnPfadStart(object sender, RoutedEventArgs e)
+    {
+        var dlg = new PfadPunktDialog("Pfad – Startpunkt", -(WorkZ + 3), isStart: true) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        var p = dlg.Result! with { Typ = PfadPunktTyp.Start };
+        _history.Add(new HistoryEntry("Pfad Start",
+            $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}, {p.Bezugspunkt}", p));
+        UpdatePfadMenuState();
+    }
+
+    private void OnPfadPunkt(object sender, RoutedEventArgs e)
+    {
+        var dlg = new PfadPunktDialog("Pfad – Punkt", -(WorkZ + 3)) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        var p = dlg.Result! with { Typ = PfadPunktTyp.Punkt };
+        _history.Add(new HistoryEntry("Pfad Punkt",
+            $"X={p.XRel} Y={p.YRel}, {p.Bezugspunkt}", p, level: 1));
+    }
+
+private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (HistoryList.SelectedItem is not HistoryEntry entry) return;
+        HistoryList.SelectedItem = null;
+        EditHistoryEntry(entry);
+    }
+
+    private void EditHistoryEntry(HistoryEntry entry)
+    {
+        int idx = _history.IndexOf(entry);
+        switch (entry.Params)
+        {
+            case PlanfräsenParams p:
+            {
+                var dlg = new PlanfräsenDialog(WorkX, WorkY, p) { Owner = this };
+                if (dlg.ShowDialog() != true) return;
+                var np = dlg.Result!;
+                _history[idx] = new HistoryEntry("Planfräsen",
+                    $"{(np.Horizontal ? "Horizontal" : "Vertikal")}, Z={np.Z}, Ø{np.FraeserD}", np);
+                break;
+            }
+            case BohrungParams p:
+            {
+                var dlg = new BohrungDialog(WorkZ + 3, p) { Owner = this };
+                if (dlg.ShowDialog() != true) return;
+                var np = dlg.Result!;
+                _history[idx] = new HistoryEntry("Bohrung",
+                    $"X={np.XRel} Y={np.YRel}, Ø{np.Durchmesser}, Z={np.Bohrtiefe}, {np.Bezugspunkt}", np);
+                break;
+            }
+            case ReihenlochbohrungParams p:
+            {
+                var dlg = new ReihenlochbohrungDialog(WorkZ + 3, p) { Owner = this };
+                if (dlg.ShowDialog() != true) return;
+                var np = dlg.Result!;
+                _history[idx] = new HistoryEntry("Reihenlochbohrung",
+                    $"{np.CountX}×{np.CountY}, Ø{np.Diameter}, Z={np.Bohrtiefe}", np);
+                break;
+            }
+            case UmfahrenParams p:
+            {
+                var dlg = new UmfahrenDialog(WorkZ, p) { Owner = this };
+                if (dlg.ShowDialog() != true) return;
+                var np = dlg.Result!;
+                _history[idx] = new HistoryEntry("Umfahren",
+                    $"A={np.A}, Ø{np.Diameter}, Z={np.Z}", np);
+                break;
+            }
+            case PfadPunktParams p:
+            {
+                string title = p.Typ == PfadPunktTyp.Start ? "Pfad – Startpunkt" : "Pfad – Punkt";
+                var dlg = new PfadPunktDialog(title, -(WorkZ + 3), isStart: p.Typ == PfadPunktTyp.Start, p) { Owner = this };
+                if (dlg.ShowDialog() != true) return;
+                var np = dlg.Result! with { Typ = p.Typ };
+                int lvl = np.Typ == PfadPunktTyp.Start ? 0 : 1;
+                string det = np.Typ == PfadPunktTyp.Start
+                    ? $"X={np.XRel} Y={np.YRel}, Z={np.ZTiefe}, {np.Bezugspunkt}"
+                    : $"X={np.XRel} Y={np.YRel}, {np.Bezugspunkt}";
+                _history[idx] = new HistoryEntry(np.Typ == PfadPunktTyp.Start ? "Pfad Start" : "Pfad Punkt", det, np, lvl);
+                break;
+            }
+        }
+        RegenerateGCodeFromHistory();
+    }
+
+    private void OnHistoryRightClick(object sender, MouseButtonEventArgs e)
+    {
+        var item = (e.OriginalSource as DependencyObject)
+            ?.FindVisualParent<ListBoxItem>();
+        if (item?.DataContext is not HistoryEntry entry) return;
+
+        e.Handled = true; // Selektion durch Rechtsklick unterdrücken
+
+        var cm = new ContextMenu();
+        var miCopy = new MenuItem { Header = "Kopieren" };
+        miCopy.Click += (_, _) =>
+        {
+            int idx = _history.IndexOf(entry);
+            _history.Insert(idx + 1, new HistoryEntry(entry.Label, entry.Details, entry.Params));
+        };
+        var miDelete = new MenuItem { Header = "Löschen" };
+        miDelete.Click += (_, _) => _history.Remove(entry);
+        cm.Items.Add(miCopy);
+        cm.Items.Add(miDelete);
+        item.ContextMenu = cm;
+        item.ContextMenu.IsOpen = true;
+    }
+
+    private void RegenerateGCodeFromHistory()
+    {
+        var sb = new System.Text.StringBuilder();
+        var pfadBuffer = new List<PfadPunktParams>();
+        double lastStartZ = 0;
+        string lastRadiuskorrektur = "Mittig";
+        double lastFraeserD = 0;
+
+        void FlushPfad()
+        {
+            if (pfadBuffer.Count == 0) return;
+            var c = GCodeGenerator.PfadFräsen(pfadBuffer, WorkX, WorkY);
+            if (!string.IsNullOrEmpty(c)) sb.AppendLine(c);
+            pfadBuffer.Clear();
+        }
+
+        foreach (var entry in _history)
+        {
+            if (entry.Params is PfadPunktParams pfad)
+            {
+                if (pfad.Typ == PfadPunktTyp.Start)
+                {
+                    FlushPfad();
+                    lastStartZ          = pfad.ZTiefe;
+                    lastRadiuskorrektur = pfad.Radiuskorrektur;
+                    lastFraeserD        = pfad.FraeserD;
+                    pfadBuffer.Add(pfad);
+                }
+                else
+                {
+                    pfadBuffer.Add(pfad with {
+                        ZTiefe          = lastStartZ,
+                        Radiuskorrektur = lastRadiuskorrektur,
+                        FraeserD        = lastFraeserD
+                    });
+                }
+                continue;
+            }
+
+            FlushPfad();
+            string code = entry.Params switch
+            {
+                PlanfräsenParams p        => GCodeGenerator.Planfräsen(p),
+                BohrungParams p           => GCodeGenerator.Bohrung(p, WorkX, WorkY),
+                ReihenlochbohrungParams p => GCodeGenerator.Reihenlochbohrung(p),
+                UmfahrenParams p          => GCodeGenerator.Umfahren(p, WorkX, WorkY),
+                _                         => string.Empty
+            };
+            if (!string.IsNullOrEmpty(code)) sb.AppendLine(code);
+        }
+        FlushPfad();
+
+        GCodeText = sb.ToString();
+        UpdatePfadMenuState();
         UpdateAll();
     }
 
-    // ── Pfad Fräsen Panel ────────────────────────────────────────
+#if false // ── Pfad Fräsen Panel ────────────────────────────────────────
 
     private void OnPfadAnzeigenChanged(object sender, RoutedEventArgs e)
     {
@@ -252,20 +435,9 @@ Loaded += (_, _) => UpdateAll();
         PfadLvPunkte.SelectedIndex = Math.Min(i, _pfadPunkte.Count - 1);
     }
 
-    private void OnWindowKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Delete) return;
-        if (CbPfadAnzeigen?.IsChecked != true) return;
-        // Nicht löschen wenn Fokus in einem Texteingabefeld liegt
-        if (Keyboard.FocusedElement is TextBox or RichTextBox) return;
-
-        int i = PfadLvPunkte.SelectedIndex;
-        if (i < 0) return;
-        _pfadPunkte.RemoveAt(i);
-        PfadAktualisiereNummern();
-        PfadLvPunkte.SelectedIndex = Math.Min(i, _pfadPunkte.Count - 1);
-        e.Handled = true;
-    }
+#endif // OnWindowKeyDown aus #if false herausgenommen
+    private void OnWindowKeyDown(object sender, KeyEventArgs e) { }
+#if false
 
     private void OnPfadAlleLöschen(object sender, RoutedEventArgs e)
     {
@@ -489,6 +661,7 @@ Loaded += (_, _) => UpdateAll();
         string seite = (PfadCbSeite.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "Mitte";
         return new PfadFräsenParams(punkte, z, zu, v, d, fd, "absolut", seite);
     }
+#endif // Pfad Fräsen Panel Ende
 
     private void OnInfo(object sender, RoutedEventArgs e)
     {
@@ -876,8 +1049,10 @@ Loaded += (_, _) => UpdateAll();
         DrawWorkpieces();
         DrawGCodeTopView();
         DrawGCodeSideView();
+#if false
         if (CbPfadAnzeigen?.IsChecked == true)
             DrawPfadFräsen();
+#endif
     }
 
     private void DrawWorkpieces()
@@ -956,7 +1131,7 @@ Loaded += (_, _) => UpdateAll();
         if (_woodBrush is null)
         {
             var imgPath = System.IO.Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory, "maple.jpg");
+                AppDomain.CurrentDomain.BaseDirectory, "maple.png");
             var bmp = System.IO.File.Exists(imgPath)
                 ? new System.Windows.Media.Imaging.BitmapImage(new Uri(imgPath))
                 : (System.Windows.Media.Imaging.BitmapSource)CreateMapleTexture(512, 512);
@@ -1184,6 +1359,7 @@ Loaded += (_, _) => UpdateAll();
 
     // ── Pfad Fräsen zeichnen ─────────────────────────────────────
 
+#if false // DrawPfadFräsen + DrawHoverArrows
     private void DrawPfadFräsen()
     {
         if (_topRect.IsEmpty) return;
@@ -1321,6 +1497,7 @@ Loaded += (_, _) => UpdateAll();
             DrawCanvas.Children.Add(arrow);
         }
     }
+#endif // DrawPfadFräsen + DrawHoverArrows Ende
 
     // ── Hilfsmethode ─────────────────────────────────────────────
 
@@ -1334,5 +1511,27 @@ Loaded += (_, _) => UpdateAll();
         if (dashed)
             line.StrokeDashArray = new System.Windows.Media.DoubleCollection { 5, 3 };
         return line;
+    }
+}
+
+public class HistoryEntry(string label, string details, object p, int level = 0)
+{
+    public string Label   { get; } = label;
+    public string Details { get; } = details;
+    public object Params  { get; } = p;
+    public int    Level   { get; } = level;
+}
+
+public static class VisualTreeHelperExtensions
+{
+    public static T? FindVisualParent<T>(this DependencyObject obj) where T : DependencyObject
+    {
+        var current = VisualTreeHelper.GetParent(obj);
+        while (current != null)
+        {
+            if (current is T t) return t;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
     }
 }

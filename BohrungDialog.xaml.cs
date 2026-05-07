@@ -1,5 +1,4 @@
-﻿using System.Windows;
-using System.Windows.Controls;
+using System.Windows;
 
 namespace NCHops;
 
@@ -7,32 +6,60 @@ public partial class BohrungDialog : Window
 {
     public BohrungParams? Result { get; private set; }
 
-    public BohrungDialog(double defaultZ)
+    public BohrungDialog(double defaultZ, BohrungParams? prefill = null)
     {
         InitializeComponent();
-        TxtBohrtiefe.Text = defaultZ.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (prefill != null)
+        {
+            TxtXRel.Text        = prefill.XRel.ToString(inv);
+            TxtYRel.Text        = prefill.YRel.ToString(inv);
+            TxtBohrtiefe.Text   = prefill.Bohrtiefe.ToString(inv);
+            TxtZustellung.Text  = prefill.Zustellung.ToString(inv);
+            TxtDurchmesser.Text = prefill.Durchmesser.ToString(inv);
+            SetBezug(prefill.Bezugspunkt);
+        }
+        else
+        {
+            TxtBohrtiefe.Text = defaultZ.ToString(inv);
+        }
+    }
+
+    private void SetBezug(string bezug)
+    {
+        RbObenLinks.IsChecked   = bezug == "Oben links";
+        RbObenMitte.IsChecked   = bezug == "Oben Mitte";
+        RbObenRechts.IsChecked  = bezug == "Oben rechts";
+        RbLinksMitte.IsChecked  = bezug == "Links Mitte";
+        RbMitte.IsChecked       = bezug == "Mitte";
+        RbRechtsMitte.IsChecked = bezug == "Rechts Mitte";
+        RbUntenLinks.IsChecked  = bezug == "Unten links";
+        RbUntenMitte.IsChecked  = bezug == "Unten Mitte";
+        RbUntenRechts.IsChecked = bezug == "Unten rechts";
+    }
+
+    private string GetBezug()
+    {
+        if (RbObenLinks.IsChecked   == true) return "Oben links";
+        if (RbObenMitte.IsChecked   == true) return "Oben Mitte";
+        if (RbObenRechts.IsChecked  == true) return "Oben rechts";
+        if (RbLinksMitte.IsChecked  == true) return "Links Mitte";
+        if (RbMitte.IsChecked       == true) return "Mitte";
+        if (RbRechtsMitte.IsChecked == true) return "Rechts Mitte";
+        if (RbUntenMitte.IsChecked  == true) return "Unten Mitte";
+        if (RbUntenRechts.IsChecked == true) return "Unten rechts";
+        return "Unten links";
     }
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        var bezugs = new List<string>();
-        if (CbUntenLinks.IsChecked == true)  bezugs.Add("Unten links");
-        if (CbObenLinks.IsChecked == true)   bezugs.Add("Oben links");
-        if (CbUntenRechts.IsChecked == true) bezugs.Add("Unten rechts");
-        if (CbObenRechts.IsChecked == true)  bezugs.Add("Oben rechts");
-        if (CbLinksMitte.IsChecked == true)  bezugs.Add("Links Mitte");
-        if (CbRechtsMitte.IsChecked == true) bezugs.Add("Rechts Mitte");
-        if (CbObenMitte.IsChecked == true)   bezugs.Add("Oben Mitte");
-        if (CbUntenMitte.IsChecked == true)  bezugs.Add("Unten Mitte");
-        if (CbMitteMitte.IsChecked == true)  bezugs.Add("Mitte");
-
         Result = new BohrungParams(
-            XRel: double.Parse(TxtXRel.Text, System.Globalization.CultureInfo.InvariantCulture),
-            YRel: double.Parse(TxtYRel.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Bohrtiefe: double.Parse(TxtBohrtiefe.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Zustellung: double.Parse(TxtZustellung.Text, System.Globalization.CultureInfo.InvariantCulture),
+            XRel:        double.Parse(TxtXRel.Text,        System.Globalization.CultureInfo.InvariantCulture),
+            YRel:        double.Parse(TxtYRel.Text,        System.Globalization.CultureInfo.InvariantCulture),
+            Bohrtiefe:   double.Parse(TxtBohrtiefe.Text,   System.Globalization.CultureInfo.InvariantCulture),
+            Zustellung:  double.Parse(TxtZustellung.Text,  System.Globalization.CultureInfo.InvariantCulture),
             Durchmesser: double.Parse(TxtDurchmesser.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Bezugspunkte: bezugs
+            Bezugspunkt: GetBezug()
         );
         DialogResult = true;
     }
@@ -42,4 +69,4 @@ public partial class BohrungDialog : Window
 
 public record BohrungParams(
     double XRel, double YRel, double Bohrtiefe, double Zustellung, double Durchmesser,
-    List<string> Bezugspunkte);
+    string Bezugspunkt);

@@ -1,9 +1,41 @@
-﻿<Window x:Class="NCHops.BohrungDialog"
+<Window x:Class="NCHops.BohrungDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Bohrung" Width="420" Height="440"
+        Title="Bohrung" Width="380" Height="460"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
-    <Grid Margin="12">
+    <Window.Resources>
+        <!-- RadioButton als kleiner Punkt auf dem Werkstück -->
+        <Style x:Key="BezugRadio" TargetType="RadioButton">
+            <Setter Property="GroupName"        Value="Bezug"/>
+            <Setter Property="Width"            Value="18"/>
+            <Setter Property="Height"           Value="18"/>
+            <Setter Property="Cursor"           Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Ellipse x:Name="Outer" Width="14" Height="14"
+                                     Stroke="#8B7040" StrokeThickness="1.5"
+                                     Fill="White"/>
+                            <Ellipse x:Name="Inner" Width="7" Height="7"
+                                     Fill="#9B7820" Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Inner" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Outer" Property="Fill"       Value="#F5EDD0"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Outer" Property="Fill" Value="#EAD8A0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -17,56 +49,99 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition Height="36"/>
-                <RowDefinition Height="36"/>
-                <RowDefinition Height="36"/>
-                <RowDefinition Height="36"/>
-                <RowDefinition Height="36"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
             </Grid.RowDefinitions>
 
-            <Label Grid.Row="0" Grid.Column="0" Content="X relativ:" VerticalAlignment="Center"/>
-            <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtXRel" Text="0" VerticalAlignment="Center"/>
+            <Label Grid.Row="0" Grid.Column="0" Content="X relativ:"    VerticalAlignment="Center"/>
+            <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtXRel"      Text="50" VerticalAlignment="Center"/>
 
-            <Label Grid.Row="1" Grid.Column="0" Content="Y relativ:" VerticalAlignment="Center"/>
-            <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtYRel" Text="0" VerticalAlignment="Center"/>
+            <Label Grid.Row="1" Grid.Column="0" Content="Y relativ:"    VerticalAlignment="Center"/>
+            <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtYRel"      Text="50" VerticalAlignment="Center"/>
 
-            <Label Grid.Row="2" Grid.Column="0" Content="Bohrtiefe:" VerticalAlignment="Center"/>
+            <Label Grid.Row="2" Grid.Column="0" Content="Bohrtiefe:"    VerticalAlignment="Center"/>
             <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtBohrtiefe" VerticalAlignment="Center"/>
 
-            <Label Grid.Row="3" Grid.Column="0" Content="Zustellung:" VerticalAlignment="Center"/>
+            <Label Grid.Row="3" Grid.Column="0" Content="Zustellung:"   VerticalAlignment="Center"/>
             <TextBox Grid.Row="3" Grid.Column="1" x:Name="TxtZustellung" Text="10" VerticalAlignment="Center"/>
 
-            <Label Grid.Row="4" Grid.Column="0" Content="Durchmesser:" VerticalAlignment="Center"/>
+            <Label Grid.Row="4" Grid.Column="0" Content="Durchmesser:"  VerticalAlignment="Center"/>
             <TextBox Grid.Row="4" Grid.Column="1" x:Name="TxtDurchmesser" Text="5" VerticalAlignment="Center"/>
         </Grid>
 
-        <!-- Bezugspunkte -->
-        <GroupBox Grid.Row="1" Header="Bezugspunkte" Margin="0,12,0,0">
-            <Grid Margin="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                    <CheckBox x:Name="CbUntenLinks"  Content="Unten links"   Margin="0,4"/>
-                    <CheckBox x:Name="CbObenLinks"   Content="Oben links"    Margin="0,4"/>
-                    <CheckBox x:Name="CbUntenRechts" Content="Unten rechts"  Margin="0,4"/>
-                    <CheckBox x:Name="CbObenRechts"  Content="Oben rechts"   Margin="0,4"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1">
-                    <CheckBox x:Name="CbLinksMitte"  Content="Links Mitte"   Margin="0,4"/>
-                    <CheckBox x:Name="CbRechtsMitte" Content="Rechts Mitte"  Margin="0,4"/>
-                    <CheckBox x:Name="CbObenMitte"   Content="Oben Mitte"    Margin="0,4"/>
-                    <CheckBox x:Name="CbUntenMitte"  Content="Unten Mitte"   Margin="0,4"/>
-                    <CheckBox x:Name="CbMitteMitte"  Content="Mitte"   Margin="0,4"/>
-                </StackPanel>
-            </Grid>
+        <!-- Bezugspunkt: Werkstück-Symbol mit RadioButtons -->
+        <GroupBox Grid.Row="1" Header="Bezugspunkt" Margin="0,10,0,0">
+            <Canvas Width="240" Height="130" HorizontalAlignment="Center" Margin="0,6">
+
+                <!-- Werkstück-Rechteck -->
+                <Rectangle Canvas.Left="28" Canvas.Top="18"
+                           Width="184" Height="94"
+                           Fill="#F5EFDA" Stroke="#C8A864" StrokeThickness="2"
+                           RadiusX="3" RadiusY="3"/>
+
+                <!-- Oben links -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbObenLinks" IsChecked="True"
+                             Canvas.Left="19" Canvas.Top="9"
+                             ToolTip="Oben links"/>
+
+                <!-- Oben Mitte -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbObenMitte"
+                             Canvas.Left="111" Canvas.Top="9"
+                             ToolTip="Oben Mitte"/>
+
+                <!-- Oben rechts -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbObenRechts"
+                             Canvas.Left="203" Canvas.Top="9"
+                             ToolTip="Oben rechts"/>
+
+                <!-- Links Mitte -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbLinksMitte"
+                             Canvas.Left="19" Canvas.Top="56"
+                             ToolTip="Links Mitte"/>
+
+                <!-- Mitte -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbMitte"
+                             Canvas.Left="111" Canvas.Top="56"
+                             ToolTip="Mitte"/>
+
+                <!-- Rechts Mitte -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbRechtsMitte"
+                             Canvas.Left="203" Canvas.Top="56"
+                             ToolTip="Rechts Mitte"/>
+
+                <!-- Unten links -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbUntenLinks"
+                             Canvas.Left="19" Canvas.Top="103"
+                             ToolTip="Unten links"/>
+
+                <!-- Unten Mitte -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbUntenMitte"
+                             Canvas.Left="111" Canvas.Top="103"
+                             ToolTip="Unten Mitte"/>
+
+                <!-- Unten rechts -->
+                <RadioButton Style="{StaticResource BezugRadio}"
+                             x:Name="RbUntenRechts"
+                             Canvas.Left="203" Canvas.Top="103"
+                             ToolTip="Unten rechts"/>
+            </Canvas>
         </GroupBox>
 
         <!-- Buttons -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-            <Button Content="OK" Width="75" Margin="0,0,8,0" Click="OnOk"/>
-            <Button Content="Abbrechen" Width="85" Click="OnCancel"/>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="OK"        Width="75" Margin="0,0,8,0" Click="OnOk" IsDefault="True"/>
+            <Button Content="Abbrechen" Width="85"                  Click="OnCancel"/>
         </StackPanel>
     </Grid>
 </Window>

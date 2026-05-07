@@ -66,25 +66,21 @@ public static class GCodeGenerator
     public static string Bohrung(BohrungParams p, double workW, double workH)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("(Mehrfach-Bohrungen)");
-        sb.AppendLine($"(D={p.Durchmesser})");
+        sb.AppendLine("(Bohrung)");
+        sb.AppendLine($"(D={p.Durchmesser}, Bezug={p.Bezugspunkt})");
         sb.AppendLine("G00 Z5.0000");
 
-        var zDepth = -Math.Abs(p.Bohrtiefe);
-        var zStep = Math.Abs(p.Zustellung);
-        foreach (var ref_ in p.Bezugspunkte)
-        {
-            var (x, y) = ConvertBezugspunkt(ref_, p.XRel, p.YRel, workW, workH);
-            sb.AppendLine($"(Bohrung Bezugspunkt: {ref_})");
-            sb.AppendLine($"G00 X{F(x)} Y{F(y)}");
+        var (x, y) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+        sb.AppendLine($"G00 X{F(x)} Y{F(y)}");
 
-            double currentZ = 0;
-            while (currentZ > zDepth)
-            {
-                currentZ = Math.Max(zDepth, currentZ - zStep);
-                sb.AppendLine($"G01 Z{F(currentZ)} F300");
-                sb.AppendLine("G00 Z5.0000");
-            }
+        var zDepth = -Math.Abs(p.Bohrtiefe);
+        var zStep  =  Math.Abs(p.Zustellung);
+        double currentZ = 0;
+        while (currentZ > zDepth)
+        {
+            currentZ = Math.Max(zDepth, currentZ - zStep);
+            sb.AppendLine($"G01 Z{F(currentZ)} F300");
+            sb.AppendLine("G00 Z5.0000");
         }
 
         sb.AppendLine("M05");
@@ -521,6 +517,7 @@ public static class GCodeGenerator
         return (segS[0], moves);
     }
 
+#if false // PfadFräsen (deaktiviert)
     public static string PfadFräsen(PfadFräsenParams p, double workW, double workH)
     {
         var sb = new StringBuilder();
@@ -564,6 +561,213 @@ public static class GCodeGenerator
         sb.AppendLine("G00 Z5.0000");
         sb.AppendLine("M05");
         return sb.ToString();
+    }
+#endif // PfadFräsen Ende
+
+    public static string PfadFräsen(IReadOnlyList<PfadPunktParams> path, double workW, double workH)
+    {
+        if (path.Count == 0) return string.Empty;
+        var sp    = path[0];
+        double z  = -Math.Abs(sp.ZTiefe);
+        double r  = sp.FraeserD / 2.0;
+        bool corr = sp.Radiuskorrektur != "Mittig";
+        double sg = sp.Radiuskorrektur == "Links" ? 1.0 : -1.0;
+
+        var pts = new List<(double x, double y)>();
+        for (int i = 0; i < path.Count; i++)
+        {
+            var p = path[i];
+            if (p.Bezugspunkt == "Letzter Punkt" && pts.Count > 0)
+                pts.Add((pts[^1].x + p.XRel, pts[^1].y + p.YRel));
+            else
+                pts.Add(ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH));
+        }
+
+        // Geschlossener Pfad: erster und letzter Punkt identisch (< 0.01 mm)
+        bool closed = pts.Count >= 3 &&
+            Math.Sqrt(Math.Pow(pts[0].x - pts[^1].x, 2) + Math.Pow(pts[0].y - pts[^1].y, 2)) < 0.01;
+
+        List<PathMove> moves;
+        if (corr && r > 1e-10 && pts.Count >= 2)
+        {
+            moves = closed
+                ? ComputeClosedOffsetMoves(pts.Take(pts.Count - 1).ToList(), r, sg)
+                : ComputeOffsetMoves(pts, r, sg);
+        }
+        else
+        {
+            moves = pts.Select(p => new PathMove(p.x, p.y)).ToList();
+            if (closed) moves.Add(moves[0]); // Pfad schliessen
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("(Pfad Fräsen)");
+        sb.AppendLine($"M03 S{(int)sp.Drehzahl}");
+        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
+
+        double zStep = Math.Abs(sp.ZZustellung);
+        double curZ  = 0;
+        while (curZ > z)
+        {
+            curZ = Math.Max(z, curZ - zStep);
+            sb.AppendLine($"G01 Z{F(curZ)} F{(int)sp.Vorschub}");
+
+            for (int i = 1; i < moves.Count; i++)
+            {
+                var mv = moves[i];
+                if (mv.IsArc)
+                    sb.AppendLine($"{(mv.CW ? "G02" : "G03")} X{F(mv.X)} Y{F(mv.Y)} I{F(mv.I)} J{F(mv.J)}");
+                else
+                    sb.AppendLine($"G01 X{F(mv.X)} Y{F(mv.Y)}");
+            }
+
+            if (curZ > z)
+            {
+                sb.AppendLine("G00 Z1.0000");
+                sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
+            }
+        }
+
+        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
+    private record struct PathMove(double X, double Y, bool IsArc = false,
+                                   double I = 0, double J = 0, bool CW = false);
+
+    // Offset für offenen Pfad
+    private static List<PathMove> ComputeOffsetMoves(
+        List<(double x, double y)> pts, double r, double sign)
+    {
+        int n = pts.Count;
+        var dir = new (double x, double y)[n - 1];
+        var nrm = new (double x, double y)[n - 1];
+        for (int k = 0; k < n - 1; k++) ComputeDirNrm(pts[k], pts[k + 1], sign, out dir[k], out nrm[k]);
+
+        var result = new List<PathMove>();
+        result.Add(new PathMove(pts[0].x + nrm[0].x * r, pts[0].y + nrm[0].y * r));
+
+        for (int i = 0; i < n - 1; i++)
+        {
+            double bx = pts[i + 1].x + nrm[i].x * r;
+            double by = pts[i + 1].y + nrm[i].y * r;
+
+            if (i == n - 2)
+            {
+                result.Add(new PathMove(bx, by));
+            }
+            else
+            {
+                double cross = dir[i].x * dir[i + 1].y - dir[i].y * dir[i + 1].x;
+                bool isConvex = sign > 0 ? cross < 0 : cross > 0;
+                if (isConvex)
+                {
+                    double ax = pts[i + 1].x + nrm[i + 1].x * r;
+                    double ay = pts[i + 1].y + nrm[i + 1].y * r;
+                    result.Add(new PathMove(bx, by));
+                    result.Add(new PathMove(ax, ay, IsArc: true,
+                        I: pts[i + 1].x - bx, J: pts[i + 1].y - by, CW: sign > 0));
+                }
+                else
+                {
+                    double a0x = pts[i].x     + nrm[i].x     * r;
+                    double a0y = pts[i].y     + nrm[i].y     * r;
+                    double a1x = pts[i + 1].x + nrm[i + 1].x * r;
+                    double a1y = pts[i + 1].y + nrm[i + 1].y * r;
+                    var inter = LineIntersect((a0x, a0y), dir[i], (a1x, a1y), dir[i + 1]);
+                    result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+                }
+            }
+        }
+        return result;
+    }
+
+    // Offset für geschlossenen Pfad (pts: m eindeutige Punkte, kein Duplikat am Ende)
+    private static List<PathMove> ComputeClosedOffsetMoves(
+        List<(double x, double y)> pts, double r, double sign)
+    {
+        int m = pts.Count;
+        var dir = new (double x, double y)[m];
+        var nrm = new (double x, double y)[m];
+        for (int k = 0; k < m; k++) ComputeDirNrm(pts[k], pts[(k + 1) % m], sign, out dir[k], out nrm[k]);
+
+        // Startpunkt = Ecke bei pts[0] (Übergang von Segment[m-1] zu Segment[0])
+        double cross0 = dir[m - 1].x * dir[0].y - dir[m - 1].y * dir[0].x;
+        bool conv0    = sign > 0 ? cross0 < 0 : cross0 > 0;
+
+        double a0x = pts[0].x + nrm[0].x * r, a0y = pts[0].y + nrm[0].y * r;
+        double bm_x = pts[0].x + nrm[m - 1].x * r, bm_y = pts[0].y + nrm[m - 1].y * r;
+
+        PathMove startPt;
+        PathMove[] closingMoves;
+        if (conv0)
+        {
+            // Aussenecke: Startpunkt = A[0], Schluss = G01 zu B[m-1] + Bogen zu A[0]
+            startPt = new PathMove(a0x, a0y);
+            closingMoves = [
+                new PathMove(bm_x, bm_y),
+                new PathMove(a0x, a0y, IsArc: true,
+                    I: pts[0].x - bm_x, J: pts[0].y - bm_y, CW: sign > 0)
+            ];
+        }
+        else
+        {
+            // Innenecke: Schnittpunkt der Offset-Linien von Segment[m-1] und Segment[0]
+            double sx = pts[m - 1].x + nrm[m - 1].x * r, sy = pts[m - 1].y + nrm[m - 1].y * r;
+            var inter = LineIntersect((sx, sy), dir[m - 1], (a0x, a0y), dir[0]);
+            startPt = inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(a0x, a0y);
+            closingMoves = [startPt]; // Pfad schliesst zum selben Punkt
+        }
+
+        var result = new List<PathMove> { startPt };
+
+        // Ecken bei pts[1..m-1]
+        for (int i = 1; i < m; i++)
+        {
+            int prev = i - 1;
+            double bx = pts[i].x + nrm[prev].x * r, by = pts[i].y + nrm[prev].y * r;
+            double ax = pts[i].x + nrm[i].x    * r, ay = pts[i].y + nrm[i].y    * r;
+            double cr = dir[prev].x * dir[i].y - dir[prev].y * dir[i].x;
+            bool conv = sign > 0 ? cr < 0 : cr > 0;
+            if (conv)
+            {
+                result.Add(new PathMove(bx, by));
+                result.Add(new PathMove(ax, ay, IsArc: true,
+                    I: pts[i].x - bx, J: pts[i].y - by, CW: sign > 0));
+            }
+            else
+            {
+                double p0x = pts[prev].x + nrm[prev].x * r, p0y = pts[prev].y + nrm[prev].y * r;
+                var inter = LineIntersect((p0x, p0y), dir[prev], (ax, ay), dir[i]);
+                result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+            }
+        }
+
+        result.AddRange(closingMoves);
+        return result;
+    }
+
+    private static void ComputeDirNrm(
+        (double x, double y) a, (double x, double y) b, double sign,
+        out (double x, double y) dir, out (double x, double y) nrm)
+    {
+        double dx = b.x - a.x, dy = b.y - a.y;
+        double len = Math.Sqrt(dx * dx + dy * dy);
+        if (len < 1e-10) { dir = (1, 0); nrm = (0, sign); return; }
+        dir = (dx / len, dy / len);
+        nrm = (-dy / len * sign, dx / len * sign);
+    }
+
+    private static (double x, double y)? LineIntersect(
+        (double x, double y) a, (double x, double y) da,
+        (double x, double y) b, (double x, double y) db)
+    {
+        double denom = da.x * db.y - da.y * db.x;
+        if (Math.Abs(denom) < 1e-10) return null;
+        double t = ((b.x - a.x) * db.y - (b.y - a.y) * db.x) / denom;
+        return (a.x + t * da.x, a.y + t * da.y);
     }
 
     private static (double x, double y) ConvertBezugspunkt(string ref_, double xRel, double yRel, double w, double h)

@@ -11,7 +11,13 @@
 
   <ItemGroup>
     <Resource Include="icon.ico"/>
-    <Content Include="maple.jpg" CopyToOutputDirectory="PreserveNewest"/>
+    <Content Include="maple.png" CopyToOutputDirectory="PreserveNewest"/>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- PfadFräsenDialog deaktiviert -->
+    <Page    Remove="PfadFräsenDialog.xaml"/>
+    <Compile Remove="PfadFräsenDialog.xaml.cs"/>
   </ItemGroup>
 
 </Project>

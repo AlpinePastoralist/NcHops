@@ -179,6 +179,10 @@
                 <MenuItem Header="Tasche"     Click="OnPlanfraesen"/>
                 <MenuItem Header="Zapfen"     Click="OnPlanfraesen"/>
             </MenuItem>
+            <MenuItem Header="Pfad Fräsen">
+                <MenuItem Header="Startpunkt" Click="OnPfadStart"/>
+                <MenuItem Header="Punkt"      Click="OnPfadPunkt" x:Name="MnuPfadPunkt"/>
+            </MenuItem>
             <MenuItem Header="Bohren">
                 <MenuItem Header="Bohrung"            Click="OnBohrung"/>
                 <MenuItem Header="Reihenlochbohrung"  Click="OnReihenlochbohrung"/>
@@ -204,15 +208,15 @@
                 <Button Content="Aktualisieren" Click="OnAktualisieren" Margin="0,0,24,0"/>
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"
                            Margin="0,0,16,0"/>
-                <CheckBox x:Name="CbPfadAnzeigen" Content="Pfad Fräsen anzeigen"
+                <!--<CheckBox x:Name="CbPfadAnzeigen" Content="Pfad Fräsen anzeigen"
                           VerticalAlignment="Center" FontWeight="SemiBold"
-                          Checked="OnPfadAnzeigenChanged" Unchecked="OnPfadAnzeigenChanged"/>
+                          Checked="OnPfadAnzeigenChanged" Unchecked="OnPfadAnzeigenChanged"/>-->
             </StackPanel>
         </Border>
 
-        <!-- ── Pfad Fräsen Panel ─────────────────────────────────────── -->
+        <!-- ── Pfad Fräsen Panel (deaktiviert) ─────────────────────────────────────── -->
         <Border DockPanel.Dock="Bottom" x:Name="PfadPanel"
-                Visibility="Collapsed" Height="210"
+                Visibility="Collapsed" Height="0"
                 BorderBrush="{StaticResource AccentBrush}" BorderThickness="0,2,0,0"
                 Background="{StaticResource AccentTintBrush}">
             <Grid Margin="8,6">
@@ -236,7 +240,7 @@
                     <Label Content="Seite:" Padding="0,0,4,0"/>
                     <ComboBox x:Name="PfadCbSeite" SelectedIndex="1" Width="65"
                               VerticalAlignment="Center" Margin="0,0,10,0"
-                              SelectionChanged="OnPfadParamChanged">
+>
                         <ComboBoxItem Content="Links"/>
                         <ComboBoxItem Content="Mitte"/>
                         <ComboBoxItem Content="Rechts"/>
@@ -244,7 +248,7 @@
                     <Label Content="Standard-Bezug:" Padding="0,0,4,0"/>
                     <ComboBox x:Name="PfadCbBezug" SelectedIndex="0" Width="110"
                               VerticalAlignment="Center" Margin="0,0,16,0"
-                              SelectionChanged="OnPfadParamChanged">
+>
                         <ComboBoxItem Content="Unten links"/>
                         <ComboBoxItem Content="Oben links"/>
                         <ComboBoxItem Content="Unten rechts"/>
@@ -256,7 +260,7 @@
                         <ComboBoxItem Content="Unten Mitte"/>
                     </ComboBox>
                     <Button Content="G-Code erzeugen" FontWeight="SemiBold"
-                            Click="OnPfadGCodeErzeugen" Margin="0,0,16,0"/>
+                            Margin="0,0,16,0"/>
                     <Label Content="Schritt:" Padding="0,0,4,0"/>
                     <TextBox x:Name="PfadTxtSchritt" Text="5" Width="40"
                              VerticalAlignment="Center" Margin="0,0,4,0"/>
@@ -278,8 +282,7 @@
                               CanUserAddRows="False" CanUserDeleteRows="False"
                               CanUserReorderColumns="False" CanUserResizeRows="False"
                               HeadersVisibility="Column"
-                              SelectionChanged="OnPfadSelectionChanged"
-                              CellEditEnding="OnPfadCellEditEnding">
+                              >
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Nr."    Width="38"  Binding="{Binding Nr}" IsReadOnly="True"/>
                             <DataGridTextColumn Header="X (mm)" Width="60"  Binding="{Binding X, UpdateSourceTrigger=LostFocus}"/>
@@ -308,20 +311,20 @@
                             </Grid.ColumnDefinitions>
                             <Label Grid.Column="0" Content="X" Padding="0"/>
                             <TextBox Grid.Column="1" x:Name="PfadTxtX" Text="0"
-                                     Margin="2,0,6,0" KeyDown="OnPfadPunktKeyDown"/>
+                                     Margin="2,0,6,0" />
                             <Label Grid.Column="2" Content="Y" Padding="0"/>
                             <TextBox Grid.Column="3" x:Name="PfadTxtY" Text="0"
-                                     Margin="2,0,0,0" KeyDown="OnPfadPunktKeyDown"/>
+                                     Margin="2,0,0,0" />
                         </Grid>
 
                         <Button Grid.Row="1" Content="+ Hinzufügen"
-                                Margin="0,0,0,6" Click="OnPfadHinzufügen"/>
+                                Margin="0,0,0,6"/>
 
                         <StackPanel Grid.Row="2" Orientation="Horizontal">
-                            <Button Content="↑"   Width="30" Margin="0,0,4,0" Click="OnPfadHoch"/>
-                            <Button Content="↓"   Width="30" Margin="0,0,4,0" Click="OnPfadRunter"/>
-                            <Button Content="✕"   Width="30" Margin="0,0,4,0" Click="OnPfadLöschen"/>
-                            <Button Content="Alle" Width="40"                  Click="OnPfadAlleLöschen"/>
+                            <Button Content="↑"   Width="30" Margin="0,0,4,0"/>
+                            <Button Content="↓"   Width="30" Margin="0,0,4,0"/>
+                            <Button Content="✕"   Width="30" Margin="0,0,4,0"/>
+                            <Button Content="Alle" Width="40"/>
                         </StackPanel>
                     </Grid>
                 </Grid>
@@ -341,10 +344,6 @@
                 <Canvas x:Name="DrawCanvas"
                         Background="Transparent"
                         SizeChanged="OnCanvasSizeChanged" ClipToBounds="True"
-                        MouseLeftButtonDown="OnCanvasMouseDown"
-                        MouseLeftButtonUp="OnCanvasMouseUp"
-                        MouseMove="OnCanvasMouseMove"
-                        MouseLeave="OnCanvasMouseLeave"
                         Panel.ZIndex="0"/>
             </Grid>
 
@@ -353,40 +352,106 @@
                           Background="{StaticResource AccentBrush}"
                           ResizeBehavior="PreviousAndNext"/>
 
-            <!-- G-Code Bereich -->
-            <Grid Grid.Column="2" Background="{StaticResource BgLightBrush}">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="40"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+            <!-- G-Code / Verlauf Register -->
+            <TabControl Grid.Column="2"
+                        Background="{StaticResource BgLightBrush}"
+                        BorderBrush="{StaticResource AccentBrush}"
+                        Padding="0">
+                <TabControl.Resources>
+                    <Style TargetType="TabItem">
+                        <Setter Property="Padding" Value="10,4"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}"/>
+                    </Style>
+                </TabControl.Resources>
 
-                <!-- Zeilennummern -->
-                <Border Grid.Column="0"
-                        Background="{StaticResource BgBrush}"
-                        BorderBrush="{StaticResource BorderBrush}"
-                        BorderThickness="0,0,1,0">
-                    <RichTextBox x:Name="GCodeLineNumbersBox"
-                                 IsReadOnly="True" IsDocumentEnabled="False"
-                                 FontFamily="Consolas" FontSize="12"
-                                 Foreground="{StaticResource AccentBrush}"
-                                 VerticalScrollBarVisibility="Hidden"
-                                 HorizontalScrollBarVisibility="Hidden"
-                                 Padding="0" BorderThickness="0" Margin="0"
-                                 Background="Transparent"/>
-                </Border>
+                <!-- Tab 1: Verlauf -->
+                <TabItem Header="Verlauf">
+                    <Grid Background="{StaticResource BgLightBrush}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <ListBox x:Name="HistoryList"
+                                 Grid.Row="0"
+                                 Background="{StaticResource BgLightBrush}"
+                                 BorderThickness="0"
+                                 Padding="4"
+                                 SelectionChanged="OnHistorySelectionChanged"
+                                 PreviewMouseRightButtonDown="OnHistoryRightClick">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="8,6"/>
+                                    <Setter Property="Margin" Value="0,2"/>
+                                    <Setter Property="Background" Value="{StaticResource BgBrush}"/>
+                                    <Setter Property="Cursor" Value="Hand"/>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource AccentTintBrush}"/>
+                                        </Trigger>
+                                        <DataTrigger Binding="{Binding Level}" Value="1">
+                                            <Setter Property="Padding"  Value="24,4,8,4"/>
+                                            <Setter Property="Margin"   Value="0,1"/>
+                                            <Setter Property="Opacity"  Value="0.82"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{StaticResource AccentBrush}"/>
+                                        <TextBlock Text="{Binding Details}"
+                                                   FontSize="11"
+                                                   Foreground="{StaticResource TextDarkBrush}"
+                                                   Opacity="0.75"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock Grid.Row="1"
+                                   Text="Klick = Bearbeiten · Rechtsklick = Kopieren/Löschen"
+                                   FontSize="10" Opacity="0.5"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,4,0,6"/>
+                    </Grid>
+                </TabItem>
 
-                <!-- G-Code Editor -->
-                <RichTextBox x:Name="GCodeBox" Grid.Column="1"
-                             AcceptsReturn="True"
-                             FontFamily="Consolas" FontSize="12"
-                             Foreground="{StaticResource TextDarkBrush}"
-                             Background="{StaticResource BgLightBrush}"
-                             VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto"
-                             Padding="0" BorderThickness="0" Margin="0"
-                             Loaded="OnGCodeBoxLoaded"
-                             TextChanged="OnGCodeChanged"/>
-            </Grid>
+                <!-- Tab 2: G-Code Editor -->
+                <TabItem Header="G-Code">
+                    <Grid Background="{StaticResource BgLightBrush}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="40"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0"
+                                Background="{StaticResource BgBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="0,0,1,0">
+                            <RichTextBox x:Name="GCodeLineNumbersBox"
+                                         IsReadOnly="True" IsDocumentEnabled="False"
+                                         FontFamily="Consolas" FontSize="12"
+                                         Foreground="{StaticResource AccentBrush}"
+                                         VerticalScrollBarVisibility="Hidden"
+                                         HorizontalScrollBarVisibility="Hidden"
+                                         Padding="0" BorderThickness="0" Margin="0"
+                                         Background="Transparent"/>
+                        </Border>
+                        <RichTextBox x:Name="GCodeBox" Grid.Column="1"
+                                     IsReadOnly="True"
+                                     FontFamily="Consolas" FontSize="12"
+                                     Foreground="{StaticResource TextDarkBrush}"
+                                     Background="{StaticResource BgLightBrush}"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"
+                                     Padding="0" BorderThickness="0" Margin="0"
+                                     Loaded="OnGCodeBoxLoaded"
+                                     TextChanged="OnGCodeChanged"/>
+                    </Grid>
+                </TabItem>
+            </TabControl>
         </Grid>
         </DockPanel>
     </Grid>

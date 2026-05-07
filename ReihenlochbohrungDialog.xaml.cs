@@ -6,10 +6,26 @@ public partial class ReihenlochbohrungDialog : Window
 {
     public ReihenlochbohrungParams? Result { get; private set; }
 
-    public ReihenlochbohrungDialog(double defaultZ)
+    public ReihenlochbohrungDialog(double defaultZ, ReihenlochbohrungParams? prefill = null)
     {
         InitializeComponent();
-        TxtBohrtiefe.Text = defaultZ.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (prefill != null)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            TxtStartX.Text    = prefill.StartX.ToString(inv);
+            TxtStartY.Text    = prefill.StartY.ToString(inv);
+            TxtCountX.Text    = prefill.CountX.ToString(inv);
+            TxtCountY.Text    = prefill.CountY.ToString(inv);
+            TxtSpacingX.Text  = prefill.SpacingX.ToString(inv);
+            TxtSpacingY.Text  = prefill.SpacingY.ToString(inv);
+            TxtDiameter.Text  = prefill.Diameter.ToString(inv);
+            TxtBohrtiefe.Text = prefill.Bohrtiefe.ToString(inv);
+            TxtZustellung.Text= prefill.Zustellung.ToString(inv);
+        }
+        else
+        {
+            TxtBohrtiefe.Text = defaultZ.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
     }
 
     private void OnOk(object sender, RoutedEventArgs e)

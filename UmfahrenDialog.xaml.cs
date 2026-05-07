@@ -7,12 +7,28 @@ public partial class UmfahrenDialog : Window
 {
     public UmfahrenParams? Result { get; private set; }
 
-    public UmfahrenDialog(double workThickness)
+    public UmfahrenDialog(double workThickness, UmfahrenParams? prefill = null)
     {
         InitializeComponent();
-        TxtZ.Text = (-workThickness - 3).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        TxtDiameter.Text = "10";
-        TxtDrehzahl.Text = "18000";
+        if (prefill != null)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            TxtA.Text        = prefill.A.ToString(inv);
+            TxtRadius.Text   = prefill.Radius.ToString(inv);
+            TxtZ.Text        = prefill.Z.ToString(inv);
+            TxtDiameter.Text = prefill.Diameter.ToString(inv);
+            TxtDrehzahl.Text = prefill.Drehzahl.ToString(inv);
+            foreach (System.Windows.Controls.ComboBoxItem item in CbStartSide.Items)
+                if (item.Content.ToString() == prefill.StartSide) { CbStartSide.SelectedItem = item; break; }
+            foreach (System.Windows.Controls.ComboBoxItem item in CbDirection.Items)
+                if (item.Content.ToString() == prefill.Direction) { CbDirection.SelectedItem = item; break; }
+        }
+        else
+        {
+            TxtZ.Text        = (-workThickness - 3).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            TxtDiameter.Text = "10";
+            TxtDrehzahl.Text = "18000";
+        }
     }
 
     private void OnOk(object sender, RoutedEventArgs e)

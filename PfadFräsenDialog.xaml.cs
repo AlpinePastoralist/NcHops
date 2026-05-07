@@ -9,6 +9,7 @@ using System.Windows.Shapes;
 
 namespace NCHops;
 
+#if false // PfadFräsen (deaktiviert)
 public class PfadPunkt : INotifyPropertyChanged
 {
     private int    _nr;
@@ -306,3 +307,4 @@ public record PfadFräsenParams(
     double FraeserD,
     string Bezugspunkt,
     string Seite = "Mitte");
+#endif // PfadFräsen Ende
