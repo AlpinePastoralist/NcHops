@@ -10,16 +10,16 @@
     <Window.Resources>
 
         <!-- ── Farb-Ressourcen ────────────────────────────────────── -->
-        <SolidColorBrush x:Key="AccentBrush"       Color="#5c4400"/>
-        <SolidColorBrush x:Key="AccentHoverBrush"  Color="#7a5c00"/>
-        <SolidColorBrush x:Key="AccentPressBrush"  Color="#3a2c00"/>
-        <SolidColorBrush x:Key="AccentTintBrush"   Color="#f5e8d0"/>
+        <SolidColorBrush x:Key="AccentBrush"       Color="#DDD0B0"/>
+        <SolidColorBrush x:Key="AccentHoverBrush"  Color="#E6DBBF"/>
+        <SolidColorBrush x:Key="AccentPressBrush"  Color="#CEC09E"/>
+        <SolidColorBrush x:Key="AccentTintBrush"   Color="#FCF9F2"/>
         <SolidColorBrush x:Key="BgBrush"           Color="#d8e0ea"/>
         <SolidColorBrush x:Key="BgLightBrush"      Color="#eaecf2"/>
         <SolidColorBrush x:Key="BgDarkBrush"       Color="#c0cad6"/>
         <SolidColorBrush x:Key="BorderBrush"       Color="#a8b4c0"/>
-        <SolidColorBrush x:Key="TextDarkBrush"     Color="#2a1800"/>
-        <SolidColorBrush x:Key="TextOnAccentBrush" Color="#f0e8d8"/>
+        <SolidColorBrush x:Key="TextDarkBrush"     Color="#6A5430"/>
+        <SolidColorBrush x:Key="TextOnAccentBrush" Color="#3A2C10"/>
 
         <!-- ── Button ─────────────────────────────────────────────── -->
         <Style TargetType="Button">
@@ -52,7 +52,7 @@
                                         Value="{StaticResource AccentPressBrush}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="bd" Property="Background"  Value="#998870"/>
+                                <Setter TargetName="bd" Property="Background"  Value="#EDE6D5"/>
                                 <Setter TargetName="bd" Property="BorderBrush" Value="#776655"/>
                             </Trigger>
                         </ControlTemplate.Triggers>

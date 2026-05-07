@@ -552,7 +552,7 @@ Loaded += (_, _) => UpdateAll();
             HorizontalAlignment = HorizontalAlignment.Center,
             Background          = new System.Windows.Media.SolidColorBrush(
                                       (System.Windows.Media.Color)System.Windows.Media.ColorConverter
-                                      .ConvertFromString("#5c4400")),
+                                      .ConvertFromString("#DDD0B0")),
             Foreground          = System.Windows.Media.Brushes.White,
             BorderThickness     = new Thickness(0),
             Padding             = new Thickness(8, 4, 8, 4),
@@ -923,7 +923,7 @@ Loaded += (_, _) => UpdateAll();
         var bro = ToVP(br);
         var blo = ToVP(bl);
 
-        var border = new SolidColorBrush(Color.FromRgb(0x48, 0x24, 0x06));
+        var border = new SolidColorBrush(Color.FromRgb(0xD4, 0xC8, 0xA8));
 
         void AddFace(PointCollection pts, byte shadowAlpha)
         {
@@ -955,8 +955,11 @@ Loaded += (_, _) => UpdateAll();
     {
         if (_woodBrush is null)
         {
-            var bmp = new System.Windows.Media.Imaging.BitmapImage(
-                new Uri("pack://application:,,,/wood.jpg"));
+            var imgPath = System.IO.Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory, "maple.jpg");
+            var bmp = System.IO.File.Exists(imgPath)
+                ? new System.Windows.Media.Imaging.BitmapImage(new Uri(imgPath))
+                : (System.Windows.Media.Imaging.BitmapSource)CreateMapleTexture(512, 512);
             _woodBrush = new ImageBrush(bmp)
             {
                 Stretch       = Stretch.UniformToFill,
@@ -968,6 +971,101 @@ Loaded += (_, _) => UpdateAll();
         return _woodBrush;
     }
 
+    private static System.Windows.Media.Imaging.BitmapSource CreateMapleTexture(int w, int h)
+    {
+        var rng    = new Random(13);
+        var pixels = new byte[w * h * 4];
+
+        // Mehrere unabhängige Rausch-Gitter für fraktales Warp
+        const int gw = 64, gh = 64;
+        var grid1 = new double[gw * gh];
+        var grid2 = new double[gw * gh];
+        var grid3 = new double[gw * gh];
+        for (int i = 0; i < gw * gh; i++)
+        {
+            grid1[i] = rng.NextDouble();
+            grid2[i] = rng.NextDouble();
+            grid3[i] = rng.NextDouble();
+        }
+
+        double Bilinear(double[] g, double gx, double gy)
+        {
+            gx = ((gx % gw) + gw) % gw;
+            gy = ((gy % gh) + gh) % gh;
+            int x0 = (int)gx, y0 = (int)gy;
+            int x1 = (x0 + 1) % gw, y1 = (y0 + 1) % gh;
+            double fx = gx - x0, fy = gy - y0;
+            return g[y0 * gw + x0] * (1 - fx) * (1 - fy)
+                 + g[y0 * gw + x1] * fx        * (1 - fy)
+                 + g[y1 * gw + x0] * (1 - fx)  * fy
+                 + g[y1 * gw + x1] * fx         * fy;
+        }
+
+        // Fraktales Rauschen: 4 Oktaven aufaddiert
+        double Fractal(double[] g, double gx, double gy)
+        {
+            double v = 0, amp = 0.5, freq = 1, sum = 0;
+            for (int o = 0; o < 4; o++)
+            {
+                v   += Bilinear(g, gx * freq, gy * freq) * amp;
+                sum += amp;
+                amp  *= 0.55;
+                freq *= 2.1;
+            }
+            return v / sum;
+        }
+
+        const double twoPi = 2 * Math.PI;
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                double gx = x * gw / (double)w;
+                double gy = y * gh / (double)h;
+
+                // Fraktales Warp in y-Richtung (organische Jahresring-Biegung)
+                double warpY = (Fractal(grid1, gx, gy) - 0.5) * 55.0;
+                // Leichtes Warp in x für minimale Neigung der Maserung
+                double warpX = (Fractal(grid2, gx + 10, gy + 10) - 0.5) * 8.0;
+
+                double yW = y + warpY;
+                double xW = x + warpX;
+
+                // Jahresringe: Hauptperiode + Feinstruktur
+                double ring = Math.Sin(yW * twoPi / 70.0 + xW * 0.003)
+                            + 0.25 * Math.Sin(yW * twoPi / 22.0 + xW * 0.006);
+
+                // Schmale dunkle Linien, breite helle Flächen (typisch Ahorn)
+                double t = (Math.Sin(ring * 1.8) + 1.0) / 2.0;
+                t = Math.Pow(t, 2.2);
+                t = Math.Clamp(t, 0.0, 1.0);
+
+                // Oberflächenvariation (Maserglanz, Poren)
+                double surface = (Fractal(grid3, gx * 0.7, gy * 0.7) - 0.5) * 0.12;
+
+                double tt = Math.Clamp(t + surface, 0.0, 1.0);
+
+                // Ahorn-Palette: sehr hell #F6F0DF → warmes Honigbraun #C8A050
+                byte r = (byte)(246 - tt * 30);
+                byte g = (byte)(240 - tt * 64);
+                byte b = (byte)(223 - tt * 143);
+
+                int pi = (y * w + x) * 4;
+                pixels[pi]     = b;
+                pixels[pi + 1] = g;
+                pixels[pi + 2] = r;
+                pixels[pi + 3] = 255;
+            }
+        }
+
+        var bmp = new System.Windows.Media.Imaging.WriteableBitmap(w, h, 96, 96,
+            System.Windows.Media.PixelFormats.Bgra32, null);
+        bmp.WritePixels(new Int32Rect(0, 0, w, h), pixels, w * 4, 0);
+        bmp.Freeze();
+        return bmp;
+    }
+
     private static UIElement MakeWoodRect(Rect r)
     {
         var rect = new Rectangle
@@ -975,7 +1073,7 @@ Loaded += (_, _) => UpdateAll();
             Width           = r.Width,
             Height          = r.Height,
             Fill            = GetWoodBrush(),
-            Stroke          = new SolidColorBrush(Color.FromRgb(0x6B, 0x3A, 0x12)),
+            Stroke          = new SolidColorBrush(Color.FromRgb(0xE0, 0xD4, 0xB8)),
             StrokeThickness = 0.1,
         };
         Canvas.SetLeft(rect, r.Left);
