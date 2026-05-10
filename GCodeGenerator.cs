@@ -296,16 +296,24 @@ public static class GCodeGenerator
             sb.AppendLine($"G01 X{F(cx - rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
             sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
 
-            // Spiralförmig nach außen – konzentrische Kreise im Gegenlauf (G02)
-            double cr = rEntry;
-            while (true)
+            // Archimedische Spirale von rEntry nach maxRoughR im Gegenlauf (CW = neg. Winkel)
+            // 36 G01-Segmente pro Umdrehung → glatte Spirale in der Ansicht
+            if (maxRoughR > rEntry)
             {
-                double mR = Math.Min(cr, maxRoughR);
-                sb.AppendLine($"G01 X{F(cx + mR)} Y{F(cy)} F{(int)p.Vorschub}");
-                sb.AppendLine($"G02 X{F(cx + mR)} Y{F(cy)} I{F(-mR)} J0 F{(int)p.Vorschub}");
-                if (mR >= maxRoughR) break;
-                cr += step;
+                const int segPerRev = 36;
+                double totalRevs = (maxRoughR - rEntry) / step;
+                int totalSegs = Math.Max(segPerRev, (int)Math.Ceiling(totalRevs * segPerRev));
+                for (int i = 1; i <= totalSegs; i++)
+                {
+                    double t       = (double)i / totalSegs;
+                    double spiralR = rEntry + (maxRoughR - rEntry) * t;
+                    double angle   = -2.0 * Math.PI * totalRevs * t; // CW
+                    sb.AppendLine($"G01 X{F(cx + spiralR * Math.Cos(angle))} Y{F(cy + spiralR * Math.Sin(angle))} F{(int)p.Vorschub}");
+                }
             }
+            // Abschlusskreis bei maxRoughR (stellt vollständige Abdeckung sicher)
+            sb.AppendLine($"G01 X{F(cx + maxRoughR)} Y{F(cy)} F{(int)p.Vorschub}");
+            sb.AppendLine($"G02 X{F(cx + maxRoughR)} Y{F(cy)} I{F(-maxRoughR)} J0 F{(int)p.Vorschub}");
 
             // Für nächste Tiefenstufe zurück zum Eintauchpunkt (im geräumten Bereich)
             if (curZ > depth)
