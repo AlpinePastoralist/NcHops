@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace NCHops;
 
@@ -26,9 +25,7 @@ public partial class ReihenlochbohrungDialog : Window
             TxtCountY.Text    = prefill.CountY.ToString(inv);
             TxtSpacingX.Text  = prefill.SpacingX.ToString(inv);
             TxtSpacingY.Text  = prefill.SpacingY.ToString(inv);
-            TxtDiameter.Text  = prefill.Diameter.ToString(inv);
             TxtBohrtiefe.Text = prefill.Bohrtiefe.ToString(inv);
-            TxtZustellung.Text= prefill.Zustellung.ToString(inv);
         }
         else
         {
@@ -38,28 +35,20 @@ public partial class ReihenlochbohrungDialog : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var w = CbWerkzeug.SelectedItem as Werkzeug;
         Result = new ReihenlochbohrungParams(
-            StartX: double.Parse(TxtStartX.Text, System.Globalization.CultureInfo.InvariantCulture),
-            StartY: double.Parse(TxtStartY.Text, System.Globalization.CultureInfo.InvariantCulture),
-            CountX: int.Parse(TxtCountX.Text, System.Globalization.CultureInfo.InvariantCulture),
-            CountY: int.Parse(TxtCountY.Text, System.Globalization.CultureInfo.InvariantCulture),
-            SpacingX: double.Parse(TxtSpacingX.Text, System.Globalization.CultureInfo.InvariantCulture),
-            SpacingY: double.Parse(TxtSpacingY.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Diameter: double.Parse(TxtDiameter.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Bohrtiefe: double.Parse(TxtBohrtiefe.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Zustellung: double.Parse(TxtZustellung.Text, System.Globalization.CultureInfo.InvariantCulture)
+            StartX:    double.Parse(TxtStartX.Text,   inv),
+            StartY:    double.Parse(TxtStartY.Text,   inv),
+            CountX:    int.Parse(TxtCountX.Text,      inv),
+            CountY:    int.Parse(TxtCountY.Text,      inv),
+            SpacingX:  double.Parse(TxtSpacingX.Text, inv),
+            SpacingY:  double.Parse(TxtSpacingY.Text, inv),
+            Diameter:  w?.Durchmesser ?? 5,
+            Bohrtiefe: double.Parse(TxtBohrtiefe.Text, inv),
+            Zustellung: w?.ZZustellung ?? 10
         );
         DialogResult = true;
-    }
-
-    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
-    {
-        if (CbWerkzeug.SelectedItem is Werkzeug w)
-        {
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
-            TxtDiameter.Text   = w.Durchmesser.ToString(inv);
-            TxtZustellung.Text = w.ZZustellung.ToString(inv);
-        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;

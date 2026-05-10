@@ -19,8 +19,7 @@
         <!-- Werkzeugauswahl -->
         <Label Grid.Row="0" Grid.Column="0" Content="Werkzeug:" VerticalAlignment="Center"/>
         <ComboBox Grid.Row="0" Grid.Column="1" x:Name="CbWerkzeug"
-                  DisplayMemberPath="DisplayName" VerticalAlignment="Center"
-                  SelectionChanged="OnWerkzeugSelected" Margin="0,0,0,0"/>
+                  DisplayMemberPath="DisplayName" VerticalAlignment="Center" Margin="0,0,0,0"/>
 
         <Separator Grid.Row="1" Grid.ColumnSpan="2" Margin="0,6,0,6"/>
 
@@ -32,10 +31,6 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -57,18 +52,6 @@
 
                 <Label Grid.Row="4" Grid.Column="0" Content="Z-Tiefe:" VerticalAlignment="Center"/>
                 <TextBox Grid.Row="4" Grid.Column="1" x:Name="TxtZ" Text="0" VerticalAlignment="Center"/>
-
-                <Label Grid.Row="5" Grid.Column="0" Content="Fräser-D:" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="5" Grid.Column="1" x:Name="TxtFraeserD" Text="35" VerticalAlignment="Center"/>
-
-                <Label Grid.Row="6" Grid.Column="0" Content="Zustellfaktor:" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="6" Grid.Column="1" x:Name="TxtFaktor" Text="0.75" VerticalAlignment="Center"/>
-
-                <Label Grid.Row="7" Grid.Column="0" Content="Vorschub:" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="7" Grid.Column="1" x:Name="TxtVorschub" Text="1000" VerticalAlignment="Center"/>
-
-                <Label Grid.Row="8" Grid.Column="0" Content="Drehzahl:" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="8" Grid.Column="1" x:Name="TxtDrehzahl" Text="8000" VerticalAlignment="Center"/>
             </Grid>
         </ScrollViewer>
 

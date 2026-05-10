@@ -15,8 +15,6 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="140"/>
@@ -26,8 +24,7 @@
         <!-- Werkzeugauswahl -->
         <Label Grid.Row="0" Grid.Column="0" Content="Werkzeug:" VerticalAlignment="Center"/>
         <ComboBox Grid.Row="0" Grid.Column="1" x:Name="CbWerkzeug"
-                  DisplayMemberPath="DisplayName" VerticalAlignment="Center"
-                  SelectionChanged="OnWerkzeugSelected"/>
+                  DisplayMemberPath="DisplayName" VerticalAlignment="Center"/>
 
         <Separator Grid.Row="1" Grid.ColumnSpan="2" Margin="0,6,0,6"/>
 
@@ -49,16 +46,10 @@
         <Label Grid.Row="7" Grid.Column="0" Content="Abstand Y:" VerticalAlignment="Center"/>
         <TextBox Grid.Row="7" Grid.Column="1" x:Name="TxtSpacingY" Text="32" VerticalAlignment="Center"/>
 
-        <Label Grid.Row="8" Grid.Column="0" Content="Durchmesser:" VerticalAlignment="Center"/>
-        <TextBox Grid.Row="8" Grid.Column="1" x:Name="TxtDiameter" Text="5" VerticalAlignment="Center"/>
+        <Label Grid.Row="8" Grid.Column="0" Content="Bohrtiefe:" VerticalAlignment="Center"/>
+        <TextBox Grid.Row="8" Grid.Column="1" x:Name="TxtBohrtiefe" Text="22" VerticalAlignment="Center"/>
 
-        <Label Grid.Row="9" Grid.Column="0" Content="Bohrtiefe:" VerticalAlignment="Center"/>
-        <TextBox Grid.Row="9" Grid.Column="1" x:Name="TxtBohrtiefe" Text="22" VerticalAlignment="Center"/>
-
-        <Label Grid.Row="10" Grid.Column="0" Content="Zustellung:" VerticalAlignment="Center"/>
-        <TextBox Grid.Row="10" Grid.Column="1" x:Name="TxtZustellung" Text="10" VerticalAlignment="Center"/>
-
-        <StackPanel Grid.Row="11" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <StackPanel Grid.Row="9" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="OK" Width="75" Margin="0,0,8,0" Click="OnOk" IsDefault="True"/>
             <Button Content="Abbrechen" Width="85" Click="OnCancel"/>
         </StackPanel>
