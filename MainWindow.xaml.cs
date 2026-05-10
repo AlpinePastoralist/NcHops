@@ -1521,7 +1521,19 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
     private void OnWerkzeugHinzufuegen(object sender, RoutedEventArgs e)
     {
         int nr = _werkzeuge.Count > 0 ? _werkzeuge.Max(w => w.Nr) + 1 : 1;
-        _werkzeuge.Add(new Werkzeug { Nr = nr, Name = "Werkzeug " + nr });
+        _werkzeuge.Add(new Werkzeug
+        {
+            Nr               = nr,
+            Name             = "Werkzeug " + nr,
+            Durchmesser      = 10.0,
+            Schneidenwinkel  = 180.0,
+            ZZustellung      = 4.0,
+            Eintauchwinkel   = 90.0,
+            VorschubFxy      = 3000.0,
+            VorschubFz       = 2000.0,
+            Drehzahl         = 18000.0,
+            RaeumzustellungXY = 75.0,
+        });
         WerkzeugGrid.ScrollIntoView(_werkzeuge[^1]);
     }
 
@@ -1615,7 +1627,7 @@ public class Werkzeug
     public double VorschubFxy       { get; set; }
     public double VorschubFz        { get; set; }
     public double Drehzahl          { get; set; }
-    public double RaeumzustellungXY { get; set; } = 0.75;
+    public double RaeumzustellungXY { get; set; } = 75.0;
 }
 
 public class HistoryEntry(string label, string details, object p, int level = 0)
