@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace NCHops;
 
@@ -27,15 +26,11 @@ public partial class PlanfräsenDialog : Window
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             RbHorizontal.IsChecked = prefill.Horizontal;
             RbVertikal.IsChecked   = !prefill.Horizontal;
-            TxtX0.Text      = prefill.X0.ToString(inv);
-            TxtY0.Text      = prefill.Y0.ToString(inv);
-            TxtX1.Text      = prefill.X1.ToString(inv);
-            TxtY1.Text      = prefill.Y1.ToString(inv);
-            TxtZ.Text       = prefill.Z.ToString(inv);
-            TxtFraeserD.Text= prefill.FraeserD.ToString(inv);
-            TxtFaktor.Text  = prefill.Faktor.ToString(inv);
-            TxtVorschub.Text= prefill.Vorschub.ToString(inv);
-            TxtDrehzahl.Text= prefill.Drehzahl.ToString(inv);
+            TxtX0.Text = prefill.X0.ToString(inv);
+            TxtY0.Text = prefill.Y0.ToString(inv);
+            TxtX1.Text = prefill.X1.ToString(inv);
+            TxtY1.Text = prefill.Y1.ToString(inv);
+            TxtZ.Text  = prefill.Z.ToString(inv);
         }
         else
         {
@@ -71,31 +66,21 @@ public partial class PlanfräsenDialog : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var w = CbWerkzeug.SelectedItem as Werkzeug;
         Result = new PlanfräsenParams(
-            X0: double.Parse(TxtX0.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Y0: double.Parse(TxtY0.Text, System.Globalization.CultureInfo.InvariantCulture),
-            X1: double.Parse(TxtX1.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Y1: double.Parse(TxtY1.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Z: double.Parse(TxtZ.Text, System.Globalization.CultureInfo.InvariantCulture),
-            FraeserD: double.Parse(TxtFraeserD.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Faktor: double.Parse(TxtFaktor.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Vorschub: double.Parse(TxtVorschub.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Drehzahl: double.Parse(TxtDrehzahl.Text, System.Globalization.CultureInfo.InvariantCulture),
+            X0: double.Parse(TxtX0.Text, inv),
+            Y0: double.Parse(TxtY0.Text, inv),
+            X1: double.Parse(TxtX1.Text, inv),
+            Y1: double.Parse(TxtY1.Text, inv),
+            Z: double.Parse(TxtZ.Text, inv),
+            FraeserD: w?.Durchmesser ?? 10,
+            Faktor: w != null ? w.RaeumzustellungXY / 100.0 : 0.75,
+            Vorschub: w?.VorschubFxy ?? 3000,
+            Drehzahl: w?.Drehzahl ?? 18000,
             Horizontal: RbHorizontal.IsChecked == true
         );
         DialogResult = true;
-    }
-
-    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
-    {
-        if (CbWerkzeug.SelectedItem is Werkzeug w)
-        {
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
-            TxtFraeserD.Text = w.Durchmesser.ToString(inv);
-            TxtFaktor.Text   = (w.RaeumzustellungXY / 100.0).ToString(inv);
-            TxtVorschub.Text = w.VorschubFxy.ToString(inv);
-            TxtDrehzahl.Text = w.Drehzahl.ToString(inv);
-        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;

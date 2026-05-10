@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Windows;
-using System.Windows.Controls;
+using System.Windows.Controls; // ComboBoxItem
 
 namespace NCHops;
 
@@ -20,11 +20,9 @@ public partial class UmfahrenDialog : Window
         if (prefill != null)
         {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
-            TxtA.Text        = prefill.A.ToString(inv);
-            TxtRadius.Text   = prefill.Radius.ToString(inv);
-            TxtZ.Text        = prefill.Z.ToString(inv);
-            TxtDiameter.Text = prefill.Diameter.ToString(inv);
-            TxtDrehzahl.Text = prefill.Drehzahl.ToString(inv);
+            TxtA.Text      = prefill.A.ToString(inv);
+            TxtRadius.Text = prefill.Radius.ToString(inv);
+            TxtZ.Text      = prefill.Z.ToString(inv);
             foreach (System.Windows.Controls.ComboBoxItem item in CbStartSide.Items)
                 if (item.Content.ToString() == prefill.StartSide) { CbStartSide.SelectedItem = item; break; }
             foreach (System.Windows.Controls.ComboBoxItem item in CbDirection.Items)
@@ -32,34 +30,24 @@ public partial class UmfahrenDialog : Window
         }
         else
         {
-            TxtZ.Text        = (-workThickness - 3).ToString(System.Globalization.CultureInfo.InvariantCulture);
-            TxtDiameter.Text = "10";
-            TxtDrehzahl.Text = "18000";
+            TxtZ.Text = (-workThickness - 3).ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var w = CbWerkzeug.SelectedItem as Werkzeug;
         Result = new UmfahrenParams(
-            A: double.Parse(TxtA.Text, System.Globalization.CultureInfo.InvariantCulture),
+            A: double.Parse(TxtA.Text, inv),
             StartSide: (CbStartSide.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "oben",
             Direction: (CbDirection.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "gegenlauf",
-            Radius: double.Parse(TxtRadius.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Z: double.Parse(TxtZ.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Diameter: double.Parse(TxtDiameter.Text, System.Globalization.CultureInfo.InvariantCulture),
-            Drehzahl: double.Parse(TxtDrehzahl.Text, System.Globalization.CultureInfo.InvariantCulture)
+            Radius: double.Parse(TxtRadius.Text, inv),
+            Z: double.Parse(TxtZ.Text, inv),
+            Diameter: w?.Durchmesser ?? 10,
+            Drehzahl: w?.Drehzahl ?? 18000
         );
         DialogResult = true;
-    }
-
-    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
-    {
-        if (CbWerkzeug.SelectedItem is Werkzeug w)
-        {
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
-            TxtDiameter.Text = w.Durchmesser.ToString(inv);
-            TxtDrehzahl.Text = w.Drehzahl.ToString(inv);
-        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;

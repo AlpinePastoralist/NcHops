@@ -1,7 +1,7 @@
 <Window x:Class="NCHops.BohrungDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Bohrung" Width="380" Height="500"
+        Title="Bohrung" Width="380" SizeToContent="Height"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
     <Window.Resources>
         <Style x:Key="BezugRadio" TargetType="RadioButton">
@@ -51,8 +51,7 @@
             </Grid.ColumnDefinitions>
             <Label Grid.Column="0" Content="Werkzeug:" VerticalAlignment="Center"/>
             <ComboBox Grid.Column="1" x:Name="CbWerkzeug"
-                      DisplayMemberPath="DisplayName" VerticalAlignment="Center"
-                      SelectionChanged="OnWerkzeugSelected"/>
+                      DisplayMemberPath="DisplayName" VerticalAlignment="Center"/>
         </Grid>
 
         <Separator Grid.Row="1" Margin="0,6,0,6"/>
@@ -67,8 +66,6 @@
                 <RowDefinition Height="34"/>
                 <RowDefinition Height="34"/>
                 <RowDefinition Height="34"/>
-                <RowDefinition Height="34"/>
-                <RowDefinition Height="34"/>
             </Grid.RowDefinitions>
 
             <Label Grid.Row="0" Grid.Column="0" Content="X relativ:"    VerticalAlignment="Center"/>
@@ -79,12 +76,6 @@
 
             <Label Grid.Row="2" Grid.Column="0" Content="Bohrtiefe:"    VerticalAlignment="Center"/>
             <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtBohrtiefe" VerticalAlignment="Center"/>
-
-            <Label Grid.Row="3" Grid.Column="0" Content="Zustellung:"   VerticalAlignment="Center"/>
-            <TextBox Grid.Row="3" Grid.Column="1" x:Name="TxtZustellung" Text="10" VerticalAlignment="Center"/>
-
-            <Label Grid.Row="4" Grid.Column="0" Content="Durchmesser:"  VerticalAlignment="Center"/>
-            <TextBox Grid.Row="4" Grid.Column="1" x:Name="TxtDurchmesser" Text="5" VerticalAlignment="Center"/>
         </Grid>
 
         <!-- Bezugspunkt -->

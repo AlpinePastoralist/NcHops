@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace NCHops;
 
@@ -20,11 +19,9 @@ public partial class BohrungDialog : Window
         }
         if (prefill != null)
         {
-            TxtXRel.Text        = prefill.XRel.ToString(inv);
-            TxtYRel.Text        = prefill.YRel.ToString(inv);
-            TxtBohrtiefe.Text   = prefill.Bohrtiefe.ToString(inv);
-            TxtZustellung.Text  = prefill.Zustellung.ToString(inv);
-            TxtDurchmesser.Text = prefill.Durchmesser.ToString(inv);
+            TxtXRel.Text      = prefill.XRel.ToString(inv);
+            TxtYRel.Text      = prefill.YRel.ToString(inv);
+            TxtBohrtiefe.Text = prefill.Bohrtiefe.ToString(inv);
             SetBezug(prefill.Bezugspunkt);
         }
         else
@@ -61,25 +58,17 @@ public partial class BohrungDialog : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var w = CbWerkzeug.SelectedItem as Werkzeug;
         Result = new BohrungParams(
-            XRel:        double.Parse(TxtXRel.Text,        System.Globalization.CultureInfo.InvariantCulture),
-            YRel:        double.Parse(TxtYRel.Text,        System.Globalization.CultureInfo.InvariantCulture),
-            Bohrtiefe:   double.Parse(TxtBohrtiefe.Text,   System.Globalization.CultureInfo.InvariantCulture),
-            Zustellung:  double.Parse(TxtZustellung.Text,  System.Globalization.CultureInfo.InvariantCulture),
-            Durchmesser: double.Parse(TxtDurchmesser.Text, System.Globalization.CultureInfo.InvariantCulture),
+            XRel:        double.Parse(TxtXRel.Text,      inv),
+            YRel:        double.Parse(TxtYRel.Text,      inv),
+            Bohrtiefe:   double.Parse(TxtBohrtiefe.Text, inv),
+            Zustellung:  w?.ZZustellung ?? 5,
+            Durchmesser: w?.Durchmesser ?? 10,
             Bezugspunkt: GetBezug()
         );
         DialogResult = true;
-    }
-
-    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
-    {
-        if (CbWerkzeug.SelectedItem is Werkzeug w)
-        {
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
-            TxtDurchmesser.Text = w.Durchmesser.ToString(inv);
-            TxtZustellung.Text  = w.ZZustellung.ToString(inv);
-        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;
