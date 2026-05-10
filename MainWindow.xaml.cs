@@ -984,7 +984,9 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             var code = char.ToUpperInvariant(token[0]);
             if (code == 'G' || code == 'M')
                 run.Foreground = Brushes.DarkBlue;
-            else if (code == 'X' || code == 'Y' || code == 'Z' || code == 'I' || code == 'J' || code == 'F' || code == 'A' || code == 'S' || code == 'T' || code == 'R')
+            else if (code == 'F')
+                run.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE0, 0x6C, 0x00));
+            else if (code == 'X' || code == 'Y' || code == 'Z' || code == 'I' || code == 'J' || code == 'A' || code == 'S' || code == 'T' || code == 'R')
                 run.Foreground = Brushes.DarkRed;
             else
                 run.Foreground = Brushes.Black;
