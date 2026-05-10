@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Controls;
 
 namespace NCHops;
 
@@ -6,9 +8,15 @@ public partial class ReihenlochbohrungDialog : Window
 {
     public ReihenlochbohrungParams? Result { get; private set; }
 
-    public ReihenlochbohrungDialog(double defaultZ, ReihenlochbohrungParams? prefill = null)
+    public ReihenlochbohrungDialog(double defaultZ, ReihenlochbohrungParams? prefill = null,
+                                   IReadOnlyList<Werkzeug>? werkzeuge = null)
     {
         InitializeComponent();
+        if (werkzeuge?.Count > 0)
+        {
+            CbWerkzeug.ItemsSource = werkzeuge;
+            if (prefill == null) CbWerkzeug.SelectedIndex = 0;
+        }
         if (prefill != null)
         {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
@@ -42,6 +50,16 @@ public partial class ReihenlochbohrungDialog : Window
             Zustellung: double.Parse(TxtZustellung.Text, System.Globalization.CultureInfo.InvariantCulture)
         );
         DialogResult = true;
+    }
+
+    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (CbWerkzeug.SelectedItem is Werkzeug w)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            TxtDiameter.Text   = w.Durchmesser.ToString(inv);
+            TxtZustellung.Text = w.ZZustellung.ToString(inv);
+        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;

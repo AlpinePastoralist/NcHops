@@ -36,12 +36,26 @@
     <Grid Margin="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="110"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Werkzeugauswahl -->
+        <Label Grid.Row="0" Grid.Column="0" Content="Werkzeug:" VerticalAlignment="Center"/>
+        <ComboBox Grid.Row="0" Grid.Column="1" x:Name="CbWerkzeug"
+                  DisplayMemberPath="DisplayName" VerticalAlignment="Center"
+                  SelectionChanged="OnWerkzeugSelected"/>
+
+        <Separator Grid.Row="1" Grid.ColumnSpan="2" Margin="0,6,0,6"/>
 
         <!-- Eingabefelder -->
-        <Grid Grid.Row="0">
+        <Grid Grid.Row="2" Grid.ColumnSpan="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="110"/>
                 <ColumnDefinition Width="*"/>
@@ -88,7 +102,7 @@
         </Grid>
 
         <!-- Bezugspunkt -->
-        <GroupBox Grid.Row="1" Header="Bezugspunkt" Margin="0,10,0,0">
+        <GroupBox Grid.Row="3" Grid.ColumnSpan="2" Header="Bezugspunkt" Margin="0,10,0,0">
             <StackPanel>
                 <Canvas Width="240" Height="130" HorizontalAlignment="Center" Margin="0,6,0,0">
                     <Rectangle Canvas.Left="28" Canvas.Top="18"
@@ -123,7 +137,7 @@
         </GroupBox>
 
         <!-- Buttons -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+        <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
             <Button Content="OK"        Width="75" Margin="0,0,8,0" Click="OnOk" IsDefault="True"/>
             <Button Content="Abbrechen" Width="85"                  Click="OnCancel"/>
         </StackPanel>
