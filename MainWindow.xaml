@@ -187,6 +187,10 @@
                 <MenuItem Header="Bohrung"            Click="OnBohrung"/>
                 <MenuItem Header="Reihenlochbohrung"  Click="OnReihenlochbohrung"/>
             </MenuItem>
+            <MenuItem Header="Ansicht">
+                <MenuItem Header="Raster einblenden" x:Name="MnuRaster"
+                          IsCheckable="True" Click="OnRasterEinblenden"/>
+            </MenuItem>
             <MenuItem Header="Hilfe">
                 <MenuItem Header="Info" Click="OnInfo"/>
             </MenuItem>

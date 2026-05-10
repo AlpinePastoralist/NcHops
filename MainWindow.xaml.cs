@@ -24,6 +24,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshTimer;
     private Rect _topRect;
     private Rect _bottomRect;
+    private bool _rasterEnabled;
+    private double _rasterX = 50.0;
+    private double _rasterY = 50.0;
     private ScrollViewer? _gcodeScrollViewer;
     private ScrollViewer? _lineNumbersScrollViewer;
     private bool _isUpdatingGCode;
@@ -1049,6 +1052,8 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
         DrawWorkpieces();
         DrawGCodeTopView();
         DrawGCodeSideView();
+        if (_rasterEnabled)
+            DrawRaster();
 #if false
         if (CbPfadAnzeigen?.IsChecked == true)
             DrawPfadFräsen();
@@ -1500,6 +1505,66 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 #endif // DrawPfadFräsen + DrawHoverArrows Ende
 
     // ── Hilfsmethode ─────────────────────────────────────────────
+
+    private void OnRasterEinblenden(object sender, RoutedEventArgs e)
+    {
+        if (MnuRaster.IsChecked)
+        {
+            var dlg = new RasterDialog(_rasterX, _rasterY) { Owner = this };
+            if (dlg.ShowDialog() == true)
+            {
+                _rasterX = dlg.RasterX;
+                _rasterY = dlg.RasterY;
+                _rasterEnabled = true;
+            }
+            else
+            {
+                MnuRaster.IsChecked = false;
+                _rasterEnabled = false;
+            }
+        }
+        else
+        {
+            _rasterEnabled = false;
+        }
+        UpdateAll();
+    }
+
+    private void DrawRaster()
+    {
+        if (_topRect.IsEmpty) return;
+        double cw = DrawCanvas.ActualWidth;
+        double ch = DrawCanvas.ActualHeight;
+        double wx = WorkX, wy = WorkY;
+        if (wx <= 0 || wy <= 0) return;
+
+        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+        double stepX = _rasterX * scale;
+        double stepY = _rasterY * scale;
+        if (stepX < 1 || stepY < 1) return;
+
+        // Ursprung (0,0) des Werkstück-Koordinatensystems in Canvas-Pixeln
+        double ox = _topRect.Left;
+        double oy = _topRect.Bottom;
+
+        var pen = new SolidColorBrush(Color.FromArgb(55, 30, 90, 200));
+        pen.Freeze();
+
+        // Vertikale Linien (X-Abstand), von Ursprung nach rechts und links
+        for (double px = ox; px <= cw; px += stepX)
+            DrawCanvas.Children.Add(MakeGridLine(px, 0, px, ch, pen));
+        for (double px = ox - stepX; px >= 0; px -= stepX)
+            DrawCanvas.Children.Add(MakeGridLine(px, 0, px, ch, pen));
+
+        // Horizontale Linien (Y-Abstand), von Ursprung nach oben und unten
+        for (double py = oy; py >= 0; py -= stepY)
+            DrawCanvas.Children.Add(MakeGridLine(0, py, cw, py, pen));
+        for (double py = oy + stepY; py <= ch; py += stepY)
+            DrawCanvas.Children.Add(MakeGridLine(0, py, cw, py, pen));
+    }
+
+    private static Line MakeGridLine(double x1, double y1, double x2, double y2, Brush brush) =>
+        new() { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Stroke = brush, StrokeThickness = 0.7, IsHitTestVisible = false };
 
     private static Line MakeLine(Point a, Point b, Brush brush, bool dashed)
     {
