@@ -170,7 +170,7 @@ Loaded += (_, _) => UpdateAll();
 
     private void OnPlanfraesen(object sender, RoutedEventArgs e)
     {
-        var dlg = new PlanfräsenDialog(WorkX, WorkY) { Owner = this };
+        var dlg = new PlanfräsenDialog(WorkX, WorkY, werkzeuge: _werkzeuge.ToList()) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Planfräsen",
@@ -179,7 +179,7 @@ Loaded += (_, _) => UpdateAll();
 
     private void OnBohrung(object sender, RoutedEventArgs e)
     {
-        var dlg = new BohrungDialog(WorkZ + 3) { Owner = this };
+        var dlg = new BohrungDialog(WorkZ + 3, werkzeuge: _werkzeuge.ToList()) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Bohrung",
@@ -188,7 +188,7 @@ Loaded += (_, _) => UpdateAll();
 
     private void OnReihenlochbohrung(object sender, RoutedEventArgs e)
     {
-        var dlg = new ReihenlochbohrungDialog(WorkZ + 3) { Owner = this };
+        var dlg = new ReihenlochbohrungDialog(WorkZ + 3, werkzeuge: _werkzeuge.ToList()) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Reihenlochbohrung",
@@ -197,7 +197,7 @@ Loaded += (_, _) => UpdateAll();
 
     private void OnUmfahren(object sender, RoutedEventArgs e)
     {
-        var dlg = new UmfahrenDialog(WorkZ) { Owner = this };
+        var dlg = new UmfahrenDialog(WorkZ, werkzeuge: _werkzeuge.ToList()) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Umfahren",
@@ -223,7 +223,7 @@ Loaded += (_, _) => UpdateAll();
 
     private void OnPfadStart(object sender, RoutedEventArgs e)
     {
-        var dlg = new PfadPunktDialog("Pfad – Startpunkt", -(WorkZ + 3), isStart: true) { Owner = this };
+        var dlg = new PfadPunktDialog("Pfad – Startpunkt", -(WorkZ + 3), isStart: true, werkzeuge: _werkzeuge.ToList()) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result! with { Typ = PfadPunktTyp.Start };
         _history.Add(new HistoryEntry("Pfad Start",
@@ -233,7 +233,7 @@ Loaded += (_, _) => UpdateAll();
 
     private void OnPfadPunkt(object sender, RoutedEventArgs e)
     {
-        var dlg = new PfadPunktDialog("Pfad – Punkt", -(WorkZ + 3)) { Owner = this };
+        var dlg = new PfadPunktDialog("Pfad – Punkt", -(WorkZ + 3), werkzeuge: _werkzeuge.ToList()) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result! with { Typ = PfadPunktTyp.Punkt };
         _history.Add(new HistoryEntry("Pfad Punkt",
@@ -254,7 +254,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
         {
             case PlanfräsenParams p:
             {
-                var dlg = new PlanfräsenDialog(WorkX, WorkY, p) { Owner = this };
+                var dlg = new PlanfräsenDialog(WorkX, WorkY, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Planfräsen",
@@ -263,7 +263,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             }
             case BohrungParams p:
             {
-                var dlg = new BohrungDialog(WorkZ + 3, p) { Owner = this };
+                var dlg = new BohrungDialog(WorkZ + 3, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Bohrung",
@@ -272,7 +272,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             }
             case ReihenlochbohrungParams p:
             {
-                var dlg = new ReihenlochbohrungDialog(WorkZ + 3, p) { Owner = this };
+                var dlg = new ReihenlochbohrungDialog(WorkZ + 3, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Reihenlochbohrung",
@@ -281,7 +281,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             }
             case UmfahrenParams p:
             {
-                var dlg = new UmfahrenDialog(WorkZ, p) { Owner = this };
+                var dlg = new UmfahrenDialog(WorkZ, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Umfahren",
@@ -291,7 +291,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             case PfadPunktParams p:
             {
                 string title = p.Typ == PfadPunktTyp.Start ? "Pfad – Startpunkt" : "Pfad – Punkt";
-                var dlg = new PfadPunktDialog(title, -(WorkZ + 3), isStart: p.Typ == PfadPunktTyp.Start, p) { Owner = this };
+                var dlg = new PfadPunktDialog(title, -(WorkZ + 3), isStart: p.Typ == PfadPunktTyp.Start, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result! with { Typ = p.Typ };
                 int lvl = np.Typ == PfadPunktTyp.Start ? 0 : 1;
@@ -1722,6 +1722,7 @@ public class Werkzeug
 {
     public int    Nr                { get; set; }
     public string Name              { get; set; } = "";
+    public string DisplayName       => $"{Nr}. {Name}";
     public double Durchmesser       { get; set; }
     public double Schneidenwinkel   { get; set; }
     public double ZZustellung       { get; set; }

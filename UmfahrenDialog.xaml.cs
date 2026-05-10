@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -7,9 +8,15 @@ public partial class UmfahrenDialog : Window
 {
     public UmfahrenParams? Result { get; private set; }
 
-    public UmfahrenDialog(double workThickness, UmfahrenParams? prefill = null)
+    public UmfahrenDialog(double workThickness, UmfahrenParams? prefill = null,
+                          IReadOnlyList<Werkzeug>? werkzeuge = null)
     {
         InitializeComponent();
+        if (werkzeuge?.Count > 0)
+        {
+            CbWerkzeug.ItemsSource = werkzeuge;
+            if (prefill == null) CbWerkzeug.SelectedIndex = 0;
+        }
         if (prefill != null)
         {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
@@ -43,6 +50,16 @@ public partial class UmfahrenDialog : Window
             Drehzahl: double.Parse(TxtDrehzahl.Text, System.Globalization.CultureInfo.InvariantCulture)
         );
         DialogResult = true;
+    }
+
+    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (CbWerkzeug.SelectedItem is Werkzeug w)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            TxtDiameter.Text = w.Durchmesser.ToString(inv);
+            TxtDrehzahl.Text = w.Drehzahl.ToString(inv);
+        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;

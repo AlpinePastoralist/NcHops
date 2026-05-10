@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Controls;
 
 namespace NCHops;
 
@@ -9,11 +11,17 @@ public partial class PlanfräsenDialog : Window
 
     public PlanfräsenParams? Result { get; private set; }
 
-    public PlanfräsenDialog(double defaultX, double defaultY, PlanfräsenParams? prefill = null)
+    public PlanfräsenDialog(double defaultX, double defaultY, PlanfräsenParams? prefill = null,
+                            IReadOnlyList<Werkzeug>? werkzeuge = null)
     {
         InitializeComponent();
         _defaultX = defaultX;
         _defaultY = defaultY;
+        if (werkzeuge?.Count > 0)
+        {
+            CbWerkzeug.ItemsSource = werkzeuge;
+            if (prefill == null) CbWerkzeug.SelectedIndex = 0;
+        }
         if (prefill != null)
         {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
@@ -76,6 +84,18 @@ public partial class PlanfräsenDialog : Window
             Horizontal: RbHorizontal.IsChecked == true
         );
         DialogResult = true;
+    }
+
+    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (CbWerkzeug.SelectedItem is Werkzeug w)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            TxtFraeserD.Text = w.Durchmesser.ToString(inv);
+            TxtFaktor.Text   = (w.RaeumzustellungXY / 100.0).ToString(inv);
+            TxtVorschub.Text = w.VorschubFxy.ToString(inv);
+            TxtDrehzahl.Text = w.Drehzahl.ToString(inv);
+        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;

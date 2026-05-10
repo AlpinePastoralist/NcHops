@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Controls;
 
 namespace NCHops;
 
@@ -6,10 +8,16 @@ public partial class PfadPunktDialog : Window
 {
     public PfadPunktParams? Result { get; private set; }
 
-    public PfadPunktDialog(string title, double defaultZ, bool isStart = false, PfadPunktParams? prefill = null)
+    public PfadPunktDialog(string title, double defaultZ, bool isStart = false, PfadPunktParams? prefill = null,
+                           IReadOnlyList<Werkzeug>? werkzeuge = null)
     {
         InitializeComponent();
         Title = title;
+        if (werkzeuge?.Count > 0)
+        {
+            CbWerkzeug.ItemsSource = werkzeuge;
+            if (prefill == null) CbWerkzeug.SelectedIndex = 0;
+        }
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         if (!isStart)
         {
@@ -98,6 +106,18 @@ public partial class PfadPunktDialog : Window
             Typ:              PfadPunktTyp.Start // wird vom Aufrufer überschrieben
         );
         DialogResult = true;
+    }
+
+    private void OnWerkzeugSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (CbWerkzeug.SelectedItem is Werkzeug w && TxtFraeserD.Visibility == Visibility.Visible)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            TxtFraeserD.Text   = w.Durchmesser.ToString(inv);
+            TxtZustellung.Text = w.ZZustellung.ToString(inv);
+            TxtDrehzahl.Text   = w.Drehzahl.ToString(inv);
+            TxtVorschub.Text   = w.VorschubFxy.ToString(inv);
+        }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;
