@@ -863,16 +863,32 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 
     private void SetGCodeText(string text)
     {
-        var selectionStart = GCodeBox.CaretPosition;
-        var offset = GetTextOffset(GCodeBox.Document.ContentStart, selectionStart);
+        var offset = GetTextOffset(GCodeBox.Document.ContentStart, GCodeBox.CaretPosition);
 
-        GCodeBox.Document.Blocks.Clear();
-        foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
-            GCodeBox.Document.Blocks.Add(CreateHighlightedParagraph(line));
+        // Plain-Text zuerst setzen (schnell) — kein Highlighting, blockiert UI nicht
+        _isUpdatingGCode = true;
+        try
+        {
+            GCodeBox.Document.Blocks.Clear();
+            foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
+                GCodeBox.Document.Blocks.Add(new Paragraph(new Run(line))
+                {
+                    Margin = new Thickness(0), Padding = new Thickness(0),
+                    LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                    LineHeight = 24
+                });
+            UpdateLineNumbers(text);
+        }
+        finally { _isUpdatingGCode = false; }
 
         var position = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, offset);
         if (position != null)
             GCodeBox.CaretPosition = position;
+
+        // Highlighting im Hintergrund nach aktuellem Render-Durchlauf
+        var snapshot = text;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+            (Action)(() => UpdateGCodeHighlighting(snapshot)));
     }
 
     private void UpdateLineNumbers(string text)
@@ -970,19 +986,22 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 
     private void UpdateGCodeHighlighting(string text)
     {
-        var selectionStart = GCodeBox.Selection.Start;
-        var selectionEnd = GCodeBox.Selection.End;
-        var startOffset = GetTextOffset(GCodeBox.Document.ContentStart, selectionStart);
-        var endOffset = GetTextOffset(GCodeBox.Document.ContentStart, selectionEnd);
+        _isUpdatingGCode = true;
+        try
+        {
+            var startOffset = GetTextOffset(GCodeBox.Document.ContentStart, GCodeBox.Selection.Start);
+            var endOffset   = GetTextOffset(GCodeBox.Document.ContentStart, GCodeBox.Selection.End);
 
-        GCodeBox.Document.Blocks.Clear();
-        foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
-            GCodeBox.Document.Blocks.Add(CreateHighlightedParagraph(line));
+            GCodeBox.Document.Blocks.Clear();
+            foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
+                GCodeBox.Document.Blocks.Add(CreateHighlightedParagraph(line));
 
-        var startPos = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, startOffset);
-        var endPos = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, endOffset);
-        if (startPos != null && endPos != null)
-            GCodeBox.Selection.Select(startPos, endPos);
+            var startPos = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, startOffset);
+            var endPos   = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, endOffset);
+            if (startPos != null && endPos != null)
+                GCodeBox.Selection.Select(startPos, endPos);
+        }
+        finally { _isUpdatingGCode = false; }
     }
 
     private Paragraph CreateHighlightedParagraph(string line)
