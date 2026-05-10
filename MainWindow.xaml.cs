@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private bool _isUpdatingGCode;
     private bool _suppressGCodeUiUpdate;
     private readonly ObservableCollection<HistoryEntry> _history = [];
+    private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
 
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
 
@@ -109,6 +110,7 @@ Loaded += (_, _) => UpdateAll();
 
         HistoryList.ItemsSource = _history;
         _history.CollectionChanged += (_, _) => RegenerateGCodeFromHistory();
+        WerkzeugGrid.ItemsSource = _werkzeuge;
 #if false
         PfadLvPunkte.ItemsSource = _pfadPunkte;
         _pfadPunkte.CollectionChanged += (_, _) => UpdateAll();
@@ -1506,6 +1508,29 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 
     // ── Hilfsmethode ─────────────────────────────────────────────
 
+    private void OnGCodeAnzeigen(object sender, RoutedEventArgs e)
+    {
+        TabGCode.Visibility = MnuGCodeAnzeigen.IsChecked ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnWerkzeugeAnzeigen(object sender, RoutedEventArgs e)
+    {
+        TabWerkzeuge.Visibility = MnuWerkzeugeAnzeigen.IsChecked ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnWerkzeugHinzufuegen(object sender, RoutedEventArgs e)
+    {
+        int nr = _werkzeuge.Count > 0 ? _werkzeuge.Max(w => w.Nr) + 1 : 1;
+        _werkzeuge.Add(new Werkzeug { Nr = nr, Name = "Werkzeug " + nr });
+        WerkzeugGrid.ScrollIntoView(_werkzeuge[^1]);
+    }
+
+    private void OnWerkzeugLoeschen(object sender, RoutedEventArgs e)
+    {
+        if (WerkzeugGrid.SelectedItem is Werkzeug w)
+            _werkzeuge.Remove(w);
+    }
+
     private void OnRasterEinblenden(object sender, RoutedEventArgs e)
     {
         if (MnuRaster.IsChecked)
@@ -1577,6 +1602,20 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             line.StrokeDashArray = new System.Windows.Media.DoubleCollection { 5, 3 };
         return line;
     }
+}
+
+public class Werkzeug
+{
+    public int    Nr                { get; set; }
+    public string Name              { get; set; } = "";
+    public double Durchmesser       { get; set; }
+    public double Schneidenwinkel   { get; set; }
+    public double ZZustellung       { get; set; }
+    public double Eintauchwinkel    { get; set; }
+    public double VorschubFxy       { get; set; }
+    public double VorschubFz        { get; set; }
+    public double Drehzahl          { get; set; }
+    public double RaeumzustellungXY { get; set; } = 0.75;
 }
 
 public class HistoryEntry(string label, string details, object p, int level = 0)
