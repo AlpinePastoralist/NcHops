@@ -1518,6 +1518,43 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
         TabWerkzeuge.Visibility = MnuWerkzeugeAnzeigen.IsChecked ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    private void OnWerkzeugCellsChanged(object sender, SelectedCellsChangedEventArgs e)
+    {
+        if (WerkzeugGrid.SelectedCells.Count > 0)
+            WerkzeugGrid.BeginEdit();
+    }
+
+    private void OnWerkzeugCellPreparing(object sender, DataGridPreparingCellForEditEventArgs e)
+    {
+        if (e.EditingElement is TextBox tb)
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
+                () => { tb.SelectAll(); tb.Focus(); });
+    }
+
+    private void OnWerkzeugKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+
+        var item       = WerkzeugGrid.CurrentCell.Item;
+        var currentCol = WerkzeugGrid.CurrentCell.Column;
+
+        WerkzeugGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+
+        var editableCols = WerkzeugGrid.Columns
+            .Where(c => c.Visibility == Visibility.Visible && !c.IsReadOnly)
+            .OrderBy(c => c.DisplayIndex)
+            .ToList();
+
+        if (editableCols.Count == 0 || currentCol == null) return;
+
+        int idx  = editableCols.IndexOf(currentCol);
+        int next = idx < 0 ? 0 : (idx + 1) % editableCols.Count;
+
+        WerkzeugGrid.CurrentCell = new DataGridCellInfo(item, editableCols[next]);
+        WerkzeugGrid.BeginEdit();
+    }
+
     private void OnWerkzeugHinzufuegen(object sender, RoutedEventArgs e)
     {
         int nr = _werkzeuge.Count > 0 ? _werkzeuge.Max(w => w.Nr) + 1 : 1;
