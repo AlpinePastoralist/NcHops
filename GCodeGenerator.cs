@@ -18,7 +18,7 @@ public static class GCodeGenerator
         sb.AppendLine("G00 Z5.0000");
         sb.AppendLine();
         sb.AppendLine($"G00 X{F(p.X0)} Y{F(p.Y0)}");
-        sb.AppendLine($"G01 Z{F(p.Z)} F{p.Vorschub} S{p.Drehzahl}");
+        sb.AppendLine($"G01 Z{F(p.Z)} F{(int)p.VorschubFz}");
 
         if (p.Horizontal)
         {
@@ -26,13 +26,13 @@ public static class GCodeGenerator
             bool hin = true;
             while (y < p.Y1)
             {
-                sb.AppendLine(hin ? $"G01 X{F(p.X1)}" : $"G01 X{F(p.X0)}");
+                sb.AppendLine(hin ? $"G01 X{F(p.X1)} F{(int)p.Vorschub}" : $"G01 X{F(p.X0)} F{(int)p.Vorschub}");
                 y += schritt;
-                sb.AppendLine($"G01 Y{F(y)}");
+                sb.AppendLine($"G01 Y{F(y)} F{(int)p.Vorschub}");
                 if (y >= p.Y1)
                 {
                     hin = !hin;
-                    sb.AppendLine(hin ? $"G01 X{F(p.X1)}" : $"G01 X{F(p.X0)}");
+                    sb.AppendLine(hin ? $"G01 X{F(p.X1)} F{(int)p.Vorschub}" : $"G01 X{F(p.X0)} F{(int)p.Vorschub}");
                     break;
                 }
                 hin = !hin;
@@ -44,13 +44,13 @@ public static class GCodeGenerator
             bool hin = true;
             while (x < p.X1)
             {
-                sb.AppendLine(hin ? $"G01 Y{F(p.Y1)}" : $"G01 Y{F(p.Y0)}");
+                sb.AppendLine(hin ? $"G01 Y{F(p.Y1)} F{(int)p.Vorschub}" : $"G01 Y{F(p.Y0)} F{(int)p.Vorschub}");
                 x += schritt;
-                sb.AppendLine($"G01 X{F(x)}");
+                sb.AppendLine($"G01 X{F(x)} F{(int)p.Vorschub}");
                 if (x >= p.X1)
                 {
                     hin = !hin;
-                    sb.AppendLine(hin ? $"G01 Y{F(p.Y1)}" : $"G01 Y{F(p.Y0)}");
+                    sb.AppendLine(hin ? $"G01 Y{F(p.Y1)} F{(int)p.Vorschub}" : $"G01 Y{F(p.Y0)} F{(int)p.Vorschub}");
                     break;
                 }
                 hin = !hin;
@@ -79,7 +79,7 @@ public static class GCodeGenerator
         while (currentZ > zDepth)
         {
             currentZ = Math.Max(zDepth, currentZ - zStep);
-            sb.AppendLine($"G01 Z{F(currentZ)} F300");
+            sb.AppendLine($"G01 Z{F(currentZ)} F{(int)p.VorschubFz}");
             sb.AppendLine("G00 Z5.0000");
         }
 
@@ -114,7 +114,7 @@ public static class GCodeGenerator
                 while (currentZ > depth)
                 {
                     currentZ = Math.Max(depth, currentZ - step);
-                    sb.AppendLine($"G01 Z{F(currentZ)} F300");
+                    sb.AppendLine($"G01 Z{F(currentZ)} F{(int)p.VorschubFz}");
                     sb.AppendLine("G00 Z5.0000");
                 }
             }
@@ -307,8 +307,8 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine($"G00 X{F(approachX)} Y{F(approachY)}");
-        sb.AppendLine($"G01 Z{F(z)} F300");
-        sb.AppendLine($"{entryArcCmd} X{F(startX)} Y{F(startY)} I{F(arcI)} J{F(arcJ)}");
+        sb.AppendLine($"G01 Z{F(z)} F{(int)p.VorschubFz}");
+        sb.AppendLine($"{entryArcCmd} X{F(startX)} Y{F(startY)} I{F(arcI)} J{F(arcJ)} F{(int)p.VorschubFxy}");
 
         if (r <= 0)
         {
@@ -611,15 +611,15 @@ public static class GCodeGenerator
         while (curZ > z)
         {
             curZ = Math.Max(z, curZ - zStep);
-            sb.AppendLine($"G01 Z{F(curZ)} F{(int)sp.Vorschub}");
+            sb.AppendLine($"G01 Z{F(curZ)} F{(int)sp.VorschubFz}");
 
             for (int i = 1; i < moves.Count; i++)
             {
                 var mv = moves[i];
                 if (mv.IsArc)
-                    sb.AppendLine($"{(mv.CW ? "G02" : "G03")} X{F(mv.X)} Y{F(mv.Y)} I{F(mv.I)} J{F(mv.J)}");
+                    sb.AppendLine($"{(mv.CW ? "G02" : "G03")} X{F(mv.X)} Y{F(mv.Y)} I{F(mv.I)} J{F(mv.J)} F{(int)sp.Vorschub}");
                 else
-                    sb.AppendLine($"G01 X{F(mv.X)} Y{F(mv.Y)}");
+                    sb.AppendLine($"G01 X{F(mv.X)} Y{F(mv.Y)} F{(int)sp.Vorschub}");
             }
 
             if (curZ > z)
