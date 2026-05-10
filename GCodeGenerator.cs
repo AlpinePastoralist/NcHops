@@ -131,7 +131,26 @@ public static class GCodeGenerator
         double r    = p.FraeserD / 2.0;
         double step = Math.Max(0.1, p.FraeserD * p.Faktor);
 
-        var (ax, ay) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+        var (refX, refY) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+
+        // Bezugspunkt zeigt auf die entsprechende Ecke/Seite der Tasche selbst.
+        // Offset auf die untere-linke Taschenecke umrechnen.
+        var (bx, by) = p.Bezugspunkt switch
+        {
+            "Unten links"  => (0,             0),
+            "Unten Mitte"  => (-p.Breite / 2, 0),
+            "Unten rechts" => (-p.Breite,     0),
+            "Links Mitte"  => (0,             -p.Höhe / 2),
+            "Mitte"        => (-p.Breite / 2, -p.Höhe / 2),
+            "Rechts Mitte" => (-p.Breite,     -p.Höhe / 2),
+            "Oben links"   => (0,             -p.Höhe),
+            "Oben Mitte"   => (-p.Breite / 2, -p.Höhe),
+            "Oben rechts"  => (-p.Breite,     -p.Höhe),
+            _              => (0.0,            0.0)
+        };
+
+        double ax = refX + bx;
+        double ay = refY + by;
 
         // Fräsermittelpunkt-Bereich bei vollem Wandeingriff (Schlichten)
         double ix0 = ax + r;
