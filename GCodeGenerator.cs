@@ -316,128 +316,128 @@ public static class GCodeGenerator
             {
                 if (gegenlauf)
                 {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
                 }
                 else
                 {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
                 }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
             else if (startSide == "rechts")
             {
                 if (gegenlauf)
                 {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
                 }
                 else
                 {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
                 }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
             else if (startSide == "links")
             {
                 if (gegenlauf)
                 {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
                 }
                 else
                 {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
                 }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
             else
             {
                 if (gegenlauf)
                 {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
                 }
                 else
                 {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
                 }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
         }
         else
         {
             if (startSide == "oben")
             {
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)}");
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0");
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)}");
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
             else if (startSide == "rechts")
             {
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0");
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)}");
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0");
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)}");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
             else if (startSide == "links")
             {
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0");
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)}");
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0");
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)}");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
             else
             {
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)}");
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0");
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)}");
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)}");
+                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
             }
         }
 
-        sb.AppendLine($"{exitArcCmd} X{F(exitX)} Y{F(exitY)} I{F(exitI)} J{F(exitJ)}");
+        sb.AppendLine($"{exitArcCmd} X{F(exitX)} Y{F(exitY)} I{F(exitI)} J{F(exitJ)} F{(int)p.VorschubFxy}");
         sb.AppendLine("G00 Z5.0000");
         sb.AppendLine("M05");
         return sb.ToString();
