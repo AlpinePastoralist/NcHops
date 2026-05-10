@@ -297,12 +297,13 @@ public static class GCodeGenerator
             sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
 
             // Archimedische Spirale von rEntry nach maxRoughR im Gegenlauf (CW = neg. Winkel)
-            // 36 G01-Segmente pro Umdrehung → glatte Spirale in der Ansicht
+            // 16 G01-Segmente pro Umdrehung, max. 120 Segmente gesamt
             if (maxRoughR > rEntry)
             {
-                const int segPerRev = 36;
+                const int segPerRev = 16;
+                const int maxSegs   = 120;
                 double totalRevs = (maxRoughR - rEntry) / step;
-                int totalSegs = Math.Max(segPerRev, (int)Math.Ceiling(totalRevs * segPerRev));
+                int totalSegs = Math.Min(maxSegs, Math.Max(segPerRev, (int)Math.Ceiling(totalRevs * segPerRev)));
                 for (int i = 1; i <= totalSegs; i++)
                 {
                     double t       = (double)i / totalSegs;
