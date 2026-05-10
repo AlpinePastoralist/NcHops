@@ -1356,8 +1356,14 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
                 double start = Math.Atan2(m.Y - cy, m.X - cx);
                 double end   = Math.Atan2(m.Ye - cy, m.Xe - cx);
 
-                if (m.Type == MoveType.ArcCW  && end > start) end -= 2 * Math.PI;
-                if (m.Type == MoveType.ArcCCW && end < start) end += 2 * Math.PI;
+                bool fullCircle = Math.Abs(m.Xe - m.X) < 1e-6 && Math.Abs(m.Ye - m.Y) < 1e-6;
+                if (fullCircle)
+                    end = m.Type == MoveType.ArcCW ? start - 2 * Math.PI : start + 2 * Math.PI;
+                else
+                {
+                    if (m.Type == MoveType.ArcCW  && end > start) end -= 2 * Math.PI;
+                    if (m.Type == MoveType.ArcCCW && end < start) end += 2 * Math.PI;
+                }
 
                 int steps = Math.Max(8, (int)(Math.Abs(end - start) / (Math.PI / 36)));
                 var prev = MmToPx(m.X, m.Y);
