@@ -161,7 +161,12 @@ Loaded += (_, _) => UpdateAll();
     }
 
     private void OnBeenden(object sender, RoutedEventArgs e) => Close();
-    private void OnWindowClosing(object sender, System.ComponentModel.CancelEventArgs e) => SaveWerkzeuge();
+    private void OnWindowClosing(object sender, System.ComponentModel.CancelEventArgs e)
+    {
+        WerkzeugGrid.CommitEdit(DataGridEditingUnit.Cell, exitEditingMode: true);
+        WerkzeugGrid.CommitEdit(DataGridEditingUnit.Row,  exitEditingMode: true);
+        SaveWerkzeuge();
+    }
 
     private void OnPlanfraesen(object sender, RoutedEventArgs e)
     {
@@ -1631,7 +1636,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
     private void OnWerkzeugCellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction == DataGridEditAction.Commit)
-            Dispatcher.BeginInvoke(SaveWerkzeuge);
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, SaveWerkzeuge);
     }
 
     private void OnWerkzeugLoeschen(object sender, RoutedEventArgs e)
