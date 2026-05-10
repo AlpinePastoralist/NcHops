@@ -66,6 +66,7 @@ public partial class BohrungDialog : Window
             Bohrtiefe:   double.Parse(TxtBohrtiefe.Text, inv),
             Zustellung:  w?.ZZustellung ?? 5,
             Durchmesser: w?.Durchmesser ?? 10,
+            VorschubFz:  w?.VorschubFz ?? 500,
             Bezugspunkt: GetBezug()
         );
         DialogResult = true;
@@ -76,4 +77,4 @@ public partial class BohrungDialog : Window
 
 public record BohrungParams(
     double XRel, double YRel, double Bohrtiefe, double Zustellung, double Durchmesser,
-    string Bezugspunkt);
+    double VorschubFz, string Bezugspunkt);

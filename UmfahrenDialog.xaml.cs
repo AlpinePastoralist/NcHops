@@ -44,8 +44,10 @@ public partial class UmfahrenDialog : Window
             Direction: (CbDirection.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "gegenlauf",
             Radius: double.Parse(TxtRadius.Text, inv),
             Z: double.Parse(TxtZ.Text, inv),
-            Diameter: w?.Durchmesser ?? 10,
-            Drehzahl: w?.Drehzahl ?? 18000
+            Diameter:    w?.Durchmesser ?? 10,
+            Drehzahl:    w?.Drehzahl ?? 18000,
+            VorschubFxy: w?.VorschubFxy ?? 3000,
+            VorschubFz:  w?.VorschubFz ?? 500
         );
         DialogResult = true;
     }
@@ -53,4 +55,5 @@ public partial class UmfahrenDialog : Window
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;
 }
 
-public record UmfahrenParams(double A, string StartSide, string Direction, double Radius, double Z, double Diameter, double Drehzahl);
+public record UmfahrenParams(double A, string StartSide, string Direction, double Radius, double Z,
+    double Diameter, double Drehzahl, double VorschubFxy, double VorschubFz);

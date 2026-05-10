@@ -76,8 +76,9 @@ public partial class PlanfräsenDialog : Window
             Z: double.Parse(TxtZ.Text, inv),
             FraeserD: w?.Durchmesser ?? 10,
             Faktor: w != null ? w.RaeumzustellungXY / 100.0 : 0.75,
-            Vorschub: w?.VorschubFxy ?? 3000,
-            Drehzahl: w?.Drehzahl ?? 18000,
+            Vorschub:   w?.VorschubFxy ?? 3000,
+            VorschubFz: w?.VorschubFz ?? 500,
+            Drehzahl:   w?.Drehzahl ?? 18000,
             Horizontal: RbHorizontal.IsChecked == true
         );
         DialogResult = true;
@@ -89,4 +90,4 @@ public partial class PlanfräsenDialog : Window
 public record PlanfräsenParams(
     double X0, double Y0, double X1, double Y1,
     double Z, double FraeserD, double Faktor,
-    double Vorschub, double Drehzahl, bool Horizontal);
+    double Vorschub, double VorschubFz, double Drehzahl, bool Horizontal);

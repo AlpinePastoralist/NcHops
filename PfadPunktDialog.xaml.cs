@@ -90,6 +90,7 @@ public partial class PfadPunktDialog : Window
             FraeserD:        w?.Durchmesser ?? 10,
             Drehzahl:        w?.Drehzahl ?? 18000,
             Vorschub:        w?.VorschubFxy ?? 3000,
+            VorschubFz:      w?.VorschubFz ?? 500,
             Radiuskorrektur: vis ? radiuskorrektur : "Mittig",
             Bezugspunkt:     GetBezug(),
             Typ:             PfadPunktTyp.Start // wird vom Aufrufer überschrieben
@@ -104,5 +105,5 @@ public enum PfadPunktTyp { Start, Punkt }
 
 public record PfadPunktParams(
     double XRel, double YRel, double ZTiefe, double ZZustellung,
-    double FraeserD, double Drehzahl, double Vorschub,
+    double FraeserD, double Drehzahl, double Vorschub, double VorschubFz,
     string Radiuskorrektur, string Bezugspunkt, PfadPunktTyp Typ);
