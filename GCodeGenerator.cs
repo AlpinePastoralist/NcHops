@@ -234,17 +234,17 @@ public static class GCodeGenerator
     {
         const double allowance = 1.0;
 
-        double r    = p.FraeserD / 2.0;
-        double step = Math.Max(0.1, p.FraeserD * p.Faktor);
-        double Rp   = p.Durchmesser / 2.0;
-        double Rm   = Rp - r; // max. Fräsermittelradius
+        double r       = p.FraeserD / 2.0;
+        double step    = Math.Max(0.1, p.FraeserD * p.Faktor);
+        double Rp      = p.Durchmesser / 2.0;
+        double Rm      = Rp - r;
 
         var (cx, cy) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
 
         var sb = new StringBuilder();
         sb.AppendLine("(Kreistasche fräsen)");
         sb.AppendLine($"(Mitte X={F(cx)} Y={F(cy)}, D={F(p.Durchmesser)})");
-        sb.AppendLine($"(Werkzeug D={p.FraeserD}, Bezug={p.Bezugspunkt})");
+        sb.AppendLine($"(D={p.FraeserD}, Eintauchwinkel={p.Eintauchwinkel}°, Bezug={p.Bezugspunkt})");
 
         if (Rm <= 0)
         {
@@ -255,23 +255,49 @@ public static class GCodeGenerator
 
         sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine("G00 Z5.0000");
-        sb.AppendLine($"G00 X{F(cx)} Y{F(cy)}");
 
-        double depth    = -Math.Abs(p.ZTiefe);
-        double zStep    = Math.Abs(p.ZZustellung);
-        double curZ     = 0;
-
-        // Schrupp-Maximalradius: 1mm vor der Wand stehen lassen
-        double roughRm  = Rm - allowance;
+        double depth     = -Math.Abs(p.ZTiefe);
+        double zStep     = Math.Abs(p.ZZustellung);
+        double roughRm   = Rm - allowance;
         double maxRoughR = roughRm > 0 ? roughRm : Rm;
+
+        // Eintauchradius: erster Kreisschritt, auf Rm begrenzt
+        double rEntry   = Math.Min(step, maxRoughR);
+        double angleRad = Math.PI / 180.0 * Math.Abs(p.Eintauchwinkel);
+        // Z-Absenkung pro Helix-Umdrehung (Eintauchwinkel)
+        double zPerRev  = p.Eintauchwinkel > 0.01
+            ? 2.0 * Math.PI * rEntry * Math.Tan(angleRad)
+            : 0;
+
+        sb.AppendLine($"G00 X{F(cx + rEntry)} Y{F(cy)}");
+        double curZ = 0;
 
         while (curZ > depth)
         {
-            curZ = Math.Max(depth, curZ - zStep);
-            sb.AppendLine($"G01 Z{F(curZ)} F{(int)p.VorschubFz}");
+            double nextZ = Math.Max(depth, curZ - zStep);
 
-            // Konzentrische Kreise von innen nach außen – Gegenlauf (G02 = CW)
-            double cr = step;
+            // Helikal eintauchen von curZ nach nextZ im Gegenlauf (G02 = CW)
+            if (zPerRev > 1e-6)
+            {
+                double z = curZ;
+                while (z > nextZ)
+                {
+                    z = Math.Max(nextZ, z - zPerRev);
+                    sb.AppendLine($"G02 X{F(cx + rEntry)} Y{F(cy)} Z{F(z)} I{F(-rEntry)} J0 F{(int)p.Vorschub}");
+                }
+            }
+            else
+            {
+                sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
+            }
+            curZ = nextZ;
+
+            // Mittenfreischnitt: Durchmesserbahn räumt den Mittelstumpf
+            sb.AppendLine($"G01 X{F(cx - rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
+            sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
+
+            // Spiralförmig nach außen – konzentrische Kreise im Gegenlauf (G02)
+            double cr = rEntry;
             while (true)
             {
                 double mR = Math.Min(cr, maxRoughR);
@@ -281,11 +307,9 @@ public static class GCodeGenerator
                 cr += step;
             }
 
+            // Für nächste Tiefenstufe zurück zum Eintauchpunkt (im geräumten Bereich)
             if (curZ > depth)
-            {
-                sb.AppendLine("G00 Z1.0000");
-                sb.AppendLine($"G00 X{F(cx)} Y{F(cy)}");
-            }
+                sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
         }
 
         // Schlichten: voller Radius im Gegenlauf (G02 = CW = rechts herum)

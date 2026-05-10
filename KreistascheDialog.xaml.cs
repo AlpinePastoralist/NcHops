@@ -69,13 +69,14 @@ public partial class KreistascheDialog : Window
             YRel:        double.Parse(TxtYRel.Text,   inv),
             Durchmesser: double.Parse(TxtDurchm.Text, inv),
             ZTiefe:      double.Parse(TxtZTiefe.Text, inv),
-            ZZustellung: w?.ZZustellung ?? 5,
-            FraeserD:    w?.Durchmesser ?? 10,
-            Faktor:      w != null ? w.RaeumzustellungXY / 100.0 : 0.75,
-            Vorschub:    w?.VorschubFxy ?? 3000,
-            VorschubFz:  w?.VorschubFz ?? 500,
-            Drehzahl:    w?.Drehzahl ?? 18000,
-            Bezugspunkt: GetBezug()
+            ZZustellung:    w?.ZZustellung ?? 5,
+            Eintauchwinkel: w?.Eintauchwinkel ?? 3,
+            FraeserD:       w?.Durchmesser ?? 10,
+            Faktor:         w != null ? w.RaeumzustellungXY / 100.0 : 0.75,
+            Vorschub:       w?.VorschubFxy ?? 3000,
+            VorschubFz:     w?.VorschubFz ?? 500,
+            Drehzahl:       w?.Drehzahl ?? 18000,
+            Bezugspunkt:    GetBezug()
         );
         DialogResult = true;
     }
@@ -86,7 +87,7 @@ public partial class KreistascheDialog : Window
 public record KreistascheParams(
     double XRel, double YRel,
     double Durchmesser,
-    double ZTiefe, double ZZustellung,
+    double ZTiefe, double ZZustellung, double Eintauchwinkel,
     double FraeserD, double Faktor,
     double Vorschub, double VorschubFz, double Drehzahl,
     string Bezugspunkt);
