@@ -180,8 +180,9 @@
                 <MenuItem Header="Planfräsen" Click="OnPlanfraesen"/>
                 <MenuItem Header="Umfahren"   Click="OnUmfahren"/>
                 <MenuItem Header="Nut"        Click="OnPlanfraesen"/>
-                <MenuItem Header="Tasche"     Click="OnTasche"/>
-                <MenuItem Header="Zapfen"     Click="OnPlanfraesen"/>
+                <MenuItem Header="Tasche"       Click="OnTasche"/>
+                <MenuItem Header="Kreistasche" Click="OnKreistasche"/>
+                <MenuItem Header="Zapfen"       Click="OnPlanfraesen"/>
             </MenuItem>
             <MenuItem Header="Pfad Fräsen">
                 <MenuItem Header="Startpunkt" Click="OnPfadStart"/>

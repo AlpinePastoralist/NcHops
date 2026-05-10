@@ -230,6 +230,75 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    public static string Kreistasche(KreistascheParams p, double workW, double workH)
+    {
+        const double allowance = 1.0;
+
+        double r    = p.FraeserD / 2.0;
+        double step = Math.Max(0.1, p.FraeserD * p.Faktor);
+        double Rp   = p.Durchmesser / 2.0;
+        double Rm   = Rp - r; // max. Fräsermittelradius
+
+        var (cx, cy) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("(Kreistasche fräsen)");
+        sb.AppendLine($"(Mitte X={F(cx)} Y={F(cy)}, D={F(p.Durchmesser)})");
+        sb.AppendLine($"(Werkzeug D={p.FraeserD}, Bezug={p.Bezugspunkt})");
+
+        if (Rm <= 0)
+        {
+            sb.AppendLine("(Tasche zu klein für Werkzeug)");
+            sb.AppendLine("M05");
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"M03 S{p.Drehzahl}");
+        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine($"G00 X{F(cx)} Y{F(cy)}");
+
+        double depth    = -Math.Abs(p.ZTiefe);
+        double zStep    = Math.Abs(p.ZZustellung);
+        double curZ     = 0;
+
+        // Schrupp-Maximalradius: 1mm vor der Wand stehen lassen
+        double roughRm  = Rm - allowance;
+        double maxRoughR = roughRm > 0 ? roughRm : Rm;
+
+        while (curZ > depth)
+        {
+            curZ = Math.Max(depth, curZ - zStep);
+            sb.AppendLine($"G01 Z{F(curZ)} F{(int)p.VorschubFz}");
+
+            // Konzentrische Kreise von innen nach außen – Gegenlauf (G02 = CW)
+            double cr = step;
+            while (true)
+            {
+                double mR = Math.Min(cr, maxRoughR);
+                sb.AppendLine($"G01 X{F(cx + mR)} Y{F(cy)} F{(int)p.Vorschub}");
+                sb.AppendLine($"G02 X{F(cx + mR)} Y{F(cy)} I{F(-mR)} J0 F{(int)p.Vorschub}");
+                if (mR >= maxRoughR) break;
+                cr += step;
+            }
+
+            if (curZ > depth)
+            {
+                sb.AppendLine("G00 Z1.0000");
+                sb.AppendLine($"G00 X{F(cx)} Y{F(cy)}");
+            }
+        }
+
+        // Schlichten: voller Radius im Gegenlauf (G02 = CW = rechts herum)
+        sb.AppendLine("G00 Z1.0000");
+        sb.AppendLine($"G00 X{F(cx + Rm)} Y{F(cy)}");
+        sb.AppendLine($"G01 Z{F(depth)} F{(int)p.VorschubFz}");
+        sb.AppendLine($"G02 X{F(cx + Rm)} Y{F(cy)} I{F(-Rm)} J0 F{(int)p.Vorschub}");
+
+        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
     public static string Umfahren(UmfahrenParams p, double workW, double workH)
     {
         var sb = new StringBuilder();
