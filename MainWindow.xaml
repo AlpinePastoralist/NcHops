@@ -198,7 +198,7 @@
                 <MenuItem Header="G-Code anzeigen" x:Name="MnuGCodeAnzeigen"
                           IsCheckable="True" IsChecked="True" Click="OnGCodeAnzeigen"/>
                 <MenuItem Header="Werkzeuge anzeigen" x:Name="MnuWerkzeugeAnzeigen"
-                          IsCheckable="True" Click="OnWerkzeugeAnzeigen"/>
+                          IsCheckable="True" IsChecked="True" Click="OnWerkzeugeAnzeigen"/>
             </MenuItem>
             <MenuItem Header="Hilfe">
                 <MenuItem Header="Info" Click="OnInfo"/>
@@ -466,7 +466,7 @@
                 </TabItem>
 
                 <!-- Tab 3: Werkzeuge -->
-                <TabItem Header="Werkzeuge" x:Name="TabWerkzeuge" Visibility="Collapsed">
+                <TabItem Header="Werkzeuge" x:Name="TabWerkzeuge">
                     <Grid Background="{StaticResource BgLightBrush}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
