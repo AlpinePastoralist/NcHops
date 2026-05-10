@@ -475,7 +475,7 @@
                         <DataGrid x:Name="WerkzeugGrid"
                                   Grid.Row="0"
                                   AutoGenerateColumns="False"
-                                  CanUserAddRows="False"
+                                  CanUserAddRows="True"
                                   CanUserDeleteRows="False"
                                   HeadersVisibility="Column"
                                   GridLinesVisibility="All"
@@ -487,7 +487,9 @@
                                   FontSize="12"
                                   PreparingCellForEdit="OnWerkzeugCellPreparing"
                                   PreviewKeyDown="OnWerkzeugKeyDown"
-                                  SelectedCellsChanged="OnWerkzeugCellsChanged">
+                                  SelectedCellsChanged="OnWerkzeugCellsChanged"
+                                  InitializingNewItem="OnWerkzeugInitializingNewItem"
+                                  CellEditEnding="OnWerkzeugCellEditEnding">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Nr"   Binding="{Binding Nr}"   Width="32" IsReadOnly="True"/>
                                 <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="100"/>
@@ -553,9 +555,7 @@
                         </DataGrid>
 
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="6,4">
-                            <Button Content="+ Werkzeug" Width="90" Margin="0,0,6,0"
-                                    Click="OnWerkzeugHinzufuegen"/>
-                            <Button Content="✕ Löschen"  Width="80"
+                            <Button Content="✕ Löschen" Width="80"
                                     Click="OnWerkzeugLoeschen"/>
                         </StackPanel>
                     </Grid>
