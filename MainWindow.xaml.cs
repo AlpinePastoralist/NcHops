@@ -213,6 +213,15 @@ Loaded += (_, _) => UpdateAll();
             $"X={p.XRel} Y={p.YRel}, {p.Breite}×{p.Höhe}, Z={p.ZTiefe}, Ø{p.FraeserD}", p));
     }
 
+    private void OnKreistasche(object sender, RoutedEventArgs e)
+    {
+        var dlg = new KreistascheDialog(-(WorkZ + 3), werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        var p = dlg.Result!;
+        _history.Add(new HistoryEntry("Kreistasche",
+            $"X={p.XRel} Y={p.YRel}, Ø{p.Durchmesser}, Z={p.ZTiefe}", p));
+    }
+
     private bool IsPfadAktiv()
     {
         for (int i = _history.Count - 1; i >= 0; i--)
@@ -306,6 +315,15 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
                     $"X={np.XRel} Y={np.YRel}, {np.Breite}×{np.Höhe}, Z={np.ZTiefe}, Ø{np.FraeserD}", np);
                 break;
             }
+            case KreistascheParams p:
+            {
+                var dlg = new KreistascheDialog(-(WorkZ + 3), p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                if (dlg.ShowDialog() != true) return;
+                var np = dlg.Result!;
+                _history[idx] = new HistoryEntry("Kreistasche",
+                    $"X={np.XRel} Y={np.YRel}, Ø{np.Durchmesser}, Z={np.ZTiefe}", np);
+                break;
+            }
             case PfadPunktParams p:
             {
                 string title = p.Typ == PfadPunktTyp.Start ? "Pfad – Startpunkt" : "Pfad – Punkt";
@@ -393,6 +411,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
                 ReihenlochbohrungParams p => GCodeGenerator.Reihenlochbohrung(p),
                 UmfahrenParams p          => GCodeGenerator.Umfahren(p, WorkX, WorkY),
                 TascheFräsenParams p      => GCodeGenerator.Tasche(p, WorkX, WorkY),
+                KreistascheParams p       => GCodeGenerator.Kreistasche(p, WorkX, WorkY),
                 _                         => string.Empty
             };
             if (!string.IsNullOrEmpty(code)) sb.AppendLine(code);

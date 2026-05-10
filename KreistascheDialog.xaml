@@ -1,0 +1,110 @@
+<Window x:Class="NCHops.KreistascheDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Kreistasche" Width="400" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
+    <Window.Resources>
+        <Style x:Key="BezugRadio" TargetType="RadioButton">
+            <Setter Property="GroupName"        Value="Bezug"/>
+            <Setter Property="Width"            Value="18"/>
+            <Setter Property="Height"           Value="18"/>
+            <Setter Property="Cursor"           Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Ellipse x:Name="Outer" Width="14" Height="14"
+                                     Stroke="#8B7040" StrokeThickness="1.5"
+                                     Fill="White"/>
+                            <Ellipse x:Name="Inner" Width="7" Height="7"
+                                     Fill="#9B7820" Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Inner" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Outer" Property="Fill"       Value="#F5EDD0"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Outer" Property="Fill" Value="#EAD8A0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Werkzeugauswahl -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="110"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="Werkzeug:" VerticalAlignment="Center"/>
+            <ComboBox Grid.Column="1" x:Name="CbWerkzeug"
+                      DisplayMemberPath="DisplayName" VerticalAlignment="Center"/>
+        </Grid>
+
+        <Separator Grid.Row="1" Margin="0,6,0,6"/>
+
+        <!-- Eingabefelder -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="110"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+            </Grid.RowDefinitions>
+
+            <Label Grid.Row="0" Grid.Column="0" Content="X Mitte:"     VerticalAlignment="Center"/>
+            <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtXRel"     Text="0"   VerticalAlignment="Center"/>
+
+            <Label Grid.Row="1" Grid.Column="0" Content="Y Mitte:"     VerticalAlignment="Center"/>
+            <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtYRel"     Text="0"   VerticalAlignment="Center"/>
+
+            <Label Grid.Row="2" Grid.Column="0" Content="Durchmesser:" VerticalAlignment="Center"/>
+            <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtDurchm"   Text="50"  VerticalAlignment="Center"/>
+
+            <Label Grid.Row="3" Grid.Column="0" Content="Z-Tiefe:"     VerticalAlignment="Center"/>
+            <TextBox Grid.Row="3" Grid.Column="1" x:Name="TxtZTiefe"               VerticalAlignment="Center"/>
+        </Grid>
+
+        <!-- Bezugspunkt (Kreismitte) -->
+        <GroupBox Grid.Row="3" Header="Bezugspunkt (Kreismitte)" Margin="0,8,0,0">
+            <Canvas Width="240" Height="130" HorizontalAlignment="Center" Margin="0,6">
+                <Rectangle Canvas.Left="28" Canvas.Top="18"
+                           Width="184" Height="94"
+                           Fill="#F5EFDA" Stroke="#C8A864" StrokeThickness="2"
+                           RadiusX="3" RadiusY="3"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbObenLinks"                    Canvas.Left="19"  Canvas.Top="9"   ToolTip="Oben links"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbObenMitte"                    Canvas.Left="111" Canvas.Top="9"   ToolTip="Oben Mitte"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbObenRechts"                   Canvas.Left="203" Canvas.Top="9"   ToolTip="Oben rechts"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbLinksMitte"                   Canvas.Left="19"  Canvas.Top="56"  ToolTip="Links Mitte"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbMitte"       IsChecked="True" Canvas.Left="111" Canvas.Top="56"  ToolTip="Mitte"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbRechtsMitte"                  Canvas.Left="203" Canvas.Top="56"  ToolTip="Rechts Mitte"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbUntenLinks"                   Canvas.Left="19"  Canvas.Top="103" ToolTip="Unten links"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbUntenMitte"                   Canvas.Left="111" Canvas.Top="103" ToolTip="Unten Mitte"/>
+                <RadioButton Style="{StaticResource BezugRadio}" x:Name="RbUntenRechts"                  Canvas.Left="203" Canvas.Top="103" ToolTip="Unten rechts"/>
+            </Canvas>
+        </GroupBox>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="OK"        Width="75" Margin="0,0,8,0" Click="OnOk" IsDefault="True"/>
+            <Button Content="Abbrechen" Width="85"                  Click="OnCancel"/>
+        </StackPanel>
+    </Grid>
+</Window>
