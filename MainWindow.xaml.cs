@@ -1,6 +1,7 @@
 ﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -33,6 +34,9 @@ public partial class MainWindow : Window
     private bool _suppressGCodeUiUpdate;
     private readonly ObservableCollection<HistoryEntry> _history = [];
     private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
+    private bool _suppressSave;
+    private static readonly string WerkzeugDatei = System.IO.Path.Combine(
+        AppDomain.CurrentDomain.BaseDirectory, "werkzeuge.json");
 
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
 
@@ -111,6 +115,8 @@ Loaded += (_, _) => UpdateAll();
         HistoryList.ItemsSource = _history;
         _history.CollectionChanged += (_, _) => RegenerateGCodeFromHistory();
         WerkzeugGrid.ItemsSource = _werkzeuge;
+        _werkzeuge.CollectionChanged += (_, _) => SaveWerkzeuge();
+        LoadWerkzeuge();
 #if false
         PfadLvPunkte.ItemsSource = _pfadPunkte;
         _pfadPunkte.CollectionChanged += (_, _) => UpdateAll();
@@ -1555,23 +1561,74 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
         WerkzeugGrid.BeginEdit();
     }
 
-    private void OnWerkzeugHinzufuegen(object sender, RoutedEventArgs e)
+    private void LoadWerkzeuge()
     {
-        int nr = _werkzeuge.Count > 0 ? _werkzeuge.Max(w => w.Nr) + 1 : 1;
-        _werkzeuge.Add(new Werkzeug
+        _suppressSave = true;
+        try
         {
-            Nr               = nr,
-            Name             = "Werkzeug " + nr,
-            Durchmesser      = 10.0,
-            Schneidenwinkel  = 180.0,
-            ZZustellung      = 4.0,
-            Eintauchwinkel   = 90.0,
-            VorschubFxy      = 3000.0,
-            VorschubFz       = 2000.0,
-            Drehzahl         = 18000.0,
-            RaeumzustellungXY = 75.0,
-        });
-        WerkzeugGrid.ScrollIntoView(_werkzeuge[^1]);
+            _werkzeuge.Clear();
+            if (File.Exists(WerkzeugDatei))
+            {
+                var list = JsonSerializer.Deserialize<List<Werkzeug>>(File.ReadAllText(WerkzeugDatei));
+                if (list != null)
+                    foreach (var w in list)
+                        _werkzeuge.Add(w);
+            }
+            if (_werkzeuge.Count == 0)
+                _werkzeuge.Add(new Werkzeug
+                {
+                    Nr = 1, Name = "Werkzeug 1",
+                    Durchmesser = 10, Schneidenwinkel = 180, ZZustellung = 4,
+                    Eintauchwinkel = 90, VorschubFxy = 3000, VorschubFz = 2000,
+                    Drehzahl = 18000, RaeumzustellungXY = 75,
+                });
+        }
+        catch { /* korrupte Datei ignorieren */ }
+        finally { _suppressSave = false; }
+    }
+
+    private void SaveWerkzeuge()
+    {
+        if (_suppressSave) return;
+        try
+        {
+            var json = JsonSerializer.Serialize(_werkzeuge.ToList(),
+                new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(WerkzeugDatei, json);
+        }
+        catch { }
+    }
+
+    private void OnWerkzeugInitializingNewItem(object sender, InitializingNewItemEventArgs e)
+    {
+        if (e.NewItem is not Werkzeug w) return;
+        int nr = (_werkzeuge.Count > 0 ? _werkzeuge.Max(x => x.Nr) : 0) + 1;
+        var tmpl = _werkzeuge.LastOrDefault();
+        w.Nr = nr;
+        if (tmpl != null)
+        {
+            w.Name              = tmpl.Name;
+            w.Durchmesser       = tmpl.Durchmesser;
+            w.Schneidenwinkel   = tmpl.Schneidenwinkel;
+            w.ZZustellung       = tmpl.ZZustellung;
+            w.Eintauchwinkel    = tmpl.Eintauchwinkel;
+            w.VorschubFxy       = tmpl.VorschubFxy;
+            w.VorschubFz        = tmpl.VorschubFz;
+            w.Drehzahl          = tmpl.Drehzahl;
+            w.RaeumzustellungXY = tmpl.RaeumzustellungXY;
+        }
+        else
+        {
+            w.Durchmesser = 10; w.Schneidenwinkel = 180; w.ZZustellung = 4;
+            w.Eintauchwinkel = 90; w.VorschubFxy = 3000; w.VorschubFz = 2000;
+            w.Drehzahl = 18000; w.RaeumzustellungXY = 75;
+        }
+    }
+
+    private void OnWerkzeugCellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        if (e.EditAction == DataGridEditAction.Commit)
+            Dispatcher.BeginInvoke(SaveWerkzeuge);
     }
 
     private void OnWerkzeugLoeschen(object sender, RoutedEventArgs e)
