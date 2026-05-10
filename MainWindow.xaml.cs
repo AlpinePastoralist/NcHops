@@ -204,6 +204,15 @@ Loaded += (_, _) => UpdateAll();
             $"A={p.A}, Ø{p.Diameter}, Z={p.Z}", p));
     }
 
+    private void OnTasche(object sender, RoutedEventArgs e)
+    {
+        var dlg = new TascheFräsenDialog(-(WorkZ + 3), werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        var p = dlg.Result!;
+        _history.Add(new HistoryEntry("Tasche",
+            $"X={p.XRel} Y={p.YRel}, {p.Breite}×{p.Höhe}, Z={p.ZTiefe}, Ø{p.FraeserD}", p));
+    }
+
     private bool IsPfadAktiv()
     {
         for (int i = _history.Count - 1; i >= 0; i--)
@@ -286,6 +295,15 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Umfahren",
                     $"A={np.A}, Ø{np.Diameter}, Z={np.Z}", np);
+                break;
+            }
+            case TascheFräsenParams p:
+            {
+                var dlg = new TascheFräsenDialog(-(WorkZ + 3), p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                if (dlg.ShowDialog() != true) return;
+                var np = dlg.Result!;
+                _history[idx] = new HistoryEntry("Tasche",
+                    $"X={np.XRel} Y={np.YRel}, {np.Breite}×{np.Höhe}, Z={np.ZTiefe}, Ø{np.FraeserD}", np);
                 break;
             }
             case PfadPunktParams p:
@@ -374,6 +392,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
                 BohrungParams p           => GCodeGenerator.Bohrung(p, WorkX, WorkY),
                 ReihenlochbohrungParams p => GCodeGenerator.Reihenlochbohrung(p),
                 UmfahrenParams p          => GCodeGenerator.Umfahren(p, WorkX, WorkY),
+                TascheFräsenParams p      => GCodeGenerator.Tasche(p, WorkX, WorkY),
                 _                         => string.Empty
             };
             if (!string.IsNullOrEmpty(code)) sb.AppendLine(code);
