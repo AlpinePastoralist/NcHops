@@ -126,10 +126,14 @@ public static class GCodeGenerator
 
     public static string Tasche(TascheFräsenParams p, double workW, double workH)
     {
+        const double allowance = 1.0; // Schlichtaufmaß an allen Wänden
+
         double r    = p.FraeserD / 2.0;
         double step = Math.Max(0.1, p.FraeserD * p.Faktor);
 
         var (ax, ay) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+
+        // Fräsermittelpunkt-Bereich bei vollem Wandeingriff (Schlichten)
         double ix0 = ax + r;
         double iy0 = ay + r;
         double ix1 = ax + p.Breite - r;
@@ -149,26 +153,39 @@ public static class GCodeGenerator
 
         sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine("G00 Z5.0000");
-        sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
 
         double depth = -Math.Abs(p.ZTiefe);
         double zStep = Math.Abs(p.ZZustellung);
         double curZ  = 0;
 
+        // Schrupp-Bereich: 1mm Aufmaß an allen Wänden lassen
+        double rx0 = ix0 + allowance;
+        double ry0 = iy0 + allowance;
+        double rx1 = ix1 - allowance;
+        double ry1 = iy1 - allowance;
+        bool hasRoughArea = rx1 > rx0 && ry1 > ry0;
+
+        // Zick-Zack-Räumen (mit oder ohne Aufmaß)
+        double zx0 = hasRoughArea ? rx0 : ix0;
+        double zy0 = hasRoughArea ? ry0 : iy0;
+        double zx1 = hasRoughArea ? rx1 : ix1;
+        double zy1 = hasRoughArea ? ry1 : iy1;
+
+        sb.AppendLine($"G00 X{F(zx0)} Y{F(zy0)}");
         while (curZ > depth)
         {
             curZ = Math.Max(depth, curZ - zStep);
             sb.AppendLine($"G01 Z{F(curZ)} F{(int)p.VorschubFz}");
 
-            double y        = iy0;
-            bool rightward  = true;
+            double y       = zy0;
+            bool rightward = true;
             while (true)
             {
                 sb.AppendLine(rightward
-                    ? $"G01 X{F(ix1)} F{(int)p.Vorschub}"
-                    : $"G01 X{F(ix0)} F{(int)p.Vorschub}");
-                if (y >= iy1) break;
-                y = Math.Min(y + step, iy1);
+                    ? $"G01 X{F(zx1)} F{(int)p.Vorschub}"
+                    : $"G01 X{F(zx0)} F{(int)p.Vorschub}");
+                if (y >= zy1) break;
+                y = Math.Min(y + step, zy1);
                 sb.AppendLine($"G01 Y{F(y)} F{(int)p.Vorschub}");
                 rightward = !rightward;
             }
@@ -176,9 +193,18 @@ public static class GCodeGenerator
             if (curZ > depth)
             {
                 sb.AppendLine("G00 Z1.0000");
-                sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
+                sb.AppendLine($"G00 X{F(zx0)} Y{F(zy0)}");
             }
         }
+
+        // Schlichten: Konturfahrt im Gegenlauf (Uhrzeigersinn) auf voller Tiefe
+        sb.AppendLine("G00 Z1.0000");
+        sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
+        sb.AppendLine($"G01 Z{F(depth)} F{(int)p.VorschubFz}");
+        sb.AppendLine($"G01 X{F(ix1)} Y{F(iy0)} F{(int)p.Vorschub}");
+        sb.AppendLine($"G01 X{F(ix1)} Y{F(iy1)} F{(int)p.Vorschub}");
+        sb.AppendLine($"G01 X{F(ix0)} Y{F(iy1)} F{(int)p.Vorschub}");
+        sb.AppendLine($"G01 X{F(ix0)} Y{F(iy0)} F{(int)p.Vorschub}");
 
         sb.AppendLine("G00 Z5.0000");
         sb.AppendLine("M05");
