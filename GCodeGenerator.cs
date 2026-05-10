@@ -124,6 +124,67 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    public static string Tasche(TascheFräsenParams p, double workW, double workH)
+    {
+        double r    = p.FraeserD / 2.0;
+        double step = Math.Max(0.1, p.FraeserD * p.Faktor);
+
+        var (ax, ay) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+        double ix0 = ax + r;
+        double iy0 = ay + r;
+        double ix1 = ax + p.Breite - r;
+        double iy1 = ay + p.Höhe   - r;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("(Tasche fräsen)");
+        sb.AppendLine($"(X={F(ax)} Y={F(ay)} B={F(p.Breite)} H={F(p.Höhe)})");
+        sb.AppendLine($"(D={p.FraeserD}, Bezug={p.Bezugspunkt})");
+
+        if (ix1 <= ix0 || iy1 <= iy0)
+        {
+            sb.AppendLine("(Tasche zu klein für Werkzeug)");
+            sb.AppendLine("M05");
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"M03 S{p.Drehzahl}");
+        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
+
+        double depth = -Math.Abs(p.ZTiefe);
+        double zStep = Math.Abs(p.ZZustellung);
+        double curZ  = 0;
+
+        while (curZ > depth)
+        {
+            curZ = Math.Max(depth, curZ - zStep);
+            sb.AppendLine($"G01 Z{F(curZ)} F{(int)p.VorschubFz}");
+
+            double y        = iy0;
+            bool rightward  = true;
+            while (true)
+            {
+                sb.AppendLine(rightward
+                    ? $"G01 X{F(ix1)} F{(int)p.Vorschub}"
+                    : $"G01 X{F(ix0)} F{(int)p.Vorschub}");
+                if (y >= iy1) break;
+                y = Math.Min(y + step, iy1);
+                sb.AppendLine($"G01 Y{F(y)} F{(int)p.Vorschub}");
+                rightward = !rightward;
+            }
+
+            if (curZ > depth)
+            {
+                sb.AppendLine("G00 Z1.0000");
+                sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
+            }
+        }
+
+        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
     public static string Umfahren(UmfahrenParams p, double workW, double workH)
     {
         var sb = new StringBuilder();
