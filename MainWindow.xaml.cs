@@ -36,7 +36,8 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
     private bool _suppressSave;
     private static readonly string WerkzeugDatei = System.IO.Path.Combine(
-        AppDomain.CurrentDomain.BaseDirectory, "werkzeuge.json");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "NCHops", "werkzeuge.json");
 
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
 
@@ -160,6 +161,7 @@ Loaded += (_, _) => UpdateAll();
     }
 
     private void OnBeenden(object sender, RoutedEventArgs e) => Close();
+    private void OnWindowClosing(object sender, System.ComponentModel.CancelEventArgs e) => SaveWerkzeuge();
 
     private void OnPlanfraesen(object sender, RoutedEventArgs e)
     {
@@ -1592,6 +1594,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
         if (_suppressSave) return;
         try
         {
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(WerkzeugDatei)!);
             var json = JsonSerializer.Serialize(_werkzeuge.ToList(),
                 new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(WerkzeugDatei, json);
