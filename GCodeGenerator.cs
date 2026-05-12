@@ -797,16 +797,25 @@ public static class GCodeGenerator
         bool closed = pts.Count >= 3 &&
             Math.Sqrt(Math.Pow(pts[0].x - pts[^1].x, 2) + Math.Pow(pts[0].y - pts[^1].y, 2)) < 0.01;
 
+        // Unique points (no duplicate endpoint for closed path)
+        var uniquePts = closed ? pts.Take(pts.Count - 1).ToList() : pts;
+
+        // Corner rounding: Startpunkt-R als globaler Fallback, Einzelpunkte können überschreiben
+        double globalR = sp.Verrundung;
+        var verrundungen = path.Select(p => p.Verrundung > 1e-10 ? p.Verrundung : globalR).ToList();
+        if (verrundungen.Any(v => v > 1e-10) && uniquePts.Count >= 3)
+            uniquePts = ApplyCornerRounding(uniquePts, verrundungen, closed);
+
         List<PathMove> moves;
-        if (corr && r > 1e-10 && pts.Count >= 2)
+        if (corr && r > 1e-10 && uniquePts.Count >= 2)
         {
             moves = closed
-                ? ComputeClosedOffsetMoves(pts.Take(pts.Count - 1).ToList(), r, sg)
-                : ComputeOffsetMoves(pts, r, sg);
+                ? ComputeClosedOffsetMoves(uniquePts, r, sg)
+                : ComputeOffsetMoves(uniquePts, r, sg);
         }
         else
         {
-            moves = pts.Select(p => new PathMove(p.x, p.y)).ToList();
+            moves = uniquePts.Select(p => new PathMove(p.x, p.y)).ToList();
             if (closed) moves.Add(moves[0]); // Pfad schliessen
         }
 
@@ -847,6 +856,80 @@ public static class GCodeGenerator
     private record struct PathMove(double X, double Y, bool IsArc = false,
                                    double I = 0, double J = 0, bool CW = false);
 
+    // Ecken mit Radius runden (approximiert als Segmente, vor Offset-Berechnung)
+    // verrundungen[i] = Radius an Ecke i (für Links/Rechts = Werkstückradius)
+    private static List<(double x, double y)> ApplyCornerRounding(
+        List<(double x, double y)> pts, List<double> verrundungen, bool closed)
+    {
+        int n = pts.Count;
+        var result = new List<(double x, double y)>(n * 2);
+
+        for (int i = 0; i < n; i++)
+        {
+            double R = i < verrundungen.Count ? verrundungen[i] : 0;
+
+            // Offene Pfade: kein Runden an den Endpunkten
+            if (!closed && (i == 0 || i == n - 1)) { result.Add(pts[i]); continue; }
+            if (R < 1e-10)                          { result.Add(pts[i]); continue; }
+
+            int prevIdx = closed ? ((i - 1 + n) % n) : i - 1;
+            int nextIdx = closed ? ((i + 1) % n)     : i + 1;
+
+            var a = pts[prevIdx];
+            var b = pts[i];
+            var c = pts[nextIdx];
+
+            double ax = b.x - a.x, ay = b.y - a.y;
+            double lenA = Math.Sqrt(ax * ax + ay * ay);
+            double bx = c.x - b.x, by = c.y - b.y;
+            double lenB = Math.Sqrt(bx * bx + by * by);
+            if (lenA < 1e-10 || lenB < 1e-10) { result.Add(b); continue; }
+
+            (double x, double y) d1 = (ax / lenA, ay / lenA);
+            (double x, double y) d2 = (bx / lenB, by / lenB);
+
+            double cross = d1.x * d2.y - d1.y * d2.x;
+            if (Math.Abs(cross) < 1e-6) { result.Add(b); continue; } // kollinear
+
+            double dot   = Math.Clamp(d1.x * d2.x + d1.y * d2.y, -1.0, 1.0);
+            double theta = Math.Acos(dot);                 // Winkel zwischen den Richtungen
+            double t     = R / Math.Tan(theta / 2.0);     // Rückschnitt auf dem Segment
+
+            // Sicherstellen, dass der Bogen in den Segmenten passt
+            t = Math.Min(t, lenA * 0.45);
+            t = Math.Min(t, lenB * 0.45);
+            double Reff = t * Math.Tan(theta / 2.0);      // effektiver Radius nach Kürzung
+
+            double psx = b.x - t * d1.x, psy = b.y - t * d1.y; // Bogenbeginn
+            double pex = b.x + t * d2.x, pey = b.y + t * d2.y; // Bogenende
+
+            // Bogenmittelpunkt (senkrecht auf d1, zur Innenseite)
+            double sgn = Math.Sign(cross); // +1 = Linkskurve (CCW), -1 = Rechtskurve (CW)
+            double nx  = -d1.y * sgn, ny = d1.x * sgn;
+            double cx  = psx + nx * Reff, cy = psy + ny * Reff;
+
+            double startAngle = Math.Atan2(psy - cy, psx - cx);
+            double endAngle   = Math.Atan2(pey - cy, pex - cx);
+
+            double arcSpan;
+            if (sgn > 0) { arcSpan = endAngle - startAngle; if (arcSpan < 0) arcSpan += 2 * Math.PI; }
+            else         { arcSpan = startAngle - endAngle; if (arcSpan < 0) arcSpan += 2 * Math.PI; arcSpan = -arcSpan; }
+
+            result.Add((psx, psy));
+
+            const double chordalTol = 0.05;
+            double maxStep = 2 * Math.Acos(Math.Clamp(1.0 - chordalTol / Reff, -1.0, 1.0));
+            int steps = Math.Clamp((int)Math.Ceiling(Math.Abs(arcSpan) / maxStep), 1, 36);
+            for (int s = 1; s <= steps; s++)
+            {
+                double angle = startAngle + arcSpan * s / steps;
+                result.Add((cx + Reff * Math.Cos(angle), cy + Reff * Math.Sin(angle)));
+            }
+            // letzter hinzugefügter Punkt = pex/pey (Bogenende)
+        }
+        return result;
+    }
+
     // Offset für offenen Pfad
     private static List<PathMove> ComputeOffsetMoves(
         List<(double x, double y)> pts, double r, double sign)
@@ -871,7 +954,7 @@ public static class GCodeGenerator
             else
             {
                 double cross = dir[i].x * dir[i + 1].y - dir[i].y * dir[i + 1].x;
-                bool isConvex = sign > 0 ? cross < 0 : cross > 0;
+                bool isConvex = (sign > 0 ? cross < 0 : cross > 0) && Math.Abs(cross) > 0.01;
                 if (isConvex)
                 {
                     double ax = pts[i + 1].x + nrm[i + 1].x * r;
@@ -905,7 +988,7 @@ public static class GCodeGenerator
 
         // Startpunkt = Ecke bei pts[0] (Übergang von Segment[m-1] zu Segment[0])
         double cross0 = dir[m - 1].x * dir[0].y - dir[m - 1].y * dir[0].x;
-        bool conv0    = sign > 0 ? cross0 < 0 : cross0 > 0;
+        bool conv0    = (sign > 0 ? cross0 < 0 : cross0 > 0) && Math.Abs(cross0) > 0.01;
 
         double a0x = pts[0].x + nrm[0].x * r, a0y = pts[0].y + nrm[0].y * r;
         double bm_x = pts[0].x + nrm[m - 1].x * r, bm_y = pts[0].y + nrm[m - 1].y * r;
@@ -940,7 +1023,7 @@ public static class GCodeGenerator
             double bx = pts[i].x + nrm[prev].x * r, by = pts[i].y + nrm[prev].y * r;
             double ax = pts[i].x + nrm[i].x    * r, ay = pts[i].y + nrm[i].y    * r;
             double cr = dir[prev].x * dir[i].y - dir[prev].y * dir[i].x;
-            bool conv = sign > 0 ? cr < 0 : cr > 0;
+            bool conv = (sign > 0 ? cr < 0 : cr > 0) && Math.Abs(cr) > 0.01;
             if (conv)
             {
                 result.Add(new PathMove(bx, by));
