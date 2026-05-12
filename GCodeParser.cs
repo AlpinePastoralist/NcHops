@@ -42,6 +42,11 @@ public static class GCodeParser
         return dict;
     }
 
+    private static readonly Regex RxG0  = new(@"^G0($|[^0-9])", RegexOptions.Compiled);
+    private static readonly Regex RxG1  = new(@"^G1($|[^0-9])", RegexOptions.Compiled);
+    private static readonly Regex RxG2  = new(@"^G2($|[^0-9])", RegexOptions.Compiled);
+    private static readonly Regex RxG3  = new(@"^G3($|[^0-9])", RegexOptions.Compiled);
+
     public static List<Move> ParseTopView(string text)
     {
         var moves = new List<Move>();
@@ -54,10 +59,10 @@ public static class GCodeParser
             if (string.IsNullOrEmpty(line)) continue;
 
             MoveType? mode = null;
-            if (Regex.IsMatch(line, @"^G0($|[^0-9])") || line.StartsWith("G00")) mode = MoveType.Rapid;
-            else if (Regex.IsMatch(line, @"^G1($|[^0-9])") || line.StartsWith("G01")) mode = MoveType.Line;
-            else if (Regex.IsMatch(line, @"^G2($|[^0-9])") || line.StartsWith("G02")) mode = MoveType.ArcCW;
-            else if (Regex.IsMatch(line, @"^G3($|[^0-9])") || line.StartsWith("G03")) mode = MoveType.ArcCCW;
+            if (line.StartsWith("G00") || RxG0.IsMatch(line)) mode = MoveType.Rapid;
+            else if (line.StartsWith("G01") || RxG1.IsMatch(line)) mode = MoveType.Line;
+            else if (line.StartsWith("G02") || RxG2.IsMatch(line)) mode = MoveType.ArcCW;
+            else if (line.StartsWith("G03") || RxG3.IsMatch(line)) mode = MoveType.ArcCCW;
 
             if (mode == null) continue;
 

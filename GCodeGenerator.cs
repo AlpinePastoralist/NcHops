@@ -297,13 +297,15 @@ public static class GCodeGenerator
             sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
 
             // Archimedische Spirale von rEntry nach maxRoughR im Gegenlauf (CW = neg. Winkel)
-            // 36 G01-Segmente pro Umdrehung (10°), max. 360 Segmente gesamt
+            // Segmente pro Umdrehung aus Sehnentoleranz, damit die Kurve bei großen Radien glatt bleibt
             if (maxRoughR > rEntry)
             {
-                const int segPerRev = 36;
-                const int maxSegs   = 360;
+                const double chordalTol = 0.05; // mm – max. Abstand Sehne/Kreisbogen
+                const int    maxSegsPerRev = 144; // max. 2.5° pro Segment
+                double maxAngleRad = Math.Acos(1.0 - chordalTol / maxRoughR);
+                int segPerRev = Math.Min(maxSegsPerRev, (int)Math.Ceiling(2.0 * Math.PI / maxAngleRad));
                 double totalRevs = (maxRoughR - rEntry) / step;
-                int totalSegs = Math.Min(maxSegs, Math.Max(segPerRev, (int)Math.Ceiling(totalRevs * segPerRev)));
+                int totalSegs = Math.Min(2000, Math.Max(segPerRev, (int)Math.Ceiling(totalRevs * segPerRev)));
                 for (int i = 1; i <= totalSegs; i++)
                 {
                     double t       = (double)i / totalSegs;

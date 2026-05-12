@@ -370,7 +370,8 @@
             <TabControl Grid.Column="2"
                         Background="{StaticResource BgLightBrush}"
                         BorderBrush="{StaticResource AccentBrush}"
-                        Padding="0">
+                        Padding="0"
+                        SelectionChanged="OnTabSelectionChanged">
                 <TabControl.Resources>
                     <Style TargetType="TabItem">
                         <Setter Property="Padding" Value="10,4"/>
@@ -444,25 +445,67 @@
                                 Background="{StaticResource BgBrush}"
                                 BorderBrush="{StaticResource BorderBrush}"
                                 BorderThickness="0,0,1,0">
-                            <RichTextBox x:Name="GCodeLineNumbersBox"
-                                         IsReadOnly="True" IsDocumentEnabled="False"
-                                         FontFamily="Consolas" FontSize="12"
-                                         Foreground="{StaticResource AccentBrush}"
-                                         VerticalScrollBarVisibility="Hidden"
-                                         HorizontalScrollBarVisibility="Hidden"
-                                         Padding="0" BorderThickness="0" Margin="0"
-                                         Background="Transparent"/>
-                        </Border>
-                        <RichTextBox x:Name="GCodeBox" Grid.Column="1"
-                                     IsReadOnly="True"
+                            <ListBox x:Name="GCodeLineNumbersBox"
+                                     IsHitTestVisible="False"
                                      FontFamily="Consolas" FontSize="12"
-                                     Foreground="{StaticResource TextDarkBrush}"
-                                     Background="{StaticResource BgLightBrush}"
-                                     VerticalScrollBarVisibility="Auto"
-                                     HorizontalScrollBarVisibility="Auto"
-                                     Padding="0" BorderThickness="0" Margin="0"
-                                     Loaded="OnGCodeBoxLoaded"
-                                     TextChanged="OnGCodeChanged"/>
+                                     Foreground="{StaticResource AccentBrush}"
+                                     ScrollViewer.VerticalScrollBarVisibility="Hidden"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                     BorderThickness="0" Padding="0" Margin="0"
+                                     Background="Transparent"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Standard"
+                                     VirtualizingPanel.ScrollUnit="Pixel">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="4,0"/>
+                                        <Setter Property="Height" Value="20"/>
+                                        <Setter Property="HorizontalContentAlignment" Value="Right"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <ContentPresenter Content="{TemplateBinding Content}"
+                                                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                                      HorizontalAlignment="Right"
+                                                                      Margin="4,0"/>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                            </ListBox>
+                        </Border>
+                        <ListBox x:Name="GCodeBox" Grid.Column="1"
+                                 FontFamily="Consolas" FontSize="12"
+                                 Background="{StaticResource BgLightBrush}"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                 BorderThickness="0" Padding="0" Margin="0"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Standard"
+                                 VirtualizingPanel.ScrollUnit="Pixel"
+                                 Loaded="OnGCodeBoxLoaded">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Text}"
+                                               Foreground="{Binding Color}"
+                                               Padding="4,0"/>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Height" Value="20"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <ContentPresenter Content="{TemplateBinding Content}"
+                                                                  ContentTemplate="{TemplateBinding ContentTemplate}"/>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
                     </Grid>
                 </TabItem>
 

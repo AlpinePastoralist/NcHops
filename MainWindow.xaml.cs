@@ -18,6 +18,13 @@ namespace NCHops;
 
 public partial class MainWindow : Window
 {
+    private static Brush Fb(byte r, byte g, byte b) { var br = new SolidColorBrush(Color.FromRgb(r, g, b)); br.Freeze(); return br; }
+    private static readonly Brush BrushRapid   = Fb(150, 150, 150);
+    private static readonly Brush BrushCut     = Fb( 26,  26,  26);
+    private static readonly Brush BrushArc     = Fb( 10,  80, 180);
+    private static readonly Brush BrushMCode   = Fb(160,  80,   0);
+    private static readonly Brush BrushComment = Fb( 60, 130,  60);
+
     private static readonly Regex GCodeTokenRegex = new(
         "([A-Za-z][+-]?\\d*\\.?\\d*)|(\\s+)|(.+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -30,11 +37,19 @@ public partial class MainWindow : Window
     private double _rasterY = 50.0;
     private ScrollViewer? _gcodeScrollViewer;
     private ScrollViewer? _lineNumbersScrollViewer;
-    private bool _isUpdatingGCode;
-    private bool _suppressGCodeUiUpdate;
     private readonly ObservableCollection<HistoryEntry> _history = [];
     private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
     private bool _suppressSave;
+    private int  _lastLineCount = -1;
+
+    // G-Code Backing-Field: Canvas/Parser nutzen dies direkt, TextBox wird im Hintergrund gesetzt
+    private string _gcodeContent = string.Empty;
+
+    // Parse-Cache: G-Code nur neu parsen wenn Text sich ändert
+    private string?         _parsedGCodeText   = null;
+    private List<Move>      _cachedTopMoves    = [];
+    private List<SideMove>  _cachedSideMoves   = [];
+    private List<System.Windows.Point> _cachedDrillPoints = [];
     private static readonly string WerkzeugDatei = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "NCHops", "werkzeuge.json");
@@ -151,7 +166,7 @@ Loaded += (_, _) => UpdateAll();
 
         try
         {
-            var text = GCodeText.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+            var text = _gcodeContent.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
             File.WriteAllText(dlg.FileName, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         }
         catch (Exception ex)
@@ -802,42 +817,69 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 
     private void OnCanvasSizeChanged(object sender, SizeChangedEventArgs e) => UpdateAll();
 
+    private bool _gcodeBoxDirty = false;
+
     private string GCodeText
     {
-        get => new TextRange(GCodeBox.Document.ContentStart, GCodeBox.Document.ContentEnd).Text.TrimEnd('\r', '\n');
-        //.TrimEnd('\r', '\n')
-        set => SetGCodeText(value);
+        get => _gcodeContent;
+        set
+        {
+            if (_gcodeContent == value) return;
+            _gcodeContent    = value;
+            _parsedGCodeText = null;
+            _gcodeBoxDirty   = true;
+
+            // TextBox nur aktualisieren wenn G-Code Tab aktiv ist
+            if (IsGCodeTabActive())
+                FlushGCodeBox();
+        }
     }
 
-    private void OnGCodeChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_isUpdatingGCode)
-            return;
-        if (_suppressGCodeUiUpdate)
-            return;
+    private bool IsGCodeTabActive() =>
+        TabGCode.Visibility == Visibility.Visible &&
+        TabGCode.IsSelected;
 
-        _refreshTimer.Stop();
-        _refreshTimer.Start();
-        UpdateGCodeEditor();
+    private static Brush BrushForLine(string line)
+    {
+        var t = line.TrimStart();
+        if (t.Length == 0) return BrushCut;
+        char c = char.ToUpperInvariant(t[0]);
+        if (c == ';' || c == '(') return BrushComment;
+        if (c == 'M')             return BrushMCode;
+        if (c != 'G' || t.Length < 2) return BrushCut;
+        char d = t[1];
+        if (d == '0' && (t.Length == 2 || !char.IsDigit(t[2]))) return BrushRapid;
+        if (d == '0' && t.Length > 2 && t[2] == '0')            return BrushRapid;
+        if ((d == '2' || d == '3') && (t.Length == 2 || !char.IsDigit(t[2]))) return BrushArc;
+        if (t.Length > 2 && (t[2] == '2' || t[2] == '3') && (t.Length == 3 || !char.IsDigit(t[3])) && d == '0') return BrushArc;
+        return BrushCut;
+    }
+
+    private void FlushGCodeBox()
+    {
+        if (!_gcodeBoxDirty) return;
+        _gcodeBoxDirty = false;
+        var raw   = _gcodeContent.Replace("\r\n", "\n").Split('\n');
+        var items = Array.ConvertAll(raw, l => new GCodeLine(l, BrushForLine(l)));
+        GCodeBox.ItemsSource = items;
+        UpdateLineNumbers(items.Length);
+    }
+
+    private void EnsureParsed()
+    {
+        if (_gcodeContent == _parsedGCodeText) return;
+        _parsedGCodeText   = _gcodeContent;
+        _cachedTopMoves    = GCodeParser.ParseTopView(_gcodeContent);
+        _cachedSideMoves   = GCodeParser.ParseSideView(_gcodeContent);
+        _cachedDrillPoints = GCodeParser.ParseDrillPoints(_gcodeContent);
     }
 
     private void OnGCodeBoxLoaded(object sender, RoutedEventArgs e)
     {
-        // Ensure the text starts at the very top/left so line numbers align visually.
-        GCodeBox.Document.PagePadding = new Thickness(0);
-        GCodeBox.Document.LineHeight = 24;
-        GCodeBox.Document.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
-
-        GCodeLineNumbersBox.Document.PagePadding = new Thickness(4, 0, 4, 0);
-        GCodeLineNumbersBox.Document.LineHeight = 24;
-        GCodeLineNumbersBox.Document.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
-
         _gcodeScrollViewer = GetDescendantScrollViewer(GCodeBox);
         _lineNumbersScrollViewer = GetDescendantScrollViewer(GCodeLineNumbersBox);
         if (_gcodeScrollViewer != null)
             _gcodeScrollViewer.ScrollChanged += OnGCodeScrollChanged;
-
-        UpdateGCodeEditor();
     }
 
     private void OnGCodeScrollChanged(object? sender, ScrollChangedEventArgs e)
@@ -846,242 +888,11 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             _lineNumbersScrollViewer?.ScrollToVerticalOffset(e.VerticalOffset);
     }
 
-    private void UpdateGCodeEditor()
+    private void UpdateLineNumbers(int lineCount)
     {
-        _isUpdatingGCode = true;
-        try
-        {
-            var plainText = GCodeText;
-            UpdateLineNumbers(plainText);
-            UpdateGCodeHighlighting(plainText);
-        }
-        finally
-        {
-            _isUpdatingGCode = false;
-        }
-    }
-
-    private void SetGCodeText(string text)
-    {
-        var offset = GetTextOffset(GCodeBox.Document.ContentStart, GCodeBox.CaretPosition);
-
-        // Plain-Text zuerst setzen (schnell) — kein Highlighting, blockiert UI nicht
-        _isUpdatingGCode = true;
-        try
-        {
-            GCodeBox.Document.Blocks.Clear();
-            foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
-                GCodeBox.Document.Blocks.Add(new Paragraph(new Run(line))
-                {
-                    Margin = new Thickness(0), Padding = new Thickness(0),
-                    LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-                    LineHeight = 24
-                });
-            UpdateLineNumbers(text);
-        }
-        finally { _isUpdatingGCode = false; }
-
-        var position = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, offset);
-        if (position != null)
-            GCodeBox.CaretPosition = position;
-
-        // Highlighting im Hintergrund nach aktuellem Render-Durchlauf
-        var snapshot = text;
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
-            (Action)(() => UpdateGCodeHighlighting(snapshot)));
-    }
-
-    private void UpdateLineNumbers(string text)
-    {
-        var lineCount = text.Replace("\r\n", "\n").Split('\n').Length;
-        GCodeLineNumbersBox.Document.Blocks.Clear();
-        for (int i = 1; i <= lineCount; i++)
-        {
-            var p = new Paragraph(new Run(i.ToString()))
-            {
-                Margin = new Thickness(0),
-                Padding = new Thickness(0),
-                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-                LineHeight = 24,
-                TextAlignment = TextAlignment.Right
-            };
-            GCodeLineNumbersBox.Document.Blocks.Add(p);
-        }
-    }
-
-    private void PrependGeneratedGCode(string gcode)
-    {
-        var normalized = gcode.Replace("\r\n", "\n").TrimEnd('\n');
-        if (string.IsNullOrEmpty(normalized))
-            return;
-
-        var newLines = normalized.Split('\n');
-
-        _suppressGCodeUiUpdate = true;
-        try
-        {
-            var firstNum = GCodeLineNumbersBox.Document.Blocks.FirstBlock;
-
-            var first = GCodeBox.Document.Blocks.FirstBlock;
-            // Insert in natural order so the first generated line ends up at the very top.
-            for (int i = 0; i < newLines.Length; i++)
-            {
-                var p = CreateHighlightedParagraph(newLines[i]);
-                if (first == null)
-                    GCodeBox.Document.Blocks.Add(p);
-                else
-                    GCodeBox.Document.Blocks.InsertBefore(first, p);
-            }
-
-            // Renumber existing lines first, then prepend the new 1..N numbers.
-            ShiftLineNumbersDown(newLines.Length);
-            for (int n = 1; n <= newLines.Length; n++)
-            {
-                var p = new Paragraph(new Run(n.ToString()))
-                {
-                    Margin = new Thickness(0),
-                    Padding = new Thickness(0),
-                    LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-                    LineHeight = 24,
-                    TextAlignment = TextAlignment.Right
-                };
-
-                if (firstNum == null)
-                    GCodeLineNumbersBox.Document.Blocks.Add(p);
-                else
-                    GCodeLineNumbersBox.Document.Blocks.InsertBefore(firstNum, p);
-            }
-
-            GCodeBox.CaretPosition = GCodeBox.Document.ContentStart;
-            // RichTextBox may auto-scroll to the bottom after large inserts; force view back to the top on next layout pass.
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                _gcodeScrollViewer?.ScrollToHome();
-                _lineNumbersScrollViewer?.ScrollToHome();
-            }), DispatcherPriority.Loaded);
-        }
-        finally
-        {
-            // RichTextBox raises TextChanged after this method returns; keep suppression for that callback too.
-            Dispatcher.BeginInvoke(new Action(() => { _suppressGCodeUiUpdate = false; }), DispatcherPriority.Background);
-        }
-    }
-
-    private void ShiftLineNumbersDown(int delta)
-    {
-        if (delta <= 0)
-            return;
-
-        // Don't mutate paragraph inlines while enumerating Blocks (can throw / destabilize the collection).
-        var paragraphs = GCodeLineNumbersBox.Document.Blocks.OfType<Paragraph>().ToList();
-
-        int idx = delta + 1;
-        foreach (var p in paragraphs)
-        {
-            p.Inlines.Clear();
-            p.Inlines.Add(new Run(idx.ToString()));
-            idx++;
-        }
-    }
-
-    private void UpdateGCodeHighlighting(string text)
-    {
-        _isUpdatingGCode = true;
-        try
-        {
-            var startOffset = GetTextOffset(GCodeBox.Document.ContentStart, GCodeBox.Selection.Start);
-            var endOffset   = GetTextOffset(GCodeBox.Document.ContentStart, GCodeBox.Selection.End);
-
-            GCodeBox.Document.Blocks.Clear();
-            foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
-                GCodeBox.Document.Blocks.Add(CreateHighlightedParagraph(line));
-
-            var startPos = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, startOffset);
-            var endPos   = GetTextPositionAtOffset(GCodeBox.Document.ContentStart, endOffset);
-            if (startPos != null && endPos != null)
-                GCodeBox.Selection.Select(startPos, endPos);
-        }
-        finally { _isUpdatingGCode = false; }
-    }
-
-    private Paragraph CreateHighlightedParagraph(string line)
-    {
-        var paragraph = new Paragraph
-        {
-            Margin = new Thickness(0),
-            Padding = new Thickness(0),
-            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-            LineHeight = 24
-        };
-        if (string.IsNullOrEmpty(line))
-        {
-            //paragraph.Inlines.Add(new Run(" "));
-            return paragraph;
-        }
-
-        var commentIndex = line.IndexOf('(');
-        string codePart = line;
-        string commentPart = string.Empty;
-        if (commentIndex >= 0)
-        {
-            codePart = line.Substring(0, commentIndex);
-            commentPart = line.Substring(commentIndex);
-        }
-
-        foreach (Match match in GCodeTokenRegex.Matches(codePart))
-        {
-            var token = match.Value;
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                paragraph.Inlines.Add(new Run(token));
-                continue;
-            }
-
-            var run = new Run(token);
-            var code = char.ToUpperInvariant(token[0]);
-            if (code == 'G' || code == 'M')
-                run.Foreground = Brushes.DarkBlue;
-            else if (code == 'F')
-                run.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE0, 0x6C, 0x00));
-            else if (code == 'X' || code == 'Y' || code == 'Z' || code == 'I' || code == 'J' || code == 'A' || code == 'S' || code == 'T' || code == 'R')
-                run.Foreground = Brushes.DarkRed;
-            else
-                run.Foreground = Brushes.Black;
-
-            paragraph.Inlines.Add(run);
-        }
-
-        if (!string.IsNullOrEmpty(commentPart))
-            paragraph.Inlines.Add(new Run(commentPart) { Foreground = Brushes.Green });
-
-        return paragraph;
-    }
-
-    private static int GetTextOffset(TextPointer start, TextPointer position)
-    {
-        return new TextRange(start, position).Text.Length;
-    }
-
-    private static TextPointer? GetTextPositionAtOffset(TextPointer start, int offset)
-    {
-        var navigator = start;
-        int remaining = offset;
-        while (navigator != null && remaining > 0)
-        {
-            if (navigator.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.Text)
-            {
-                string textRun = navigator.GetTextInRun(LogicalDirection.Forward);
-                int count = Math.Min(textRun.Length, remaining);
-                navigator = navigator.GetPositionAtOffset(count);
-                remaining -= count;
-            }
-            else
-            {
-                navigator = navigator.GetNextContextPosition(LogicalDirection.Forward);
-            }
-        }
-
-        return navigator;
+        if (lineCount == _lastLineCount) return;
+        _lastLineCount = lineCount;
+        GCodeLineNumbersBox.ItemsSource = Enumerable.Range(1, lineCount).Select(i => i.ToString()).ToArray();
     }
 
     private static ScrollViewer? GetDescendantScrollViewer(DependencyObject element)
@@ -1122,6 +933,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
     private void UpdateAll()
     {
         if (DrawCanvas == null) return;
+        EnsureParsed();
         DrawCanvas.Children.Clear();
         DrawWorkpieces();
         DrawGCodeTopView();
@@ -1343,7 +1155,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 
     private void DrawGCodeTopView()
     {
-        var moves = GCodeParser.ParseTopView(GCodeText);
+        var moves = _cachedTopMoves;
         if (moves.Count == 0 || _topRect.IsEmpty) return;
 
         double wx = WorkX, wy = WorkY;
@@ -1353,61 +1165,84 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
         Point MmToPx(double x, double y) =>
             new(_topRect.Left + x * scale, _topRect.Bottom - y * scale);
 
-        Point? last = null;
+        var cutGeo   = new StreamGeometry();
+        var rapidGeo = new StreamGeometry();
 
-        foreach (var m in moves)
+        using (var cut   = cutGeo.Open())
+        using (var rapid = rapidGeo.Open())
         {
-            if (m.Type is MoveType.Rapid or MoveType.Line)
-            {
-                var cur = MmToPx(m.X, m.Y);
-                if (last.HasValue)
-                    DrawCanvas.Children.Add(MakeLine(last.Value, cur,
-                        m.Type == MoveType.Rapid ? Brushes.Gray : Brushes.Red,
-                        m.Type == MoveType.Rapid));
-                last = cur;
-            }
-            else
-            {
-                double cx = m.X + m.I, cy = m.Y + m.J;
-                double r = Math.Sqrt((m.X - cx) * (m.X - cx) + (m.Y - cy) * (m.Y - cy));
-                if (r == 0) continue;
+            Point? last = null;
 
-                double start = Math.Atan2(m.Y - cy, m.X - cx);
-                double end   = Math.Atan2(m.Ye - cy, m.Xe - cx);
-
-                bool fullCircle = Math.Abs(m.Xe - m.X) < 1e-6 && Math.Abs(m.Ye - m.Y) < 1e-6;
-                if (fullCircle)
-                    end = m.Type == MoveType.ArcCW ? start - 2 * Math.PI : start + 2 * Math.PI;
+            foreach (var m in moves)
+            {
+                if (m.Type is MoveType.Rapid or MoveType.Line)
+                {
+                    var cur = MmToPx(m.X, m.Y);
+                    if (last.HasValue)
+                    {
+                        var ctx = m.Type == MoveType.Rapid ? rapid : cut;
+                        ctx.BeginFigure(last.Value, false, false);
+                        ctx.LineTo(cur, true, false);
+                    }
+                    last = cur;
+                }
                 else
                 {
-                    if (m.Type == MoveType.ArcCW  && end > start) end -= 2 * Math.PI;
-                    if (m.Type == MoveType.ArcCCW && end < start) end += 2 * Math.PI;
-                }
+                    double cx = m.X + m.I, cy = m.Y + m.J;
+                    double r = Math.Sqrt((m.X - cx) * (m.X - cx) + (m.Y - cy) * (m.Y - cy));
+                    if (r == 0) continue;
 
-                int steps = Math.Max(8, (int)(Math.Abs(end - start) / (Math.PI / 36)));
-                var prev = MmToPx(m.X, m.Y);
+                    double start = Math.Atan2(m.Y - cy, m.X - cx);
+                    double end   = Math.Atan2(m.Ye - cy, m.Xe - cx);
 
-                for (int i = 1; i <= steps; i++)
-                {
-                    double angle = start + (end - start) * i / steps;
-                    var cur = MmToPx(cx + r * Math.Cos(angle), cy + r * Math.Sin(angle));
-                    DrawCanvas.Children.Add(MakeLine(prev, cur, Brushes.Red, false));
-                    prev = cur;
+                    bool fullCircle = Math.Abs(m.Xe - m.X) < 1e-6 && Math.Abs(m.Ye - m.Y) < 1e-6;
+                    if (fullCircle)
+                        end = m.Type == MoveType.ArcCW ? start - 2 * Math.PI : start + 2 * Math.PI;
+                    else
+                    {
+                        if (m.Type == MoveType.ArcCW  && end > start) end -= 2 * Math.PI;
+                        if (m.Type == MoveType.ArcCCW && end < start) end += 2 * Math.PI;
+                    }
+
+                    int steps = Math.Max(8, (int)(Math.Abs(end - start) / (Math.PI / 36)));
+                    var prev = MmToPx(m.X, m.Y);
+                    cut.BeginFigure(prev, false, false);
+                    for (int i = 1; i <= steps; i++)
+                    {
+                        double angle = start + (end - start) * i / steps;
+                        var cur = MmToPx(cx + r * Math.Cos(angle), cy + r * Math.Sin(angle));
+                        cut.LineTo(cur, true, false);
+                        prev = cur;
+                    }
+                    last = MmToPx(m.Xe, m.Ye);
                 }
-                last = MmToPx(m.Xe, m.Ye);
             }
         }
 
-        foreach (var hole in GCodeParser.ParseDrillPoints(GCodeText))
+        cutGeo.Freeze();
+        rapidGeo.Freeze();
+
+        var rapidDash = new System.Windows.Media.DoubleCollection { 5, 3 };
+        rapidDash.Freeze();
+        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
+        {
+            Data = rapidGeo, Stroke = Brushes.Gray,
+            StrokeThickness = 2, StrokeDashArray = rapidDash,
+            IsHitTestVisible = false
+        });
+        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
+        {
+            Data = cutGeo, Stroke = Brushes.Red,
+            StrokeThickness = 2, IsHitTestVisible = false
+        });
+
+        foreach (var hole in _cachedDrillPoints)
         {
             var center = MmToPx(hole.X, hole.Y);
             var circle = new Ellipse
             {
-                Width = 12,
-                Height = 12,
-                Fill = Brushes.Yellow,
-                Stroke = Brushes.Black,
-                StrokeThickness = 2
+                Width = 12, Height = 12,
+                Fill = Brushes.Yellow, Stroke = Brushes.Black, StrokeThickness = 2
             };
             Canvas.SetLeft(circle, center.X - circle.Width / 2);
             Canvas.SetTop(circle, center.Y - circle.Height / 2);
@@ -1419,7 +1254,7 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 
     private void DrawGCodeSideView()
     {
-        var moves = GCodeParser.ParseSideView(GCodeText);
+        var moves = _cachedSideMoves;
         if (moves.Count == 0 || _bottomRect.IsEmpty) return;
 
         double wx = WorkX, wz = WorkZ;
@@ -1429,17 +1264,42 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
         Point MmToPx(double x, double z) =>
             new(_bottomRect.Left + x * scale, _bottomRect.Top + (-z) * scale);
 
-        Point? last = null;
+        var cutGeo   = new StreamGeometry();
+        var rapidGeo = new StreamGeometry();
 
-        foreach (var m in moves)
+        using (var cut   = cutGeo.Open())
+        using (var rapid = rapidGeo.Open())
         {
-            var cur = MmToPx(m.X, m.Z);
-            if (last.HasValue)
-                DrawCanvas.Children.Add(MakeLine(last.Value, cur,
-                    m.Cmd == "G0" ? Brushes.Gray : Brushes.Red,
-                    m.Cmd == "G0"));
-            last = cur;
+            Point? last = null;
+            foreach (var m in moves)
+            {
+                var cur = MmToPx(m.X, m.Z);
+                if (last.HasValue)
+                {
+                    var ctx = m.Cmd == "G0" ? rapid : cut;
+                    ctx.BeginFigure(last.Value, false, false);
+                    ctx.LineTo(cur, true, false);
+                }
+                last = cur;
+            }
         }
+
+        cutGeo.Freeze();
+        rapidGeo.Freeze();
+
+        var rapidDash = new System.Windows.Media.DoubleCollection { 5, 3 };
+        rapidDash.Freeze();
+        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
+        {
+            Data = rapidGeo, Stroke = Brushes.Gray,
+            StrokeThickness = 2, StrokeDashArray = rapidDash,
+            IsHitTestVisible = false
+        });
+        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
+        {
+            Data = cutGeo, Stroke = Brushes.Red,
+            StrokeThickness = 2, IsHitTestVisible = false
+        });
     }
 
     // ── Pfad Fräsen zeichnen ─────────────────────────────────────
@@ -1585,6 +1445,12 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 #endif // DrawPfadFräsen + DrawHoverArrows Ende
 
     // ── Hilfsmethode ─────────────────────────────────────────────
+
+    private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsGCodeTabActive())
+            FlushGCodeBox();
+    }
 
     private void OnGCodeAnzeigen(object sender, RoutedEventArgs e)
     {
@@ -1781,6 +1647,12 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
             line.StrokeDashArray = new System.Windows.Media.DoubleCollection { 5, 3 };
         return line;
     }
+}
+
+public sealed class GCodeLine(string text, Brush color)
+{
+    public string Text  { get; } = text;
+    public Brush  Color { get; } = color;
 }
 
 public class Werkzeug
