@@ -392,8 +392,10 @@
                                  Background="{StaticResource BgLightBrush}"
                                  BorderThickness="0"
                                  Padding="4"
-                                 SelectionChanged="OnHistorySelectionChanged"
-                                 PreviewMouseRightButtonDown="OnHistoryRightClick">
+                                 SelectionMode="Extended"
+                                 MouseDoubleClick="OnHistoryDoubleClick"
+                                 PreviewMouseRightButtonDown="OnHistoryRightClick"
+                                 KeyDown="OnHistoryKeyDown">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
                                     <Setter Property="Padding" Value="8,6"/>
@@ -403,6 +405,10 @@
                                     <Style.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter Property="Background" Value="{StaticResource AccentTintBrush}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="Foreground" Value="White"/>
                                         </Trigger>
                                         <DataTrigger Binding="{Binding Level}" Value="1">
                                             <Setter Property="Padding"  Value="24,4,8,4"/>
@@ -426,11 +432,24 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <TextBlock Grid.Row="1"
-                                   Text="Klick = Bearbeiten · Rechtsklick = Kopieren/Löschen"
-                                   FontSize="10" Opacity="0.5"
-                                   HorizontalAlignment="Center"
-                                   Margin="0,4,0,6"/>
+                        <Grid Grid.Row="1" Margin="4,4,4,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="Doppelklick = Bearbeiten · Rechtsklick = Menü"
+                                       FontSize="10" Opacity="0.5"
+                                       VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="4,0,0,0">
+                                <Button Content="↑" Width="26" Height="22" FontSize="12"
+                                        ToolTip="Nach oben (Alt+↑)"
+                                        Click="OnHistoryMoveUp" Margin="0,0,2,0"/>
+                                <Button Content="↓" Width="26" Height="22" FontSize="12"
+                                        ToolTip="Nach unten (Alt+↓)"
+                                        Click="OnHistoryMoveDown"/>
+                            </StackPanel>
+                        </Grid>
                     </Grid>
                 </TabItem>
 

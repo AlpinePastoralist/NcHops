@@ -38,6 +38,8 @@ public partial class MainWindow : Window
     private ScrollViewer? _gcodeScrollViewer;
     private ScrollViewer? _lineNumbersScrollViewer;
     private readonly ObservableCollection<HistoryEntry> _history = [];
+    private readonly List<HistoryEntry> _historyClipboard = [];
+    private bool _suppressHistoryRegen;
     private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
     private bool _suppressSave;
     private int  _lastLineCount = -1;
@@ -129,7 +131,7 @@ Loaded += (_, _) => UpdateAll();
         _refreshTimer.Stop();
 
         HistoryList.ItemsSource = _history;
-        _history.CollectionChanged += (_, _) => RegenerateGCodeFromHistory();
+        _history.CollectionChanged += (_, _) => { if (!_suppressHistoryRegen) RegenerateGCodeFromHistory(); };
         WerkzeugGrid.ItemsSource = _werkzeuge;
         _werkzeuge.CollectionChanged += (_, _) => SaveWerkzeuge();
         LoadWerkzeuge();
@@ -273,11 +275,105 @@ Loaded += (_, _) => UpdateAll();
             $"X={p.XRel} Y={p.YRel}, {p.Bezugspunkt}", p, level: 1));
     }
 
-private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e)
+    // ── Verlauf: Doppelklick → Bearbeiten ───────────────────────
+    private void OnHistoryDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (HistoryList.SelectedItem is not HistoryEntry entry) return;
-        HistoryList.SelectedItem = null;
+        var item = (e.OriginalSource as DependencyObject)?.FindVisualParent<ListBoxItem>();
+        if (item?.DataContext is not HistoryEntry entry) return;
         EditHistoryEntry(entry);
+    }
+
+    // ── Verlauf: Tastatur (Ctrl+C, Ctrl+V, Del, Alt+↑↓) ────────
+    private void OnHistoryKeyDown(object sender, KeyEventArgs e)
+    {
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        bool alt  = (Keyboard.Modifiers & ModifierKeys.Alt)     != 0;
+        if (ctrl && e.Key == Key.C)       { CopySelectedHistory();   e.Handled = true; }
+        else if (ctrl && e.Key == Key.V)  { PasteHistory();          e.Handled = true; }
+        else if (e.Key == Key.Delete)     { DeleteSelectedHistory();  e.Handled = true; }
+        else if (alt  && e.Key == Key.Up)   { MoveSelectedHistoryUp();   e.Handled = true; }
+        else if (alt  && e.Key == Key.Down) { MoveSelectedHistoryDown(); e.Handled = true; }
+    }
+
+    // ── Verlauf: Clipboard ───────────────────────────────────────
+    private void CopySelectedHistory()
+    {
+        _historyClipboard.Clear();
+        _historyClipboard.AddRange(HistoryList.SelectedItems.Cast<HistoryEntry>()
+            .OrderBy(_history.IndexOf));
+    }
+
+    private void PasteHistory()
+    {
+        if (_historyClipboard.Count == 0) return;
+        int insertIdx = HistoryList.SelectedItems.Count > 0
+            ? HistoryList.SelectedItems.Cast<HistoryEntry>().Max(_history.IndexOf)
+            : _history.Count - 1;
+        _suppressHistoryRegen = true;
+        try
+        {
+            for (int i = 0; i < _historyClipboard.Count; i++)
+            {
+                var src = _historyClipboard[i];
+                _history.Insert(insertIdx + 1 + i,
+                    new HistoryEntry(src.Label, src.Details, src.Params, src.Level));
+            }
+        }
+        finally { _suppressHistoryRegen = false; RegenerateGCodeFromHistory(); }
+    }
+
+    private void DeleteSelectedHistory()
+    {
+        var toDelete = HistoryList.SelectedItems.Cast<HistoryEntry>().ToList();
+        _suppressHistoryRegen = true;
+        try { foreach (var e in toDelete) _history.Remove(e); }
+        finally { _suppressHistoryRegen = false; RegenerateGCodeFromHistory(); }
+    }
+
+    // ── Verlauf: Reihenfolge ─────────────────────────────────────
+    private void OnHistoryMoveUp(object sender, RoutedEventArgs e)   => MoveSelectedHistoryUp();
+    private void OnHistoryMoveDown(object sender, RoutedEventArgs e) => MoveSelectedHistoryDown();
+
+    private void MoveSelectedHistoryUp()
+    {
+        var entries = HistoryList.SelectedItems.Cast<HistoryEntry>()
+            .OrderBy(_history.IndexOf).ToList();
+        if (entries.Count == 0) return;
+        _suppressHistoryRegen = true;
+        try
+        {
+            foreach (var entry in entries)
+            {
+                int idx = _history.IndexOf(entry);
+                if (idx > 0) _history.Move(idx, idx - 1);
+            }
+        }
+        finally { _suppressHistoryRegen = false; RegenerateGCodeFromHistory(); }
+        RestoreSelection(entries);
+    }
+
+    private void MoveSelectedHistoryDown()
+    {
+        var entries = HistoryList.SelectedItems.Cast<HistoryEntry>()
+            .OrderByDescending(_history.IndexOf).ToList();
+        if (entries.Count == 0) return;
+        _suppressHistoryRegen = true;
+        try
+        {
+            foreach (var entry in entries)
+            {
+                int idx = _history.IndexOf(entry);
+                if (idx < _history.Count - 1) _history.Move(idx, idx + 1);
+            }
+        }
+        finally { _suppressHistoryRegen = false; RegenerateGCodeFromHistory(); }
+        RestoreSelection(entries);
+    }
+
+    private void RestoreSelection(IEnumerable<HistoryEntry> entries)
+    {
+        HistoryList.SelectedItems.Clear();
+        foreach (var e in entries) HistoryList.SelectedItems.Add(e);
     }
 
     private void EditHistoryEntry(HistoryEntry entry)
@@ -358,23 +454,40 @@ private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs 
 
     private void OnHistoryRightClick(object sender, MouseButtonEventArgs e)
     {
-        var item = (e.OriginalSource as DependencyObject)
-            ?.FindVisualParent<ListBoxItem>();
-        if (item?.DataContext is not HistoryEntry entry) return;
+        var item = (e.OriginalSource as DependencyObject)?.FindVisualParent<ListBoxItem>();
+        if (item == null) return;
+        e.Handled = true;
 
-        e.Handled = true; // Selektion durch Rechtsklick unterdrücken
+        // Angeklicktes Element selektieren falls noch nicht in der Auswahl
+        if (item.DataContext is HistoryEntry clicked && !HistoryList.SelectedItems.Contains(clicked))
+        {
+            HistoryList.SelectedItems.Clear();
+            HistoryList.SelectedItems.Add(clicked);
+        }
+
+        int n = HistoryList.SelectedItems.Count;
+        if (n == 0) return;
+        string nStr = n == 1 ? "Eintrag" : $"{n} Einträge";
 
         var cm = new ContextMenu();
-        var miCopy = new MenuItem { Header = "Kopieren" };
-        miCopy.Click += (_, _) =>
-        {
-            int idx = _history.IndexOf(entry);
-            _history.Insert(idx + 1, new HistoryEntry(entry.Label, entry.Details, entry.Params));
-        };
-        var miDelete = new MenuItem { Header = "Löschen" };
-        miDelete.Click += (_, _) => _history.Remove(entry);
+        var miCopy   = new MenuItem { Header = $"{nStr} kopieren (Ctrl+C)" };
+        miCopy.Click += (_, _) => CopySelectedHistory();
+        var miPaste  = new MenuItem { Header = "Einfügen (Ctrl+V)", IsEnabled = _historyClipboard.Count > 0 };
+        miPaste.Click += (_, _) => PasteHistory();
+        var miUp     = new MenuItem { Header = $"{nStr} nach oben (Alt+↑)" };
+        miUp.Click   += (_, _) => MoveSelectedHistoryUp();
+        var miDown   = new MenuItem { Header = $"{nStr} nach unten (Alt+↓)" };
+        miDown.Click += (_, _) => MoveSelectedHistoryDown();
+        var miDel    = new MenuItem { Header = $"{nStr} löschen (Del)" };
+        miDel.Click  += (_, _) => DeleteSelectedHistory();
+
         cm.Items.Add(miCopy);
-        cm.Items.Add(miDelete);
+        cm.Items.Add(miPaste);
+        cm.Items.Add(new Separator());
+        cm.Items.Add(miUp);
+        cm.Items.Add(miDown);
+        cm.Items.Add(new Separator());
+        cm.Items.Add(miDel);
         item.ContextMenu = cm;
         item.ContextMenu.IsOpen = true;
     }
