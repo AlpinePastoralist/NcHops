@@ -286,13 +286,15 @@ Loaded += (_, _) => UpdateAll();
     // ── Verlauf: Tastatur (Ctrl+C, Ctrl+V, Del, Alt+↑↓) ────────
     private void OnHistoryKeyDown(object sender, KeyEventArgs e)
     {
+        // Bei gedrücktem Alt liefert WPF e.Key == Key.System; der echte Key steckt in e.SystemKey
+        var key  = e.Key == Key.System ? e.SystemKey : e.Key;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         bool alt  = (Keyboard.Modifiers & ModifierKeys.Alt)     != 0;
-        if (ctrl && e.Key == Key.C)       { CopySelectedHistory();   e.Handled = true; }
-        else if (ctrl && e.Key == Key.V)  { PasteHistory();          e.Handled = true; }
-        else if (e.Key == Key.Delete)     { DeleteSelectedHistory();  e.Handled = true; }
-        else if (alt  && e.Key == Key.Up)   { MoveSelectedHistoryUp();   e.Handled = true; }
-        else if (alt  && e.Key == Key.Down) { MoveSelectedHistoryDown(); e.Handled = true; }
+        if      (ctrl && key == Key.C)    { CopySelectedHistory();    e.Handled = true; }
+        else if (ctrl && key == Key.V)    { PasteHistory();           e.Handled = true; }
+        else if (key == Key.Delete)       { DeleteSelectedHistory();  e.Handled = true; }
+        else if (alt  && key == Key.Up)   { MoveSelectedHistoryUp();  e.Handled = true; }
+        else if (alt  && key == Key.Down) { MoveSelectedHistoryDown(); e.Handled = true; }
     }
 
     // ── Verlauf: Clipboard ───────────────────────────────────────
