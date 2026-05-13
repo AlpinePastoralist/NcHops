@@ -395,7 +395,7 @@
                                  SelectionMode="Extended"
                                  MouseDoubleClick="OnHistoryDoubleClick"
                                  PreviewMouseRightButtonDown="OnHistoryRightClick"
-                                 KeyDown="OnHistoryKeyDown">
+                                 PreviewKeyDown="OnHistoryKeyDown">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
                                     <Setter Property="Padding" Value="8,6"/>
