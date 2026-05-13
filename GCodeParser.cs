@@ -119,8 +119,10 @@ public static class GCodeParser
 
     public static List<SideMove> ParseSideView(string text)
     {
-        var moves = new List<SideMove>();
-        double x = 0, z = 0;
+        var moves  = new List<SideMove>();
+        var inv    = System.Globalization.CultureInfo.InvariantCulture;
+        var style  = System.Globalization.NumberStyles.Float;
+        double x = 0, y = 0, z = 0;
 
         foreach (var raw in text.Split('\n'))
         {
@@ -128,19 +130,63 @@ public static class GCodeParser
             if (string.IsNullOrEmpty(line)) continue;
 
             string? cmd = null;
+            double? nx = null, ny = null, nz = null, ni = null, nj = null;
+
             foreach (var part in line.Split(' '))
             {
                 var up = part.ToUpper();
-                if (up.StartsWith("G00") || up == "G0") cmd = "G0";
+                if      (up.StartsWith("G00") || up == "G0") cmd = "G0";
                 else if (up.StartsWith("G01") || up == "G1") cmd = "G1";
                 else if (up.StartsWith("G02") || up == "G2") cmd = "G2";
                 else if (up.StartsWith("G03") || up == "G3") cmd = "G3";
-                else if (up.StartsWith("X")) double.TryParse(up[1..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out x);
-                else if (up.StartsWith("Z")) double.TryParse(up[1..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out z);
+                else if (up.StartsWith("X") && double.TryParse(up[1..], style, inv, out var vx)) nx = vx;
+                else if (up.StartsWith("Y") && double.TryParse(up[1..], style, inv, out var vy)) ny = vy;
+                else if (up.StartsWith("Z") && double.TryParse(up[1..], style, inv, out var vz)) nz = vz;
+                else if (up.StartsWith("I") && double.TryParse(up[1..], style, inv, out var vi)) ni = vi;
+                else if (up.StartsWith("J") && double.TryParse(up[1..], style, inv, out var vj)) nj = vj;
             }
 
-            if (cmd != null)
+            if (cmd == null) continue;
+
+            if (cmd is "G2" or "G3" && (ni.HasValue || nj.HasValue))
+            {
+                // Bogen: X-Verlauf approximieren (zeigt z.B. Vollkreise korrekt in der Seitenansicht)
+                double xe = nx ?? x, ye = ny ?? y, ze = nz ?? z;
+                double cx = x + (ni ?? 0), cy = y + (nj ?? 0);
+                double r  = Math.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+
+                if (r > 1e-9)
+                {
+                    double startA = Math.Atan2(y - cy, x - cx);
+                    double endA   = Math.Atan2(ye - cy, xe - cx);
+                    bool cw = cmd == "G2";
+                    bool full = Math.Abs(xe - x) < 1e-6 && Math.Abs(ye - y) < 1e-6;
+                    if (full)
+                        endA = cw ? startA - 2 * Math.PI : startA + 2 * Math.PI;
+                    else
+                    {
+                        if ( cw && endA > startA) endA -= 2 * Math.PI;
+                        if (!cw && endA < startA) endA += 2 * Math.PI;
+                    }
+
+                    int steps = Math.Max(4, (int)(Math.Abs(endA - startA) / (Math.PI / 18)));
+                    for (int s = 1; s <= steps; s++)
+                    {
+                        double a  = startA + (endA - startA) * s / steps;
+                        double xi = cx + r * Math.Cos(a);
+                        double zi = z + (ze - z) * s / steps;
+                        moves.Add(new SideMove("G1", xi, zi));
+                    }
+                }
+                x = xe; y = ye; z = ze;
+            }
+            else
+            {
+                if (nx.HasValue) x = nx.Value;
+                if (ny.HasValue) y = ny.Value;
+                if (nz.HasValue) z = nz.Value;
                 moves.Add(new SideMove(cmd, x, z));
+            }
         }
         return moves;
     }
