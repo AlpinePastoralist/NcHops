@@ -5,7 +5,10 @@ namespace NCHops;
 
 public static class GCodeGenerator
 {
+    public static double SafeZ { get; set; } = 5.0;
+
     private static string F(double v) => v.ToString("F4", CultureInfo.InvariantCulture);
+    private static string Sz() => $"G00 Z{F(SafeZ)}";
 
     public static string Planfräsen(PlanfräsenParams p)
     {
@@ -15,7 +18,7 @@ public static class GCodeGenerator
         sb.AppendLine("(planfräser)");
         sb.AppendLine();
         sb.AppendLine($"M03 S{p.Drehzahl}");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine();
         sb.AppendLine($"G00 X{F(p.X0)} Y{F(p.Y0)}");
         sb.AppendLine($"G01 Z{F(p.Z)} F{(int)p.VorschubFz}");
@@ -58,7 +61,7 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine();
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
     }
@@ -68,7 +71,7 @@ public static class GCodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("(Bohrung)");
         sb.AppendLine($"(D={p.Durchmesser}, Bezug={p.Bezugspunkt})");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
 
         var (x, y) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
         sb.AppendLine($"G00 X{F(x)} Y{F(y)}");
@@ -80,7 +83,7 @@ public static class GCodeGenerator
         {
             currentZ = Math.Max(zDepth, currentZ - zStep);
             sb.AppendLine($"G01 Z{F(currentZ)} F{(int)p.VorschubFz}");
-            sb.AppendLine("G00 Z5.0000");
+            sb.AppendLine(Sz());
         }
 
         sb.AppendLine("M05");
@@ -97,7 +100,7 @@ public static class GCodeGenerator
         sb.AppendLine($"(D={p.Diameter})");
         sb.AppendLine($"(Bohrtiefe={p.Bohrtiefe})");
         sb.AppendLine($"(Zustellung={p.Zustellung})");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
 
         var depth = -Math.Abs(p.Bohrtiefe);
         var step = Math.Abs(p.Zustellung);
@@ -115,7 +118,7 @@ public static class GCodeGenerator
                 {
                     currentZ = Math.Max(depth, currentZ - step);
                     sb.AppendLine($"G01 Z{F(currentZ)} F{(int)p.VorschubFz}");
-                    sb.AppendLine("G00 Z5.0000");
+                    sb.AppendLine(Sz());
                 }
             }
         }
@@ -171,7 +174,7 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine($"M03 S{p.Drehzahl}");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
 
         double depth = -Math.Abs(p.ZTiefe);
         double zStep = Math.Abs(p.ZZustellung);
@@ -211,13 +214,13 @@ public static class GCodeGenerator
 
             if (curZ > depth)
             {
-                sb.AppendLine("G00 Z1.0000");
+                sb.AppendLine(Sz());
                 sb.AppendLine($"G00 X{F(zx0)} Y{F(zy0)}");
             }
         }
 
         // Schlichten: Konturfahrt im Gegenlauf (Uhrzeigersinn) auf voller Tiefe
-        sb.AppendLine("G00 Z1.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
         sb.AppendLine($"G01 Z{F(depth)} F{(int)p.VorschubFz}");
         sb.AppendLine($"G01 X{F(ix1)} Y{F(iy0)} F{(int)p.Vorschub}");
@@ -225,7 +228,7 @@ public static class GCodeGenerator
         sb.AppendLine($"G01 X{F(ix0)} Y{F(iy1)} F{(int)p.Vorschub}");
         sb.AppendLine($"G01 X{F(ix0)} Y{F(iy0)} F{(int)p.Vorschub}");
 
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
     }
@@ -254,7 +257,7 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine($"M03 S{p.Drehzahl}");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
 
         double depth     = -Math.Abs(p.ZTiefe);
         double zStep     = Math.Abs(p.ZZustellung);
@@ -324,12 +327,12 @@ public static class GCodeGenerator
         }
 
         // Schlichten: voller Radius im Gegenlauf (G02 = CW = rechts herum)
-        sb.AppendLine("G00 Z1.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(cx + Rm)} Y{F(cy)}");
         sb.AppendLine($"G01 Z{F(depth)} F{(int)p.VorschubFz}");
         sb.AppendLine($"G02 X{F(cx + Rm)} Y{F(cy)} I{F(-Rm)} J0 F{(int)p.Vorschub}");
 
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
     }
@@ -346,7 +349,7 @@ public static class GCodeGenerator
         sb.AppendLine($"(Drehzahl={p.Drehzahl})");
         sb.AppendLine($"(Fräsrichtung={p.Direction})");
         sb.AppendLine($"M03 S{p.Drehzahl}");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
 
         var toolOffset = p.Diameter / 2.0;
         var effectiveA = p.A + toolOffset;
@@ -648,7 +651,7 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine($"{exitArcCmd} X{F(exitX)} Y{F(exitY)} I{F(exitI)} J{F(exitJ)} F{(int)p.VorschubFxy}");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
     }
@@ -736,7 +739,7 @@ public static class GCodeGenerator
         sb.AppendLine($"(D={p.FraeserD}, Seite={p.Seite})");
         sb.AppendLine();
         sb.AppendLine($"M03 S{p.Drehzahl}");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
 
         double radius = p.FraeserD / 2.0;
         double offset = p.Seite switch
@@ -763,12 +766,12 @@ public static class GCodeGenerator
 
             if (currentZ > depth)
             {
-                sb.AppendLine("G00 Z1.0000");
+                sb.AppendLine(Sz());
                 sb.AppendLine($"G00 X{F(start.X)} Y{F(start.Y)}");
             }
         }
 
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
     }
@@ -803,15 +806,22 @@ public static class GCodeGenerator
         // Corner rounding: Startpunkt-R als globaler Fallback, Einzelpunkte können überschreiben
         double globalR = sp.Verrundung;
         var verrundungen = path.Select(p => p.Verrundung > 1e-10 ? p.Verrundung : globalR).ToList();
-        if (verrundungen.Any(v => v > 1e-10) && uniquePts.Count >= 3)
-            uniquePts = ApplyCornerRounding(uniquePts, verrundungen, closed);
+        bool hasRounding = verrundungen.Any(v => v > 1e-10);
 
         List<PathMove> moves;
         if (corr && r > 1e-10 && uniquePts.Count >= 2)
         {
             moves = closed
-                ? ComputeClosedOffsetMoves(uniquePts, r, sg)
-                : ComputeOffsetMoves(uniquePts, r, sg);
+                ? ComputeClosedOffsetMoves(uniquePts, r, sg, verrundungen)
+                : ComputeOffsetMoves(uniquePts, r, sg, verrundungen);
+        }
+        else if (hasRounding && uniquePts.Count >= 3)
+        {
+            // Mittig mit Verrundung: Offset = 0, Bögen direkt in Werkstückpfad
+            moves = closed
+                ? ComputeClosedOffsetMoves(uniquePts, 0, 1, verrundungen)
+                : ComputeOffsetMoves(uniquePts, 0, 1, verrundungen);
+            if (closed && moves.Count > 0) moves.Add(moves[0]);
         }
         else
         {
@@ -822,7 +832,7 @@ public static class GCodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("(Pfad Fräsen)");
         sb.AppendLine($"M03 S{(int)sp.Drehzahl}");
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
 
         double zStep = Math.Abs(sp.ZZustellung);
@@ -843,12 +853,12 @@ public static class GCodeGenerator
 
             if (curZ > z)
             {
-                sb.AppendLine("G00 Z1.0000");
+                sb.AppendLine(Sz());
                 sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
             }
         }
 
-        sb.AppendLine("G00 Z5.0000");
+        sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
     }
@@ -893,12 +903,12 @@ public static class GCodeGenerator
 
             double dot   = Math.Clamp(d1.x * d2.x + d1.y * d2.y, -1.0, 1.0);
             double theta = Math.Acos(dot);                 // Winkel zwischen den Richtungen
-            double t     = R / Math.Tan(theta / 2.0);     // Rückschnitt auf dem Segment
+            double t     = R * Math.Tan(theta / 2.0);     // Rückschnitt auf dem Segment
 
             // Sicherstellen, dass der Bogen in den Segmenten passt
             t = Math.Min(t, lenA * 0.45);
             t = Math.Min(t, lenB * 0.45);
-            double Reff = t * Math.Tan(theta / 2.0);      // effektiver Radius nach Kürzung
+            double Reff = t / Math.Tan(theta / 2.0);      // effektiver Radius nach Kürzung
 
             double psx = b.x - t * d1.x, psy = b.y - t * d1.y; // Bogenbeginn
             double pex = b.x + t * d2.x, pey = b.y + t * d2.y; // Bogenende
@@ -932,7 +942,7 @@ public static class GCodeGenerator
 
     // Offset für offenen Pfad
     private static List<PathMove> ComputeOffsetMoves(
-        List<(double x, double y)> pts, double r, double sign)
+        List<(double x, double y)> pts, double r, double sign, List<double>? verrundungen = null)
     {
         int n = pts.Count;
         var dir = new (double x, double y)[n - 1];
@@ -954,23 +964,70 @@ public static class GCodeGenerator
             else
             {
                 double cross = dir[i].x * dir[i + 1].y - dir[i].y * dir[i + 1].x;
-                bool isConvex = (sign > 0 ? cross < 0 : cross > 0) && Math.Abs(cross) > 0.01;
-                if (isConvex)
+                double R = verrundungen != null && i + 1 < verrundungen.Count ? verrundungen[i + 1] : 0;
+
+                if (R > 1e-10 && Math.Abs(cross) > 1e-9)
                 {
-                    double ax = pts[i + 1].x + nrm[i + 1].x * r;
-                    double ay = pts[i + 1].y + nrm[i + 1].y * r;
-                    result.Add(new PathMove(bx, by));
-                    result.Add(new PathMove(ax, ay, IsArc: true,
-                        I: pts[i + 1].x - bx, J: pts[i + 1].y - by, CW: sign > 0));
+                    // Verrundeter Eckpunkt: G2/G3-Bogen direkt im Offset-Pfad
+                    double dot   = Math.Clamp(dir[i].x * dir[i + 1].x + dir[i].y * dir[i + 1].y, -1.0, 1.0);
+                    double theta = Math.Acos(dot);
+                    double lenA  = Math.Sqrt(Math.Pow(pts[i + 1].x - pts[i    ].x, 2) + Math.Pow(pts[i + 1].y - pts[i    ].y, 2));
+                    double lenB  = Math.Sqrt(Math.Pow(pts[i + 2].x - pts[i + 1].x, 2) + Math.Pow(pts[i + 2].y - pts[i + 1].y, 2));
+                    double t     = R * Math.Tan(theta / 2.0);
+                    t = Math.Min(t, lenA * 0.45);
+                    t = Math.Min(t, lenB * 0.45);
+                    double Reff = t / Math.Tan(theta / 2.0);
+
+                    // Kürzungspunkte auf dem Originalpfad
+                    double psx = pts[i + 1].x - t * dir[i    ].x, psy = pts[i + 1].y - t * dir[i    ].y;
+                    double pex = pts[i + 1].x + t * dir[i + 1].x, pey = pts[i + 1].y + t * dir[i + 1].y;
+
+                    // Offset der Kürzungspunkte
+                    double psxo = psx + nrm[i    ].x * r, psyo = psy + nrm[i    ].y * r;
+                    double pexo = pex + nrm[i + 1].x * r, peyo = pey + nrm[i + 1].y * r;
+
+                    // Bogenmittelpunkt (Werkstückpfad, senkrecht zur Eingangsrichtung, zur Kurveninnenseite)
+                    double sgn_turn = cross > 0 ? 1.0 : -1.0;
+                    double cx = psx + Reff * (-dir[i].y * sgn_turn);
+                    double cy = psy + Reff * ( dir[i].x * sgn_turn);
+
+                    // Werkzeugbahn-Bogenradius: r_off = Reff - sgn_turn * sign * r
+                    double r_off = Reff - sgn_turn * sign * r;
+
+                    if (r_off > 1e-6)
+                    {
+                        result.Add(new PathMove(psxo, psyo));
+                        result.Add(new PathMove(pexo, peyo, IsArc: true,
+                            I: cx - psxo, J: cy - psyo, CW: sgn_turn < 0));
+                    }
+                    else
+                    {
+                        // Werkzeugradius zu groß: Schnittpunkt-Fallback
+                        double a0x = pts[i    ].x + nrm[i    ].x * r, a0y = pts[i    ].y + nrm[i    ].y * r;
+                        double a1x = pts[i + 1].x + nrm[i + 1].x * r, a1y = pts[i + 1].y + nrm[i + 1].y * r;
+                        var inter = LineIntersect((a0x, a0y), dir[i], (a1x, a1y), dir[i + 1]);
+                        result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+                    }
                 }
                 else
                 {
-                    double a0x = pts[i].x     + nrm[i].x     * r;
-                    double a0y = pts[i].y     + nrm[i].y     * r;
-                    double a1x = pts[i + 1].x + nrm[i + 1].x * r;
-                    double a1y = pts[i + 1].y + nrm[i + 1].y * r;
-                    var inter = LineIntersect((a0x, a0y), dir[i], (a1x, a1y), dir[i + 1]);
-                    result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+                    // Scharfe Ecke (original)
+                    bool isConvex = r > 1e-10 && (sign > 0 ? cross < 0 : cross > 0) && Math.Abs(cross) > 0.01;
+                    if (isConvex)
+                    {
+                        double ax = pts[i + 1].x + nrm[i + 1].x * r;
+                        double ay = pts[i + 1].y + nrm[i + 1].y * r;
+                        result.Add(new PathMove(bx, by));
+                        result.Add(new PathMove(ax, ay, IsArc: true,
+                            I: pts[i + 1].x - bx, J: pts[i + 1].y - by, CW: sign > 0));
+                    }
+                    else
+                    {
+                        double a0x = pts[i    ].x + nrm[i    ].x * r, a0y = pts[i    ].y + nrm[i    ].y * r;
+                        double a1x = pts[i + 1].x + nrm[i + 1].x * r, a1y = pts[i + 1].y + nrm[i + 1].y * r;
+                        var inter = LineIntersect((a0x, a0y), dir[i], (a1x, a1y), dir[i + 1]);
+                        result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+                    }
                 }
             }
         }
@@ -979,7 +1036,7 @@ public static class GCodeGenerator
 
     // Offset für geschlossenen Pfad (pts: m eindeutige Punkte, kein Duplikat am Ende)
     private static List<PathMove> ComputeClosedOffsetMoves(
-        List<(double x, double y)> pts, double r, double sign)
+        List<(double x, double y)> pts, double r, double sign, List<double>? verrundungen = null)
     {
         int m = pts.Count;
         var dir = new (double x, double y)[m];
@@ -988,30 +1045,73 @@ public static class GCodeGenerator
 
         // Startpunkt = Ecke bei pts[0] (Übergang von Segment[m-1] zu Segment[0])
         double cross0 = dir[m - 1].x * dir[0].y - dir[m - 1].y * dir[0].x;
-        bool conv0    = (sign > 0 ? cross0 < 0 : cross0 > 0) && Math.Abs(cross0) > 0.01;
-
-        double a0x = pts[0].x + nrm[0].x * r, a0y = pts[0].y + nrm[0].y * r;
-        double bm_x = pts[0].x + nrm[m - 1].x * r, bm_y = pts[0].y + nrm[m - 1].y * r;
+        double R0     = verrundungen != null && verrundungen.Count > 0 ? verrundungen[0] : 0;
+        double a0x    = pts[0].x + nrm[0    ].x * r, a0y = pts[0].y + nrm[0    ].y * r;
+        double bm_x   = pts[0].x + nrm[m - 1].x * r, bm_y = pts[0].y + nrm[m - 1].y * r;
 
         PathMove startPt;
         PathMove[] closingMoves;
-        if (conv0)
+
+        if (R0 > 1e-10 && Math.Abs(cross0) > 1e-9)
         {
-            // Aussenecke: Startpunkt = A[0], Schluss = G01 zu B[m-1] + Bogen zu A[0]
-            startPt = new PathMove(a0x, a0y);
-            closingMoves = [
-                new PathMove(bm_x, bm_y),
-                new PathMove(a0x, a0y, IsArc: true,
-                    I: pts[0].x - bm_x, J: pts[0].y - bm_y, CW: sign > 0)
-            ];
+            // Verrundete Ecke an pts[0]
+            double dot0   = Math.Clamp(dir[m-1].x*dir[0].x + dir[m-1].y*dir[0].y, -1.0, 1.0);
+            double theta0 = Math.Acos(dot0);
+            double lenA0  = Math.Sqrt(Math.Pow(pts[0].x-pts[m-1].x,2)+Math.Pow(pts[0].y-pts[m-1].y,2));
+            double lenB0  = Math.Sqrt(Math.Pow(pts[1].x-pts[0  ].x,2)+Math.Pow(pts[1].y-pts[0  ].y,2));
+            double t0     = R0 / Math.Tan(theta0 / 2.0);
+            t0 = Math.Min(t0, lenA0 * 0.45);
+            t0 = Math.Min(t0, lenB0 * 0.45);
+            double Reff0 = t0 * Math.Tan(theta0 / 2.0);
+
+            double psx0 = pts[0].x - t0 * dir[m-1].x, psy0 = pts[0].y - t0 * dir[m-1].y; // Kürzung Eingang
+            double pex0 = pts[0].x + t0 * dir[0    ].x, pey0 = pts[0].y + t0 * dir[0  ].y; // Kürzung Ausgang
+
+            double psxo0 = psx0 + nrm[m-1].x * r, psyo0 = psy0 + nrm[m-1].y * r;
+            double pexo0 = pex0 + nrm[0    ].x * r, peyo0 = pey0 + nrm[0  ].y * r;
+
+            double sgn0  = cross0 > 0 ? 1.0 : -1.0;
+            double cxw0  = psx0 + Reff0 * (-dir[m-1].y * sgn0);
+            double cyw0  = psy0 + Reff0 * ( dir[m-1].x * sgn0);
+            double roff0 = Reff0 - sgn0 * sign * r;
+
+            startPt = new PathMove(pexo0, peyo0);
+            if (roff0 > 1e-6)
+            {
+                closingMoves = [
+                    new PathMove(psxo0, psyo0),
+                    new PathMove(pexo0, peyo0, IsArc: true,
+                        I: cxw0 - psxo0, J: cyw0 - psyo0, CW: sgn0 < 0)
+                ];
+            }
+            else
+            {
+                double sx = pts[m-1].x + nrm[m-1].x * r, sy = pts[m-1].y + nrm[m-1].y * r;
+                var int0 = LineIntersect((sx, sy), dir[m-1], (a0x, a0y), dir[0]);
+                startPt = int0.HasValue ? new PathMove(int0.Value.x, int0.Value.y) : new PathMove(a0x, a0y);
+                closingMoves = [startPt];
+            }
         }
         else
         {
-            // Innenecke: Schnittpunkt der Offset-Linien von Segment[m-1] und Segment[0]
-            double sx = pts[m - 1].x + nrm[m - 1].x * r, sy = pts[m - 1].y + nrm[m - 1].y * r;
-            var inter = LineIntersect((sx, sy), dir[m - 1], (a0x, a0y), dir[0]);
-            startPt = inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(a0x, a0y);
-            closingMoves = [startPt]; // Pfad schliesst zum selben Punkt
+            // Scharfe Ecke an pts[0]
+            bool conv0 = r > 1e-10 && (sign > 0 ? cross0 < 0 : cross0 > 0) && Math.Abs(cross0) > 0.01;
+            if (conv0)
+            {
+                startPt = new PathMove(a0x, a0y);
+                closingMoves = [
+                    new PathMove(bm_x, bm_y),
+                    new PathMove(a0x, a0y, IsArc: true,
+                        I: pts[0].x - bm_x, J: pts[0].y - bm_y, CW: sign > 0)
+                ];
+            }
+            else
+            {
+                double sx = pts[m - 1].x + nrm[m - 1].x * r, sy = pts[m - 1].y + nrm[m - 1].y * r;
+                var inter = LineIntersect((sx, sy), dir[m - 1], (a0x, a0y), dir[0]);
+                startPt = inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(a0x, a0y);
+                closingMoves = [startPt];
+            }
         }
 
         var result = new List<PathMove> { startPt };
@@ -1019,22 +1119,65 @@ public static class GCodeGenerator
         // Ecken bei pts[1..m-1]
         for (int i = 1; i < m; i++)
         {
-            int prev = i - 1;
-            double bx = pts[i].x + nrm[prev].x * r, by = pts[i].y + nrm[prev].y * r;
-            double ax = pts[i].x + nrm[i].x    * r, ay = pts[i].y + nrm[i].y    * r;
-            double cr = dir[prev].x * dir[i].y - dir[prev].y * dir[i].x;
-            bool conv = (sign > 0 ? cr < 0 : cr > 0) && Math.Abs(cr) > 0.01;
-            if (conv)
+            int prev   = i - 1;
+            int nextSeg = i % m; // Richtungsindex des ausgehenden Segments
+            double bx  = pts[i].x + nrm[prev   ].x * r, by = pts[i].y + nrm[prev   ].y * r;
+            double ax  = pts[i].x + nrm[nextSeg ].x * r, ay = pts[i].y + nrm[nextSeg].y * r;
+            double cr  = dir[prev].x * dir[nextSeg].y - dir[prev].y * dir[nextSeg].x;
+            double R   = verrundungen != null && i < verrundungen.Count ? verrundungen[i] : 0;
+
+            if (R > 1e-10 && Math.Abs(cr) > 1e-9)
             {
-                result.Add(new PathMove(bx, by));
-                result.Add(new PathMove(ax, ay, IsArc: true,
-                    I: pts[i].x - bx, J: pts[i].y - by, CW: sign > 0));
+                double dot   = Math.Clamp(dir[prev].x*dir[nextSeg].x + dir[prev].y*dir[nextSeg].y, -1.0, 1.0);
+                double theta = Math.Acos(dot);
+                int    ni    = (i + 1) % m;
+                double lenA  = Math.Sqrt(Math.Pow(pts[i].x-pts[prev].x,2)+Math.Pow(pts[i].y-pts[prev].y,2));
+                double lenB  = Math.Sqrt(Math.Pow(pts[ni ].x-pts[i  ].x,2)+Math.Pow(pts[ni ].y-pts[i  ].y,2));
+                double t     = R * Math.Tan(theta / 2.0);
+                t = Math.Min(t, lenA * 0.45);
+                t = Math.Min(t, lenB * 0.45);
+                double Reff = t / Math.Tan(theta / 2.0);
+
+                double psx = pts[i].x - t * dir[prev   ].x, psy = pts[i].y - t * dir[prev   ].y;
+                double pex = pts[i].x + t * dir[nextSeg].x, pey = pts[i].y + t * dir[nextSeg].y;
+
+                double psxo = psx + nrm[prev   ].x * r, psyo = psy + nrm[prev   ].y * r;
+                double pexo = pex + nrm[nextSeg ].x * r, peyo = pey + nrm[nextSeg].y * r;
+
+                double sgn_turn = cr > 0 ? 1.0 : -1.0;
+                double cx  = psx + Reff * (-dir[prev].y * sgn_turn);
+                double cy  = psy + Reff * ( dir[prev].x * sgn_turn);
+                double roff = Reff - sgn_turn * sign * r;
+
+                if (roff > 1e-6)
+                {
+                    result.Add(new PathMove(psxo, psyo));
+                    result.Add(new PathMove(pexo, peyo, IsArc: true,
+                        I: cx - psxo, J: cy - psyo, CW: sgn_turn < 0));
+                }
+                else
+                {
+                    double p0x = pts[prev].x + nrm[prev   ].x * r, p0y = pts[prev].y + nrm[prev   ].y * r;
+                    var inter = LineIntersect((p0x, p0y), dir[prev], (ax, ay), dir[nextSeg]);
+                    result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+                }
             }
             else
             {
-                double p0x = pts[prev].x + nrm[prev].x * r, p0y = pts[prev].y + nrm[prev].y * r;
-                var inter = LineIntersect((p0x, p0y), dir[prev], (ax, ay), dir[i]);
-                result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+                // Scharfe Ecke (original)
+                bool conv = r > 1e-10 && (sign > 0 ? cr < 0 : cr > 0) && Math.Abs(cr) > 0.01;
+                if (conv)
+                {
+                    result.Add(new PathMove(bx, by));
+                    result.Add(new PathMove(ax, ay, IsArc: true,
+                        I: pts[i].x - bx, J: pts[i].y - by, CW: sign > 0));
+                }
+                else
+                {
+                    double p0x = pts[prev].x + nrm[prev   ].x * r, p0y = pts[prev].y + nrm[prev   ].y * r;
+                    var inter = LineIntersect((p0x, p0y), dir[prev], (ax, ay), dir[nextSeg]);
+                    result.Add(inter.HasValue ? new PathMove(inter.Value.x, inter.Value.y) : new PathMove(bx, by));
+                }
             }
         }
 
