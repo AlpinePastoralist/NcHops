@@ -106,4 +106,5 @@ public enum PfadPunktTyp { Start, Punkt }
 public record PfadPunktParams(
     double XRel, double YRel, double ZTiefe, double ZZustellung,
     double FraeserD, double Drehzahl, double Vorschub, double VorschubFz,
-    string Radiuskorrektur, string Bezugspunkt, PfadPunktTyp Typ);
+    string Radiuskorrektur, string Bezugspunkt, PfadPunktTyp Typ,
+    double Verrundung = 0);

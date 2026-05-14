@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:local="clr-namespace:NCHops"
+        xmlns:avalon="http://icsharpcode.net/sharpdevelop/avalonedit"
         Title="NC Studio" WindowState="Maximized"
         Width="1200" Height="700"
         Icon="icon.ico"
@@ -170,39 +171,138 @@
                         </MultiTrigger>
                     </Style.Triggers>
                 </Style>
+                <!-- Basis-Style für alle Menü-Icons -->
+                <Style x:Key="MI" TargetType="TextBlock">
+                    <Setter Property="FontSize"            Value="13"/>
+                    <Setter Property="Width"               Value="16"/>
+                    <Setter Property="TextAlignment"       Value="Center"/>
+                    <Setter Property="VerticalAlignment"   Value="Center"/>
+                    <Setter Property="Foreground"          Value="{StaticResource TextDarkBrush}"/>
+                </Style>
             </Menu.Resources>
+
+            <!-- Datei ─────────────────────────────────────── -->
             <MenuItem Header="Datei">
-                <MenuItem Header="Speichern" Click="OnSpeichern"/>
+                <MenuItem Header="Speichern" Click="OnSpeichern">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE74E;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
                 <Separator/>
-                <MenuItem Header="Beenden"   Click="OnBeenden"/>
+                <MenuItem Header="Beenden" Click="OnBeenden">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE8BB;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
+
+            <!-- Fräsen ─────────────────────────────────────── -->
             <MenuItem Header="Fräsen">
-                <MenuItem Header="Planfräsen" Click="OnPlanfraesen"/>
-                <MenuItem Header="Umfahren"   Click="OnUmfahren"/>
-                <MenuItem Header="Nut"        Click="OnPlanfraesen"/>
-                <MenuItem Header="Tasche"       Click="OnTasche"/>
-                <MenuItem Header="Kreistasche" Click="OnKreistasche"/>
-                <MenuItem Header="Zapfen"       Click="OnPlanfraesen"/>
+                <!-- Planfräsen: flache Fläche -->
+                <MenuItem Header="Planfräsen" Click="OnPlanfraesen">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="▬" FontSize="10"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Umfahren: Kontur (offenes Rechteck) -->
+                <MenuItem Header="Umfahren" Click="OnUmfahren">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="▭" FontSize="12"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Nut: drei Linien = Schlitz -->
+                <MenuItem Header="Nut" Click="OnPlanfraesen" IsEnabled="False">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="≡" FontSize="13"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Tasche: schraffiertes Rechteck = gefräste Vertiefung -->
+                <MenuItem Header="Tasche" Click="OnTasche">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="▩" FontSize="11"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Kreistasche: Kreisziel = runde Vertiefung -->
+                <MenuItem Header="Kreistasche" Click="OnKreistasche">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="◎" FontSize="13"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Zapfen: T-Form von oben = überstehender Steg -->
+                <MenuItem Header="Zapfen" Click="OnPlanfraesen" IsEnabled="False">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="⊤" FontSize="12"/>
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
+
+            <!-- Pfad Fräsen ─────────────────────────────────── -->
             <MenuItem Header="Pfad Fräsen">
-                <MenuItem Header="Startpunkt" Click="OnPfadStart"/>
-                <MenuItem Header="Punkt"      Click="OnPfadPunkt" x:Name="MnuPfadPunkt"/>
+                <!-- Startpunkt: Kreispunkt = Startposition -->
+                <MenuItem Header="Startpunkt" Click="OnPfadStart">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="⊙" FontSize="14"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Punkt: kleiner Punkt = Wegpunkt -->
+                <MenuItem Header="Punkt" Click="OnPfadPunkt" x:Name="MnuPfadPunkt">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="●" FontSize="10"/>
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
+
+            <!-- Bohren ─────────────────────────────────────── -->
             <MenuItem Header="Bohren">
-                <MenuItem Header="Bohrung"            Click="OnBohrung"/>
-                <MenuItem Header="Reihenlochbohrung"  Click="OnReihenlochbohrung"/>
+                <!-- Bohrung: Kreiskreuz = Bohrloch -->
+                <MenuItem Header="Bohrung" Click="OnBohrung">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="⊕" FontSize="13"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Reihenlochbohrung: mehrere Punkte = Lochreihe -->
+                <MenuItem Header="Reihenlochbohrung" Click="OnReihenlochbohrung">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="⁝⊕" FontSize="10" Width="20"/>
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
+
+            <!-- Ansicht ─────────────────────────────────────── -->
             <MenuItem Header="Ansicht">
                 <MenuItem Header="Raster einblenden" x:Name="MnuRaster"
-                          IsCheckable="True" Click="OnRasterEinblenden"/>
+                          IsCheckable="True" Click="OnRasterEinblenden">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="⊞" FontSize="13"/>
+                    </MenuItem.Icon>
+                </MenuItem>
                 <Separator/>
                 <MenuItem Header="G-Code anzeigen" x:Name="MnuGCodeAnzeigen"
-                          IsCheckable="True" IsChecked="True" Click="OnGCodeAnzeigen"/>
+                          IsCheckable="True" IsChecked="True" Click="OnGCodeAnzeigen">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Consolas" Text="&lt;/&gt;" FontSize="9"/>
+                    </MenuItem.Icon>
+                </MenuItem>
                 <MenuItem Header="Werkzeuge anzeigen" x:Name="MnuWerkzeugeAnzeigen"
-                          IsCheckable="True" IsChecked="True" Click="OnWerkzeugeAnzeigen"/>
+                          IsCheckable="True" IsChecked="True" Click="OnWerkzeugeAnzeigen">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE713;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
+
+            <!-- Hilfe ──────────────────────────────────────── -->
             <MenuItem Header="Hilfe">
-                <MenuItem Header="Info" Click="OnInfo"/>
+                <MenuItem Header="Info" Click="OnInfo">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE946;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
         </Menu>
 
@@ -359,6 +459,15 @@
                         Background="Transparent"
                         SizeChanged="OnCanvasSizeChanged" ClipToBounds="True"
                         Panel.ZIndex="0"/>
+                <!-- Zoom-Anzeige -->
+                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                        Margin="0,0,6,6" Padding="5,2"
+                        Background="#99000000" CornerRadius="3"
+                        IsHitTestVisible="False" Panel.ZIndex="10">
+                    <TextBlock x:Name="TxtZoomLevel"
+                               Text="100 %" Foreground="White"
+                               FontSize="11" FontFamily="Consolas"/>
+                </Border>
             </Grid>
 
             <!-- Splitter -->
@@ -455,77 +564,14 @@
 
                 <!-- Tab 2: G-Code Editor -->
                 <TabItem Header="G-Code" x:Name="TabGCode">
-                    <Grid Background="{StaticResource BgLightBrush}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="40"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Border Grid.Column="0"
-                                Background="{StaticResource BgBrush}"
-                                BorderBrush="{StaticResource BorderBrush}"
-                                BorderThickness="0,0,1,0">
-                            <ListBox x:Name="GCodeLineNumbersBox"
-                                     IsHitTestVisible="False"
-                                     FontFamily="Consolas" FontSize="12"
-                                     Foreground="{StaticResource AccentBrush}"
-                                     ScrollViewer.VerticalScrollBarVisibility="Hidden"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Hidden"
-                                     BorderThickness="0" Padding="0" Margin="0"
-                                     Background="Transparent"
-                                     VirtualizingPanel.IsVirtualizing="True"
-                                     VirtualizingPanel.VirtualizationMode="Standard"
-                                     VirtualizingPanel.ScrollUnit="Pixel">
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="Padding" Value="4,0"/>
-                                        <Setter Property="Height" Value="20"/>
-                                        <Setter Property="HorizontalContentAlignment" Value="Right"/>
-                                        <Setter Property="Template">
-                                            <Setter.Value>
-                                                <ControlTemplate TargetType="ListBoxItem">
-                                                    <ContentPresenter Content="{TemplateBinding Content}"
-                                                                      ContentTemplate="{TemplateBinding ContentTemplate}"
-                                                                      HorizontalAlignment="Right"
-                                                                      Margin="4,0"/>
-                                                </ControlTemplate>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                            </ListBox>
-                        </Border>
-                        <ListBox x:Name="GCodeBox" Grid.Column="1"
-                                 FontFamily="Consolas" FontSize="12"
-                                 Background="{StaticResource BgLightBrush}"
-                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                 BorderThickness="0" Padding="0" Margin="0"
-                                 VirtualizingPanel.IsVirtualizing="True"
-                                 VirtualizingPanel.VirtualizationMode="Standard"
-                                 VirtualizingPanel.ScrollUnit="Pixel"
-                                 Loaded="OnGCodeBoxLoaded">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Text}"
-                                               Foreground="{Binding Color}"
-                                               Padding="4,0"/>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                            <ListBox.ItemContainerStyle>
-                                <Style TargetType="ListBoxItem">
-                                    <Setter Property="Height" Value="20"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="ListBoxItem">
-                                                <ContentPresenter Content="{TemplateBinding Content}"
-                                                                  ContentTemplate="{TemplateBinding ContentTemplate}"/>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </ListBox.ItemContainerStyle>
-                        </ListBox>
-                    </Grid>
+                    <avalon:TextEditor x:Name="GCodeBox"
+                                       FontFamily="Consolas" FontSize="12"
+                                       Background="{StaticResource BgLightBrush}"
+                                       Foreground="{StaticResource TextDarkBrush}"
+                                       ShowLineNumbers="True"
+                                       WordWrap="False"
+                                       IsReadOnly="False"
+                                       Loaded="OnGCodeBoxLoaded"/>
                 </TabItem>
 
                 <!-- Tab 3: Werkzeuge -->

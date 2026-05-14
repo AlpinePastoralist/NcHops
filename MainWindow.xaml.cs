@@ -13,17 +13,14 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using ICSharpCode.AvalonEdit;
+using ICSharpCode.AvalonEdit.Editing;
+using ICSharpCode.AvalonEdit.Rendering;
 
 namespace NCHops;
 
 public partial class MainWindow : Window
 {
-    private static Brush Fb(byte r, byte g, byte b) { var br = new SolidColorBrush(Color.FromRgb(r, g, b)); br.Freeze(); return br; }
-    private static readonly Brush BrushRapid   = Fb(150, 150, 150);
-    private static readonly Brush BrushCut     = Fb( 26,  26,  26);
-    private static readonly Brush BrushArc     = Fb( 10,  80, 180);
-    private static readonly Brush BrushMCode   = Fb(160,  80,   0);
-    private static readonly Brush BrushComment = Fb( 60, 130,  60);
 
     private static readonly Regex GCodeTokenRegex = new(
         "([A-Za-z][+-]?\\d*\\.?\\d*)|(\\s+)|(.+)",
@@ -32,17 +29,30 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshTimer;
     private Rect _topRect;
     private Rect _bottomRect;
+
+    // ── Canvas-Zoom / Pan ────────────────────────────────────────
+    private double _zoom      = 1.0;
+    private double _panX      = 0.0;
+    private double _panY      = 0.0;
+    private bool   _isPanning = false;
+    private Point  _panStart;   // Startpunkt im Parent-Koordinatensystem
+    private Point  _panOrigin;  // _panX/_panY beim Drag-Start
+
+    // ── G-Code Zeilenmarkierung ───────────────────────────────────
+    private int _highlightGCodeLine = -1;   // Caret-Zeile
+    private int _mouseHoverLine     = -1;   // Maus-Hover im Editor (Vorrang)
+    private int _selectedGCodeLine  = -1;   // Klick auf Werkstück
+    private GCodeLineBackgroundRenderer? _gcodeBgRenderer;
+    private readonly DispatcherTimer _hlTimer;   // Debounce 80 ms
     private bool _rasterEnabled;
     private double _rasterX = 50.0;
     private double _rasterY = 50.0;
-    private ScrollViewer? _gcodeScrollViewer;
-    private ScrollViewer? _lineNumbersScrollViewer;
     private readonly ObservableCollection<HistoryEntry> _history = [];
     private readonly List<HistoryEntry> _historyClipboard = [];
     private bool _suppressHistoryRegen;
     private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
     private bool _suppressSave;
-    private int  _lastLineCount = -1;
+    private bool _suppressGCodeUiUpdate;
 
     // G-Code Backing-Field: Canvas/Parser nutzen dies direkt, TextBox wird im Hintergrund gesetzt
     private string _gcodeContent = string.Empty;
@@ -51,7 +61,7 @@ public partial class MainWindow : Window
     private string?         _parsedGCodeText   = null;
     private List<Move>      _cachedTopMoves    = [];
     private List<SideMove>  _cachedSideMoves   = [];
-    private List<System.Windows.Point> _cachedDrillPoints = [];
+    private List<DrillHole> _cachedDrillPoints = [];
     private static readonly string WerkzeugDatei = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "NCHops", "werkzeuge.json");
@@ -123,12 +133,34 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-Loaded += (_, _) => UpdateAll();
+        Loaded += (_, _) =>
+        {
+            DrawCanvas.MouseDown  += OnCanvasMouseDown;
+            DrawCanvas.MouseMove  += OnCanvasMouseMove;
+            DrawCanvas.MouseUp    += OnCanvasMouseUp;
+            DrawCanvas.MouseLeave += OnCanvasMouseLeave;
+            DrawCanvas.MouseWheel += OnCanvasMouseWheel;
+            // Zoom-Label anklickbar → Reset
+            if (TxtZoomLevel is not null)
+            {
+                var border = (Border)TxtZoomLevel.Parent;
+                border.IsHitTestVisible = true;
+                border.Cursor           = Cursors.Hand;
+                border.ToolTip          = "Klick: Zoom zurücksetzen\nDoppelklick auf Canvas: Zoom zurücksetzen";
+                border.MouseLeftButtonDown += (_, _) => ResetZoom();
+            }
+            UpdateAll();
+        };
 
         _refreshTimer = new DispatcherTimer(
             TimeSpan.FromMilliseconds(250), DispatcherPriority.Background,
             (_, _) => UpdateAll(), Dispatcher);
         _refreshTimer.Stop();
+
+        _hlTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(80),
+            DispatcherPriority.Background, (_, _) =>
+            { _hlTimer.Stop(); UpdateAll(); }, Dispatcher);
+        _hlTimer.Stop();
 
         HistoryList.ItemsSource = _history;
         _history.CollectionChanged += (_, _) => { if (!_suppressHistoryRegen) RegenerateGCodeFromHistory(); };
@@ -640,112 +672,6 @@ Loaded += (_, _) => UpdateAll();
         Dispatcher.BeginInvoke(UpdateAll, System.Windows.Threading.DispatcherPriority.Background);
     }
 
-    // ── Canvas: Klick / Drag ─────────────────────────────────────
-
-    private void OnCanvasMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (CbPfadAnzeigen?.IsChecked != true) return;
-        if (_pfadCanvasRect.IsEmpty) return;
-
-        var pos = e.GetPosition(DrawCanvas);
-        if (!_pfadCanvasRect.Contains(pos)) return;
-
-        // Nähe zu bestehendem Punkt? → Drag starten
-        for (int i = 0; i < _pfadPunkte.Count; i++)
-        {
-            var px = PunktToPx(_pfadPunkte[i]);
-            if (Math.Sqrt(Math.Pow(pos.X - px.X, 2) + Math.Pow(pos.Y - px.Y, 2)) < 14)
-            {
-                _pfadDragIdx = i;
-                _pfadHoverIdx = i;
-                PfadLvPunkte.SelectedIndex = i;
-                DrawCanvas.CaptureMouse();
-                DrawCanvas.Cursor = Cursors.SizeAll;
-                return;
-            }
-        }
-
-        // Kein Punkt in der Nähe → neuen Punkt hinzufügen (auf Raster, abs Koords)
-        var (absX, absY) = PxToAbsMm(pos);
-        double snap = PfadSchritt;
-        absX = Math.Round(absX / snap) * snap;
-        absY = Math.Round(absY / snap) * snap;
-
-        string defaultBezug = (PfadCbBezug?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "Unten links";
-        var (relX, relY) = AbsToRel(defaultBezug, absX, absY, WorkX, WorkY);
-
-        _pfadPunkte.Add(new PfadPunkt
-        {
-            Nr    = _pfadPunkte.Count + 1,
-            X     = relX.ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
-            Y     = relY.ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
-            Bezug = defaultBezug
-        });
-        PfadLvPunkte.SelectedIndex = _pfadPunkte.Count - 1;
-        PfadLvPunkte.ScrollIntoView(PfadLvPunkte.SelectedItem);
-    }
-
-    private void OnCanvasMouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (_pfadDragIdx >= 0)
-        {
-            _pfadDragIdx = -1;
-            DrawCanvas.ReleaseMouseCapture();
-        }
-    }
-
-    private void OnCanvasMouseMove(object sender, MouseEventArgs e)
-    {
-        if (CbPfadAnzeigen?.IsChecked != true) return;
-
-        var pos = e.GetPosition(DrawCanvas);
-
-        // ── Drag-Modus ──────────────────────────────────────────
-        if (_pfadDragIdx >= 0)
-        {
-            var (absX, absY) = PxToAbsMm(pos);
-            double snap = PfadSchritt;
-            absX = Math.Round(absX / snap) * snap;
-            absY = Math.Round(absY / snap) * snap;
-            string dragBezug = _pfadPunkte[_pfadDragIdx].Bezug;
-            var (relX, relY) = AbsToRel(dragBezug, absX, absY, WorkX, WorkY);
-            _pfadPunkte[_pfadDragIdx].X = relX.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
-            _pfadPunkte[_pfadDragIdx].Y = relY.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
-
-            UpdateAll();
-            return;
-        }
-
-        // ── Hover-Erkennung ─────────────────────────────────────
-        if (_arrowJustClicked) { _arrowJustClicked = false; return; }
-        if (_pfadCanvasRect.IsEmpty) return;
-
-        int newHover = -1;
-        for (int i = 0; i < _pfadPunkte.Count; i++)
-        {
-            var px = PunktToPx(_pfadPunkte[i]);
-            if (Math.Sqrt(Math.Pow(pos.X - px.X, 2) + Math.Pow(pos.Y - px.Y, 2)) < 20)
-            { newHover = i; break; }
-        }
-
-        if (newHover != _pfadHoverIdx)
-        {
-            _pfadHoverIdx = newHover;
-            UpdateAll();
-        }
-
-        DrawCanvas.Cursor = newHover >= 0
-            ? Cursors.SizeAll
-            : (_pfadCanvasRect.Contains(pos) ? Cursors.Cross : Cursors.Arrow);
-    }
-
-    private void OnCanvasMouseLeave(object sender, MouseEventArgs e)
-    {
-        if (_pfadDragIdx >= 0) return; // Drag läuft noch
-        DrawCanvas.Cursor = Cursors.Arrow;
-        if (_pfadHoverIdx >= 0) { _pfadHoverIdx = -1; UpdateAll(); }
-    }
-
     // ── Pfeilklick: Punkt verschieben + Maus nachführen ──────────
 
     private void OnPfadArrowClick(object sender, MouseButtonEventArgs e)
@@ -848,6 +774,88 @@ Loaded += (_, _) => UpdateAll();
         return new PfadFräsenParams(punkte, z, zu, v, d, fd, "absolut", seite);
     }
 #endif // Pfad Fräsen Panel Ende
+
+    // ── Canvas: Zoom / Pan ───────────────────────────────────────
+
+    private void ApplyCanvasTransform()
+    {
+        var grp = new TransformGroup();
+        grp.Children.Add(new ScaleTransform(_zoom, _zoom));
+        grp.Children.Add(new TranslateTransform(_panX, _panY));
+        DrawCanvas.RenderTransform = grp;
+        if (TxtZoomLevel is not null)
+            TxtZoomLevel.Text = $"{_zoom * 100:F0} %";
+    }
+
+    private void ResetZoom()
+    {
+        _zoom = 1.0; _panX = 0.0; _panY = 0.0;
+        ApplyCanvasTransform();
+    }
+
+    private void OnCanvasMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!Keyboard.IsKeyDown(Key.LeftCtrl) && !Keyboard.IsKeyDown(Key.RightCtrl)) return;
+
+        double factor  = e.Delta > 0 ? 1.18 : 1.0 / 1.18;
+        double newZoom = Math.Clamp(_zoom * factor, 0.05, 200.0);
+
+        // Zoom auf Mauszeiger ausrichten:
+        // screen = local * zoom + pan  →  pan_new = pan + local * (zoom - newZoom)
+        var local = e.GetPosition(DrawCanvas); // lokale Canvas-Koordinaten (vor Transform)
+        _panX += local.X * (_zoom - newZoom);
+        _panY += local.Y * (_zoom - newZoom);
+        _zoom  = newZoom;
+
+        ApplyCanvasTransform();
+        e.Handled = true;
+    }
+
+    // ── Canvas: Klick / Drag ─────────────────────────────────────
+
+    private void OnCanvasMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        if (e.ClickCount == 2) { ResetZoom(); return; }
+        _isPanning = true;
+        _panStart  = e.GetPosition((UIElement)DrawCanvas.Parent);
+        _panOrigin = new Point(_panX, _panY);
+        DrawCanvas.CaptureMouse();
+        DrawCanvas.Cursor = Cursors.Hand;
+    }
+
+    private void OnCanvasMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isPanning) return;
+        var end = e.GetPosition((UIElement)DrawCanvas.Parent);
+        bool wasClick = Math.Abs(end.X - _panStart.X) < 5 && Math.Abs(end.Y - _panStart.Y) < 5;
+        _isPanning = false;
+        DrawCanvas.ReleaseMouseCapture();
+        DrawCanvas.Cursor = Cursors.Arrow;
+        // Klick auf leere Fläche → Auswahl aufheben
+        if (wasClick && _selectedGCodeLine >= 0)
+        {
+            SetSelectedGCodeLine(-1);
+            UpdateAll();
+        }
+    }
+
+    private void OnCanvasMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isPanning) return;
+        var pos = e.GetPosition((UIElement)DrawCanvas.Parent);
+        _panX = _panOrigin.X + (pos.X - _panStart.X);
+        _panY = _panOrigin.Y + (pos.Y - _panStart.Y);
+        ApplyCanvasTransform();
+    }
+
+    private void OnCanvasMouseLeave(object sender, MouseEventArgs e)
+    {
+        if (!_isPanning) return;
+        _isPanning = false;
+        DrawCanvas.ReleaseMouseCapture();
+        DrawCanvas.Cursor = Cursors.Arrow;
+    }
 
     private void OnInfo(object sender, RoutedEventArgs e)
     {
@@ -954,30 +962,25 @@ Loaded += (_, _) => UpdateAll();
         TabGCode.Visibility == Visibility.Visible &&
         TabGCode.IsSelected;
 
-    private static Brush BrushForLine(string line)
-    {
-        var t = line.TrimStart();
-        if (t.Length == 0) return BrushCut;
-        char c = char.ToUpperInvariant(t[0]);
-        if (c == ';' || c == '(') return BrushComment;
-        if (c == 'M')             return BrushMCode;
-        if (c != 'G' || t.Length < 2) return BrushCut;
-        char d = t[1];
-        if (d == '0' && (t.Length == 2 || !char.IsDigit(t[2]))) return BrushRapid;
-        if (d == '0' && t.Length > 2 && t[2] == '0')            return BrushRapid;
-        if ((d == '2' || d == '3') && (t.Length == 2 || !char.IsDigit(t[2]))) return BrushArc;
-        if (t.Length > 2 && (t[2] == '2' || t[2] == '3') && (t.Length == 3 || !char.IsDigit(t[3])) && d == '0') return BrushArc;
-        return BrushCut;
-    }
 
     private void FlushGCodeBox()
     {
         if (!_gcodeBoxDirty) return;
         _gcodeBoxDirty = false;
-        var raw   = _gcodeContent.Replace("\r\n", "\n").Split('\n');
-        var items = Array.ConvertAll(raw, l => new GCodeLine(l, BrushForLine(l)));
-        GCodeBox.ItemsSource = items;
-        UpdateLineNumbers(items.Length);
+
+        _suppressGCodeUiUpdate = true;
+        try { GCodeBox.Text = _gcodeContent; }
+        finally { _suppressGCodeUiUpdate = false; }
+    }
+
+    private void OnGCodeTextChanged(object? sender, EventArgs e)
+    {
+        if (_suppressGCodeUiUpdate) return;
+        _gcodeContent    = GCodeBox.Text;
+        _parsedGCodeText = null;
+        _gcodeBoxDirty   = false;
+        _refreshTimer.Stop();
+        _refreshTimer.Start();
     }
 
     private void EnsureParsed()
@@ -991,42 +994,364 @@ Loaded += (_, _) => UpdateAll();
 
     private void OnGCodeBoxLoaded(object sender, RoutedEventArgs e)
     {
-        _gcodeScrollViewer = GetDescendantScrollViewer(GCodeBox);
-        _lineNumbersScrollViewer = GetDescendantScrollViewer(GCodeLineNumbersBox);
-        if (_gcodeScrollViewer != null)
-            _gcodeScrollViewer.ScrollChanged += OnGCodeScrollChanged;
+        // Guard: Loaded feuert beim Tab-Wechsel erneut — keine Doppel-Registrierung
+        if (GCodeBox.TextArea.TextView.LineTransformers.OfType<GCodeColorizer>().Any()) return;
+
+        GCodeBox.TextChanged += OnGCodeTextChanged;
+        GCodeBox.TextArea.TextView.LineTransformers.Add(new GCodeColorizer());
+        _gcodeBgRenderer = new GCodeLineBackgroundRenderer();
+        GCodeBox.TextArea.TextView.BackgroundRenderers.Add(_gcodeBgRenderer);
+        GCodeBox.TextArea.TextView.MouseHover        += OnGCodeMouseHover;
+        GCodeBox.TextArea.TextView.MouseHoverStopped += OnGCodeMouseHoverStopped;
+        GCodeBox.TextArea.LeftMargins.Add(new GCodeArrowMargin());
+        GCodeBox.TextArea.Caret.PositionChanged      += OnGCodeCaretMoved;
+        GCodeBox.TextArea.TextView.MouseMove              += OnGCodeEditorMouseMove;
+        GCodeBox.TextArea.TextView.MouseLeave             += OnGCodeEditorMouseLeave;
+        GCodeBox.TextArea.TextView.MouseLeftButtonDown    += OnGCodeEditorClick;
+        GCodeBox.TextArea.PreviewKeyDown                  += OnGCodeEditorKeyDown;
     }
 
-    private void OnGCodeScrollChanged(object? sender, ScrollChangedEventArgs e)
-    {
-        if (e.VerticalChange != 0)
-            _lineNumbersScrollViewer?.ScrollToVerticalOffset(e.VerticalOffset);
-    }
+    private ToolTip? _gCodeToolTip;
 
-    private void UpdateLineNumbers(int lineCount)
+    private void OnGCodeMouseHover(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        if (lineCount == _lastLineCount) return;
-        _lastLineCount = lineCount;
-        GCodeLineNumbersBox.ItemsSource = Enumerable.Range(1, lineCount).Select(i => i.ToString()).ToArray();
-    }
+        var tv  = GCodeBox.TextArea.TextView;
+        var pos = tv.GetPositionFloor(e.GetPosition(tv) + tv.ScrollOffset);
+        if (pos is null) return;
 
-    private static ScrollViewer? GetDescendantScrollViewer(DependencyObject element)
-    {
-        if (element == null)
-            return null;
+        int offset  = GCodeBox.Document.GetOffset(pos.Value.Location);
+        var docLine = GCodeBox.Document.GetLineByOffset(offset);
+        var lineText = GCodeBox.Document.GetText(docLine);
+        int col = offset - docLine.Offset;
 
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+        var (tipTitle, tipDesc) = GCodeTooltip.GetTooltip(lineText, col);
+        if (tipDesc is null) return;
+
+        if (_gCodeToolTip is null)
         {
-            var child = VisualTreeHelper.GetChild(element, i);
-            if (child is ScrollViewer viewer)
-                return viewer;
+            _gCodeToolTip = new ToolTip
+            {
+                Placement       = System.Windows.Controls.Primitives.PlacementMode.Mouse,
+                Background      = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                HasDropShadow   = false,
+                Padding         = new Thickness(0)
+            };
+        }
+        _gCodeToolTip.Content = BuildTooltipBubble(tipTitle, tipDesc);
+        _gCodeToolTip.IsOpen  = true;
+        e.Handled = true;
+    }
 
-            var result = GetDescendantScrollViewer(child);
-            if (result != null)
-                return result;
+    private void OnGCodeMouseHoverStopped(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_gCodeToolTip is not null) _gCodeToolTip.IsOpen = false;
+    }
+
+    // ── G-Code → Canvas Zeilenmarkierung ────────────────────────
+
+    private void OnGCodeCaretMoved(object? sender, EventArgs e)
+    {
+        int ln = GCodeBox.TextArea.Caret.Line;
+        if (ln == _highlightGCodeLine) return;
+        _highlightGCodeLine = ln;
+        if (_mouseHoverLine < 1) { _hlTimer.Stop(); _hlTimer.Start(); }
+    }
+
+    private void OnGCodeEditorMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var tv  = GCodeBox.TextArea.TextView;
+        var vp  = tv.GetPositionFloor(e.GetPosition(tv) + tv.ScrollOffset);
+        int ln  = vp?.Line ?? -1;
+        if (ln == _mouseHoverLine) return;
+        _mouseHoverLine = ln;
+        // Editor sofort aktualisieren (kein Debounce nötig)
+        if (_gcodeBgRenderer != null)
+        {
+            _gcodeBgRenderer.HoverLine = ln;
+            GCodeBox.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+        }
+        // Canvas via Debounce (80 ms)
+        _hlTimer.Stop(); _hlTimer.Start();
+    }
+
+    private void OnGCodeEditorMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_mouseHoverLine < 0) return;
+        _mouseHoverLine = -1;
+        if (_gcodeBgRenderer != null)
+        {
+            _gcodeBgRenderer.HoverLine = -1;
+            GCodeBox.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+        }
+        _hlTimer.Stop(); _hlTimer.Start();
+    }
+
+    private void OnGCodeEditorKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (_selectedGCodeLine < 1) return;
+        int delta = e.Key switch
+        {
+            Key.Up   => -1,
+            Key.Down => +1,
+            _        => 0
+        };
+        if (delta == 0) return;
+
+        int max  = GCodeBox.Document.LineCount;
+        int next = Math.Clamp(_selectedGCodeLine + delta, 1, max);
+        if (next == _selectedGCodeLine) return;
+
+        SetSelectedGCodeLine(next);
+        // Caret mitbewegen damit die Zeile sichtbar bleibt
+        GCodeBox.TextArea.Caret.Line   = next;
+        GCodeBox.TextArea.Caret.Column = 1;
+        GCodeBox.TextArea.Caret.BringCaretToView();
+        UpdateAll();
+        e.Handled = true;   // Standard-Caret-Bewegung unterdrücken
+    }
+
+    private void OnGCodeEditorClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var tv = GCodeBox.TextArea.TextView;
+        var vp = tv.GetPositionFloor(e.GetPosition(tv) + tv.ScrollOffset);
+        int ln = vp?.Line ?? -1;
+        if (ln < 1) return;
+        // Toggle: nochmal klicken hebt Selektion auf
+        SetSelectedGCodeLine(_selectedGCodeLine == ln ? -1 : ln);
+        UpdateAll();
+    }
+
+    private void DrawGCodeHighlight()
+    {
+        // Alte "hl"-Elemente aufräumen
+        for (int i = DrawCanvas.Children.Count - 1; i >= 0; i--)
+            if (DrawCanvas.Children[i] is FrameworkElement fe && fe.Tag is "hl")
+                DrawCanvas.Children.RemoveAt(i);
+
+        // Zoom-invarianter Locator-Ring für selektierte Form
+        if (_selectedGCodeLine >= 1 && _topRect.Width > 0)
+            DrawSelectionLocator();
+    }
+
+    // Konvertierung G-Code-mm → Canvas-Pixel (gleiche Formel wie lokales MmToPx in DrawGCodeTopView)
+    private Point TopMmToPx(double x, double y)
+    {
+        double wx = WorkX, wy = WorkY;
+        if (wx <= 0 || wy <= 0) return default;
+        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+        return new(_topRect.Left + x * scale, _topRect.Bottom - y * scale);
+    }
+
+    private void DrawSelectionLocator()
+    {
+        // Tatsächliche Bildschirmgrösse = Canvas-Pixel × _zoom (RenderTransform skaliert den Canvas)
+        const double VisibleThreshold = 6.0;   // Bildschirm-Pixel
+
+        Point? pt = null;
+        bool   showRing = false;
+
+        var hole = _cachedDrillPoints.FirstOrDefault(h => h.LineNumber == _selectedGCodeLine);
+        if (hole != null)
+        {
+            // Bohrpunkte sind immer als 10-px-Kreis gerendert → immer sichtbar, kein Ring nötig
+            pt = TopMmToPx(hole.X, hole.Y);
+            showRing = false;
+        }
+        else
+        {
+            int idx  = _cachedTopMoves.FindIndex(m => m.LineNumber == _selectedGCodeLine);
+            var move = idx >= 0 ? _cachedTopMoves[idx] : null;
+            if (move != null)
+            {
+                if (move.Type is MoveType.ArcCW or MoveType.ArcCCW)
+                {
+                    double wx = WorkX, wy = WorkY;
+                    double scale = (wx > 0 && wy > 0)
+                        ? Math.Min(_topRect.Width / wx, _topRect.Height / wy) : 1;
+                    double arScreenPx = Math.Sqrt(move.I * move.I + move.J * move.J) * scale * _zoom;
+                    showRing = arScreenPx < VisibleThreshold;
+                    pt = TopMmToPx((move.X + move.Xe) / 2.0, (move.Y + move.Ye) / 2.0);
+                }
+                else
+                {
+                    // Startpunkt = Endpunkt des vorherigen Moves
+                    Point startPt = idx > 0
+                        ? TopMmToPx(_cachedTopMoves[idx - 1].X, _cachedTopMoves[idx - 1].Y)
+                        : TopMmToPx(0, 0);
+                    Point endPt = TopMmToPx(move.X, move.Y);
+                    double lenScreenPx = Math.Sqrt(
+                        Math.Pow(endPt.X - startPt.X, 2) +
+                        Math.Pow(endPt.Y - startPt.Y, 2)) * _zoom;
+                    showRing = lenScreenPx < VisibleThreshold;
+                    pt = endPt;
+                }
+            }
+        }
+
+        if (!showRing || pt == null) return;
+        double px = pt.Value.X, py = pt.Value.Y;
+
+        // Ring und Ticks in fester Screengrösse (zoom-invariant)
+        const double R    = 20;   // Ring-Radius in Pixel
+        const double tick = 7;    // Tick-Länge ausserhalb des Rings
+        const double gap  = 4;    // Lücke zwischen Ring und Tick
+        var gold = new SolidColorBrush(Color.FromRgb(255, 215, 0));
+
+        var ring = new Ellipse
+        {
+            Width=R*2, Height=R*2,
+            Stroke=gold, StrokeThickness=1.8,
+            Fill=Brushes.Transparent,
+            Tag="hl", IsHitTestVisible=false
+        };
+        Canvas.SetLeft(ring, px - R); Canvas.SetTop(ring, py - R);
+        DrawCanvas.Children.Add(ring);
+
+        void Tick(double x1, double y1, double x2, double y2) =>
+            DrawCanvas.Children.Add(new Line
+            {
+                X1=x1, Y1=y1, X2=x2, Y2=y2,
+                Stroke=gold, StrokeThickness=1.5,
+                StrokeStartLineCap=PenLineCap.Round, StrokeEndLineCap=PenLineCap.Round,
+                Tag="hl", IsHitTestVisible=false
+            });
+
+        Tick(px - R - gap - tick, py,  px - R - gap, py);
+        Tick(px + R + gap,        py,  px + R + gap + tick, py);
+        Tick(px, py - R - gap - tick,  px, py - R - gap);
+        Tick(px, py + R + gap,         px, py + R + gap + tick);
+    }
+
+    // ── Klick auf Werkstück-Form ──────────────────────────────────
+
+    private void SetSelectedGCodeLine(int ln)
+    {
+        _selectedGCodeLine = ln;
+        // Beim Deselektieren auch den Caret-Highlight auf dem Canvas löschen —
+        // sonst bleibt die Form durch _highlightGCodeLine (= Caret) halb sichtbar.
+        if (ln < 0) _highlightGCodeLine = -1;
+        if (_gcodeBgRenderer != null)
+        {
+            _gcodeBgRenderer.SelectedLine = ln;
+            GCodeBox.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+        }
+    }
+
+    private void OnWorkpieceFormClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        e.Handled = true;   // kein Pan starten
+        if (sender is not FrameworkElement el || el.Tag is not int ln) return;
+        SetSelectedGCodeLine(_selectedGCodeLine == ln ? -1 : ln);   // toggle
+        UpdateAll();   // Form neu zeichnen (mit neuer Farbe)
+
+        // G-Code Editor scrollen und Zeile markieren
+        if (_selectedGCodeLine >= 1 && GCodeBox.Document.LineCount >= _selectedGCodeLine)
+        {
+            GCodeBox.TextArea.Caret.Line   = _selectedGCodeLine;
+            GCodeBox.TextArea.Caret.Column = 1;
+            GCodeBox.TextArea.Caret.BringCaretToView();
+        }
+    }
+
+    // Mini-Interpreter: gibt (vorherige X/Y, aktuelle X/Y, Bewegungstyp) für die Ziellinie zurück
+    private static readonly Regex RxHlX = new(@"(?<![A-Za-z])X([+-]?[\d.]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RxHlY = new(@"(?<![A-Za-z])Y([+-]?[\d.]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RxHlG = new(@"\bG(0{1,2}|1|00|01|02|03|2|3)\b",  RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static (double px, double py, double cx, double cy, string moveType)?
+        GetGCodePosAtLine(string gcode, int targetLine)
+    {
+        var inv   = System.Globalization.CultureInfo.InvariantCulture;
+        var style = System.Globalization.NumberStyles.Float;
+        double x = 0, y = 0;
+        bool abs = true;
+        string modal = "G1";   // modaler Bewegungsbefehl (Standard G1)
+        int ln = 0;
+
+        foreach (var raw in gcode.Split('\n'))
+        {
+            ln++;
+            var line = raw.Trim();
+            int ci = line.IndexOf('('); if (ci >= 0) line = line[..ci].Trim();
+            ci = line.IndexOf(';');     if (ci >= 0) line = line[..ci].Trim();
+
+            if (string.IsNullOrEmpty(line))
+            { if (ln == targetLine) return null; continue; }
+
+            if (Regex.IsMatch(line, @"\bG90\b", RegexOptions.IgnoreCase)) abs = true;
+            if (Regex.IsMatch(line, @"\bG91\b", RegexOptions.IgnoreCase)) abs = false;
+
+            // Bewegungsbefehl dieser Zeile ermitteln
+            string? lineMove = null;
+            foreach (Match mg in RxHlG.Matches(line))
+            {
+                var n = mg.Groups[1].Value.TrimStart('0');
+                if (n == "" ) n = "0";
+                lineMove = n switch { "0" => "G0", "1" => "G1", "2" => "G2", "3" => "G3", _ => null };
+                if (lineMove != null) { modal = lineMove; break; }
+            }
+
+            var mx = RxHlX.Match(line);
+            var my = RxHlY.Match(line);
+            double vx = 0, vy = 0;
+            bool hasX = mx.Success && double.TryParse(mx.Groups[1].Value, style, inv, out vx);
+            bool hasY = my.Success && double.TryParse(my.Groups[1].Value, style, inv, out vy);
+
+            double nx = hasX ? (abs ? vx : x + vx) : x;
+            double ny = hasY ? (abs ? vy : y + vy) : y;
+
+            if (ln == targetLine)
+            {
+                string mt = (hasX || hasY) ? modal : (lineMove ?? "");
+                return (x, y, nx, ny, mt);
+            }
+
+            if (hasX || hasY) { x = nx; y = ny; }
         }
         return null;
     }
+
+    private static UIElement BuildTooltipBubble(string? title, string desc)
+    {
+        var panel = new StackPanel { Margin = new Thickness(10, 7, 10, 8) };
+        if (!string.IsNullOrEmpty(title))
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text       = title,
+                FontWeight = FontWeights.Bold,
+                FontSize   = 13,
+                Foreground = new SolidColorBrush(Color.FromRgb(220, 170, 70)),
+                Margin     = new Thickness(0, 0, 0, 4)
+            });
+        }
+        panel.Children.Add(new TextBlock
+        {
+            Text         = desc,
+            FontSize     = 12,
+            Foreground   = new SolidColorBrush(Color.FromRgb(230, 230, 225)),
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth     = 340
+        });
+
+        return new Border
+        {
+            Background      = new SolidColorBrush(Color.FromRgb(32, 32, 38)),
+            BorderBrush     = new SolidColorBrush(Color.FromRgb(100, 100, 115)),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(7),
+            Child           = panel,
+            Effect          = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color       = Colors.Black,
+                Opacity     = 0.55,
+                BlurRadius  = 10,
+                ShadowDepth = 4
+            }
+        };
+    }
+
 
     private void TextBox_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
@@ -1050,6 +1375,7 @@ Loaded += (_, _) => UpdateAll();
         if (DrawCanvas == null) return;
         EnsureParsed();
         DrawCanvas.Children.Clear();
+        DrawIconWatermark(new Rect(0, 0, DrawCanvas.ActualWidth, DrawCanvas.ActualHeight));
         DrawWorkpieces();
         DrawGCodeTopView();
         DrawGCodeSideView();
@@ -1059,6 +1385,7 @@ Loaded += (_, _) => UpdateAll();
         if (CbPfadAnzeigen?.IsChecked == true)
             DrawPfadFräsen();
 #endif
+        DrawGCodeHighlight();   // Hover/Caret-Markierung (über allem)
     }
 
     private void DrawWorkpieces()
@@ -1085,6 +1412,146 @@ Loaded += (_, _) => UpdateAll();
 
         DrawCanvas.Children.Add(MakeWoodRect(_topRect));
         DrawCanvas.Children.Add(MakeWoodRect(_bottomRect));
+    }
+
+    /// <summary>
+    /// Zeichnet das App-Icon (Fräser + Werkstück) als 20%-transparentes Wasserzeichen
+    /// auf dem Draufsicht-Bereich. Keine externe Bibliothek nötig — reine WPF-Shapes.
+    /// </summary>
+    private void DrawIconWatermark(Rect target)
+    {
+        if (target.IsEmpty || target.Width < 20 || target.Height < 20) return;
+
+        // SVG-Koordinatensystem: 256 × 256 → Vollbild (gesamte target-Fläche)
+        const double SVG = 256.0;
+        double scX = target.Width  / SVG;
+        double scY = target.Height / SVG;
+
+        // Koordinaten-Hilfsfunktionen (nicht-uniforme Skalierung für Vollbild)
+        Point  P(double x, double y)  => new(target.Left + x * scX, target.Top + y * scY);
+        double X(double x)            => target.Left + x * scX;
+        double Y(double y)            => target.Top  + y * scY;
+        double S(double v)            => v * Math.Min(scX, scY);   // für Strichstärken
+
+        // Schwarz/Weiß — Opacity am Container
+        var cSteel  = Brushes.Black;
+        var cLight  = Brushes.Black;
+        var cTip    = Brushes.Black;
+        var cWp     = Brushes.Black;
+        var cWpTop  = Brushes.Black;
+        var cRed    = Brushes.Black;
+        var cGreen  = Brushes.Black;
+        var cBlue   = Brushes.Black;
+        var cDark   = Brushes.Black;
+        var cSpark  = Brushes.Black;
+        var cYellow = Brushes.Black;
+
+        var wm = new Canvas { IsHitTestVisible = false, Opacity = 0.05 };
+
+        // ── Helfer ───────────────────────────────────────────────────────────
+        void AddRect(double x, double y, double w, double h, double rx, Brush fill)
+        {
+            var r = new System.Windows.Shapes.Rectangle
+                    { Width=w*scX, Height=h*scY, RadiusX=S(rx), RadiusY=S(rx), Fill=fill };
+            Canvas.SetLeft(r, X(x)); Canvas.SetTop(r, Y(y));
+            wm.Children.Add(r);
+        }
+        void AddPoly(Brush fill, params (double x, double y)[] pts)
+        {
+            var poly = new System.Windows.Shapes.Polygon
+                    { Fill=fill, Points=new PointCollection(pts.Select(p => P(p.x, p.y))) };
+            wm.Children.Add(poly);
+        }
+        void AddLine(double x1, double y1, double x2, double y2, Brush stroke, double w, bool dash=false)
+        {
+            var ln = new System.Windows.Shapes.Line
+            {
+                X1=X(x1), Y1=Y(y1), X2=X(x2), Y2=Y(y2),
+                Stroke=stroke, StrokeThickness=S(w),
+                StrokeStartLineCap=PenLineCap.Round, StrokeEndLineCap=PenLineCap.Round
+            };
+            if (dash) ln.StrokeDashArray = new System.Windows.Media.DoubleCollection {5,3};
+            wm.Children.Add(ln);
+        }
+        void AddPath(string d, Brush stroke, double w)
+        {
+            var pg = System.Windows.Media.Geometry.Parse(d);
+            var el = new System.Windows.Shapes.Path
+            {
+                Data=pg, Stroke=stroke, StrokeThickness=S(w),
+                Fill=Brushes.Transparent, IsHitTestVisible=false,
+                RenderTransform = new System.Windows.Media.ScaleTransform(scX, scY)
+            };
+            Canvas.SetLeft(el, target.Left); Canvas.SetTop(el, target.Top);
+            wm.Children.Add(el);
+        }
+        void AddEllipse(double cx, double cy, double r, Brush fill)
+        {
+            var e = new System.Windows.Shapes.Ellipse { Width=r*2*scX, Height=r*2*scY, Fill=fill };
+            Canvas.SetLeft(e, X(cx)-r*scX); Canvas.SetTop(e, Y(cy)-r*scY);
+            wm.Children.Add(e);
+        }
+        void AddText(double x, double y, string text, double size, Brush fg)
+        {
+            var tb = new TextBlock
+            {
+                Text=text, FontSize=S(size), Foreground=fg,
+                FontFamily=new System.Windows.Media.FontFamily("Consolas"),
+                FontWeight=FontWeights.Bold
+            };
+            Canvas.SetLeft(tb, X(x)); Canvas.SetTop(tb, Y(y)-S(size));
+            wm.Children.Add(tb);
+        }
+
+        // ── Koordinatenkreuz ─────────────────────────────────────────────────
+        AddLine(26,198, 74,198, cRed, 2.5);
+        AddPoly(cRed, (76,198),(68,193),(68,203));
+        AddText(80, 203, "X", 16, cRed);
+        AddLine(26,198, 26,150, cGreen, 2.5);
+        AddPoly(cGreen, (26,148),(21,156),(31,156));
+        AddText(14, 145, "Y", 16, cGreen);
+
+        // ── Werkstück ────────────────────────────────────────────────────────
+        AddRect(26,188, 204,46, 5, cWp);
+        AddRect(26,188, 204, 7, 5, cWpTop);
+        AddLine(72,195,  72,234, cDark, 1.2);
+        AddLine(114,195,114,234, cDark, 1.2);
+        AddLine(156,195,156,234, cDark, 1.2);
+        AddLine(198,195,198,234, cDark, 1.2);
+
+        // ── Fräsbahn ─────────────────────────────────────────────────────────
+        AddLine(44,192, 180,192, cRed, 3.5);
+        AddLine(180,192, 44,192, cLight, 2.0, dash:true);
+        AddPoly(cRed, (130,192),(120,188),(120,196));
+
+        // ── Flansch / Aufnahme ───────────────────────────────────────────────
+        AddRect(96,14, 64,38, 9, cSteel);
+        AddRect(96,18, 64, 5, 3, cLight);
+
+        // ── Spannzange ───────────────────────────────────────────────────────
+        AddPoly(cLight, (104,52),(96,52),(110,72),(146,72),(160,52),(152,52));
+
+        // ── Schaft ───────────────────────────────────────────────────────────
+        AddRect(110,72, 36,96, 0, cLight);
+        // Schneidkanten
+        AddPath("M115,72 Q110,92 115,112 Q110,132 115,152 Q110,165 114,168", cDark, 2);
+        AddPath("M141,72 Q146,92 141,112 Q146,132 141,152 Q146,165 142,168", cDark, 2);
+
+        // ── Schneidspitze ────────────────────────────────────────────────────
+        AddPoly(cTip, (110,168),(128,190),(146,168));
+        AddLine(119,168, 128,182, cYellow, 1.5);
+
+        // ── Span / Funken ────────────────────────────────────────────────────
+        AddPath("M128,190 Q148,182 158,170 Q164,160 160,150", cSpark, 3);
+        AddEllipse(162,168, 4.5, cYellow);
+        AddEllipse(170,158, 3.0, cYellow);
+        AddEllipse(158,155, 2.5, cYellow);
+
+        // ── G-Code Label ─────────────────────────────────────────────────────
+        AddText(176, 44, "G", 22, cBlue);
+        AddText(198, 44, "01", 14, cBlue);
+
+        DrawCanvas.Children.Add(wm);
     }
 
     private void AddWood3DBlock(Rect r, Point vp, double depthFactor)
@@ -1280,22 +1747,29 @@ Loaded += (_, _) => UpdateAll();
         Point MmToPx(double x, double y) =>
             new(_topRect.Left + x * scale, _topRect.Bottom - y * scale);
 
+        var rapidDash = new System.Windows.Media.DoubleCollection { 5, 3 };
+        rapidDash.Freeze();
+
+        // Aktive Hover/Caret-Zeile (Maus hat Vorrang vor Cursor)
+        int activeLine = _mouseHoverLine >= 1 ? _mouseHoverLine : _highlightGCodeLine;
+
+        // ── Pass 1: Alle normalen Moves als zwei große StreamGeometries ──
+        // (gute Anti-Aliasing-Qualität, performant)
         var cutGeo   = new StreamGeometry();
         var rapidGeo = new StreamGeometry();
-
-        using (var cut   = cutGeo.Open())
-        using (var rapid = rapidGeo.Open())
+        using (var cut = cutGeo.Open())
+        using (var rap = rapidGeo.Open())
         {
             Point? last = null;
-
             foreach (var m in moves)
             {
+                bool skip = m.LineNumber == _selectedGCodeLine || m.LineNumber == activeLine;
                 if (m.Type is MoveType.Rapid or MoveType.Line)
                 {
                     var cur = MmToPx(m.X, m.Y);
-                    if (last.HasValue)
+                    if (last.HasValue && !skip)
                     {
-                        var ctx = m.Type == MoveType.Rapid ? rapid : cut;
+                        var ctx = m.Type == MoveType.Rapid ? rap : cut;
                         ctx.BeginFigure(last.Value, false, false);
                         ctx.LineTo(cur, true, false);
                     }
@@ -1303,64 +1777,174 @@ Loaded += (_, _) => UpdateAll();
                 }
                 else
                 {
-                    double cx = m.X + m.I, cy = m.Y + m.J;
-                    double r = Math.Sqrt((m.X - cx) * (m.X - cx) + (m.Y - cy) * (m.Y - cy));
-                    if (r == 0) continue;
-
-                    double start = Math.Atan2(m.Y - cy, m.X - cx);
-                    double end   = Math.Atan2(m.Ye - cy, m.Xe - cx);
-
-                    bool fullCircle = Math.Abs(m.Xe - m.X) < 1e-6 && Math.Abs(m.Ye - m.Y) < 1e-6;
-                    if (fullCircle)
-                        end = m.Type == MoveType.ArcCW ? start - 2 * Math.PI : start + 2 * Math.PI;
-                    else
+                    double ccx = m.X+m.I, ccy = m.Y+m.J;
+                    double ar  = Math.Sqrt((m.X-ccx)*(m.X-ccx)+(m.Y-ccy)*(m.Y-ccy));
+                    if (ar > 0 && !skip)
                     {
-                        if (m.Type == MoveType.ArcCW  && end > start) end -= 2 * Math.PI;
-                        if (m.Type == MoveType.ArcCCW && end < start) end += 2 * Math.PI;
-                    }
-
-                    int steps = Math.Max(8, (int)(Math.Abs(end - start) / (Math.PI / 36)));
-                    var prev = MmToPx(m.X, m.Y);
-                    cut.BeginFigure(prev, false, false);
-                    for (int i = 1; i <= steps; i++)
-                    {
-                        double angle = start + (end - start) * i / steps;
-                        var cur = MmToPx(cx + r * Math.Cos(angle), cy + r * Math.Sin(angle));
-                        cut.LineTo(cur, true, false);
-                        prev = cur;
+                        // Echter WPF-Bogen (kein Segment-Approx) → perfekter Kreis bei jedem Zoom
+                        bool cw   = m.Type == MoveType.ArcCW;
+                        // G02=CW und G03=CCW gelten auch auf dem Screen (Y-Flip ändert die Drehrichtung nicht)
+                        var sweep = cw ? SweepDirection.Clockwise : SweepDirection.Counterclockwise;
+                        double arPx   = ar * scale;
+                        var startPx   = MmToPx(m.X,  m.Y);
+                        var endPx     = MmToPx(m.Xe, m.Ye);
+                        bool full = Math.Abs(m.Xe-m.X)<1e-6 && Math.Abs(m.Ye-m.Y)<1e-6;
+                        if (full)
+                        {
+                            // Vollkreis: zwei Halbbögen über Gegenpunkt
+                            double sA = Math.Atan2(m.Y-ccy, m.X-ccx);
+                            var midPx = MmToPx(ccx + ar*Math.Cos(sA+Math.PI), ccy + ar*Math.Sin(sA+Math.PI));
+                            cut.BeginFigure(startPx, false, false);
+                            cut.ArcTo(midPx,   new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
+                            cut.ArcTo(startPx, new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
+                        }
+                        else
+                        {
+                            double sA=Math.Atan2(m.Y-ccy,m.X-ccx), eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);
+                            if (cw&&eA>sA) eA-=2*Math.PI; if (!cw&&eA<sA) eA+=2*Math.PI;
+                            bool large = Math.Abs(eA-sA) > Math.PI;
+                            cut.BeginFigure(startPx, false, false);
+                            cut.ArcTo(endPx, new System.Windows.Size(arPx,arPx), 0, large, sweep, true, false);
+                        }
                     }
                     last = MmToPx(m.Xe, m.Ye);
                 }
             }
         }
+        cutGeo.Freeze(); rapidGeo.Freeze();
+        DrawCanvas.Children.Add(new System.Windows.Shapes.Path { Data=rapidGeo, Stroke=new SolidColorBrush(Color.FromRgb(160,160,160)), StrokeThickness=2, StrokeDashArray=rapidDash, IsHitTestVisible=false });
+        DrawCanvas.Children.Add(new System.Windows.Shapes.Path { Data=cutGeo,   Stroke=new SolidColorBrush(Color.FromRgb(200,30,30)),   StrokeThickness=2, IsHitTestVisible=false });
 
-        cutGeo.Freeze();
-        rapidGeo.Freeze();
+        // ── Pass 2: Aktiver und selektierter Move farbig als Einzel-Pfad ──
+        void DrawColoredMove(Move m, double fromX, double fromY, Brush stroke, double thick, bool dashed)
+        {
+            System.Windows.Shapes.Path? el = null;
+            if (m.Type is MoveType.Rapid or MoveType.Line)
+            {
+                var geo = new StreamGeometry();
+                using (var ctx = geo.Open()) { ctx.BeginFigure(MmToPx(fromX,fromY),false,false); ctx.LineTo(MmToPx(m.X,m.Y),true,false); }
+                geo.Freeze();
+                el = new System.Windows.Shapes.Path { Data=geo, Stroke=stroke, StrokeThickness=thick, StrokeDashArray=dashed?rapidDash:null };
+            }
+            else
+            {
+                double ccx=m.X+m.I, ccy=m.Y+m.J, ar=Math.Sqrt((m.X-ccx)*(m.X-ccx)+(m.Y-ccy)*(m.Y-ccy));
+                if (ar>0)
+                {
+                    bool cw = m.Type == MoveType.ArcCW;
+                    var sweep = cw ? SweepDirection.Counterclockwise : SweepDirection.Clockwise;
+                    double arPx = ar * scale;
+                    var startPx = MmToPx(m.X, m.Y);
+                    var endPx   = MmToPx(m.Xe, m.Ye);
+                    bool full = Math.Abs(m.Xe-m.X)<1e-6&&Math.Abs(m.Ye-m.Y)<1e-6;
+                    // StreamGeometry statt PathGeometry → identisches Rendering wie Pass 1
+                    var geo2 = new StreamGeometry();
+                    using (var ctx2 = geo2.Open())
+                    {
+                        if (full)
+                        {
+                            double sA = Math.Atan2(m.Y-ccy, m.X-ccx);
+                            var midPx = MmToPx(ccx + ar*Math.Cos(sA+Math.PI), ccy + ar*Math.Sin(sA+Math.PI));
+                            ctx2.BeginFigure(startPx, false, false);
+                            ctx2.ArcTo(midPx,   new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
+                            ctx2.ArcTo(startPx, new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
+                        }
+                        else
+                        {
+                            double sA=Math.Atan2(m.Y-ccy,m.X-ccx), eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);
+                            if (cw&&eA>sA) eA-=2*Math.PI; if (!cw&&eA<sA) eA+=2*Math.PI;
+                            bool large = Math.Abs(eA-sA) > Math.PI;
+                            ctx2.BeginFigure(startPx, false, false);
+                            ctx2.ArcTo(endPx, new System.Windows.Size(arPx,arPx), 0, large, sweep, true, false);
+                        }
+                    }
+                    geo2.Freeze();
+                    el = new System.Windows.Shapes.Path { Data=geo2, Stroke=stroke, StrokeThickness=thick };
+                }
+            }
+            if (el!=null) DrawCanvas.Children.Add(el);
+        }
 
-        var rapidDash = new System.Windows.Media.DoubleCollection { 5, 3 };
-        rapidDash.Freeze();
-        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
+        // ── Pass 3: Transparente Klickflächen über alle Moves ──
+        // Klick-Breite = 14 Bildschirmpixel unabhängig vom Zoom
+        double hitThick = Math.Max(2.0, 14.0 / _zoom);
+        double lx = 0, ly = 0;
+        foreach (var m in moves)
         {
-            Data = rapidGeo, Stroke = Brushes.Gray,
-            StrokeThickness = 2, StrokeDashArray = rapidDash,
-            IsHitTestVisible = false
-        });
-        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-        {
-            Data = cutGeo, Stroke = Brushes.Red,
-            StrokeThickness = 2, IsHitTestVisible = false
-        });
+            double fromX = lx, fromY = ly;
+            bool sel    = m.LineNumber == _selectedGCodeLine;
+            bool active = !sel && m.LineNumber == activeLine;
+
+            if (sel)
+                DrawColoredMove(m, fromX, fromY, new SolidColorBrush(Color.FromRgb(255, 215,  0)), 2.0, m.Type==MoveType.Rapid);
+            else if (active)
+                DrawColoredMove(m, fromX, fromY, new SolidColorBrush(Color.FromRgb(255, 235, 80)), 2.0, m.Type==MoveType.Rapid);
+
+            // Klickfläche
+            System.Windows.Shapes.Path? hitEl = null;
+            if (m.Type is MoveType.Rapid or MoveType.Line)
+            {
+                var geo = new StreamGeometry();
+                using (var ctx = geo.Open()) { ctx.BeginFigure(MmToPx(fromX,fromY),false,false); ctx.LineTo(MmToPx(m.X,m.Y),true,false); }
+                geo.Freeze();
+                hitEl = new System.Windows.Shapes.Path { Data=geo, Stroke=Brushes.Transparent, StrokeThickness=hitThick, Cursor=Cursors.Hand, Tag=m.LineNumber };
+                lx=m.X; ly=m.Y;
+            }
+            else
+            {
+                double ccx=m.X+m.I, ccy=m.Y+m.J, ar=Math.Sqrt((m.X-ccx)*(m.X-ccx)+(m.Y-ccy)*(m.Y-ccy));
+                if (ar>0)
+                {
+                    bool cw = m.Type == MoveType.ArcCW;
+                    var sweep = cw ? SweepDirection.Counterclockwise : SweepDirection.Clockwise;
+                    double arPx = ar * scale;
+                    var startPx = MmToPx(m.X, m.Y);
+                    var endPx   = MmToPx(m.Xe, m.Ye);
+                    bool full = Math.Abs(m.Xe-m.X)<1e-6&&Math.Abs(m.Ye-m.Y)<1e-6;
+                    var pg = new PathGeometry();
+                    if (full)
+                    {
+                        double sA = Math.Atan2(m.Y-ccy, m.X-ccx);
+                        var midPx = MmToPx(ccx + ar*Math.Cos(sA+Math.PI), ccy + ar*Math.Sin(sA+Math.PI));
+                        var fig = new PathFigure { StartPoint=startPx, IsFilled=false };
+                        fig.Segments.Add(new ArcSegment(midPx,   new System.Windows.Size(arPx,arPx), 0, false, sweep, true));
+                        fig.Segments.Add(new ArcSegment(startPx, new System.Windows.Size(arPx,arPx), 0, false, sweep, true));
+                        pg.Figures.Add(fig);
+                    }
+                    else
+                    {
+                        double sA=Math.Atan2(m.Y-ccy,m.X-ccx), eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);
+                        if (cw&&eA>sA) eA-=2*Math.PI; if (!cw&&eA<sA) eA+=2*Math.PI;
+                        bool large = Math.Abs(eA-sA) > Math.PI;
+                        var fig = new PathFigure { StartPoint=startPx, IsFilled=false };
+                        fig.Segments.Add(new ArcSegment(endPx, new System.Windows.Size(arPx,arPx), 0, large, sweep, true));
+                        pg.Figures.Add(fig);
+                    }
+                    hitEl = new System.Windows.Shapes.Path { Data=pg, Stroke=Brushes.Transparent, StrokeThickness=hitThick, Cursor=Cursors.Hand, Tag=m.LineNumber };
+                }
+                lx=m.Xe; ly=m.Ye;
+            }
+            if (hitEl!=null) { hitEl.MouseLeftButtonDown+=OnWorkpieceFormClick; DrawCanvas.Children.Add(hitEl); }
+        }
 
         foreach (var hole in _cachedDrillPoints)
         {
             var center = MmToPx(hole.X, hole.Y);
+            bool selHole = hole.LineNumber == _selectedGCodeLine;
+            // Bohrpunkt: blauer Ring — selektiert in Gold
             var circle = new Ellipse
             {
-                Width = 12, Height = 12,
-                Fill = Brushes.Yellow, Stroke = Brushes.Black, StrokeThickness = 2
+                Width           = 10, Height = 10,
+                Fill            = selHole ? new SolidColorBrush(Color.FromRgb(255,215,0))
+                                          : new SolidColorBrush(Color.FromRgb(0,140,255)),
+                Stroke          = Brushes.White,
+                StrokeThickness = 1.5,
+                Cursor          = Cursors.Hand,
+                Tag             = hole.LineNumber
             };
-            Canvas.SetLeft(circle, center.X - circle.Width / 2);
-            Canvas.SetTop(circle, center.Y - circle.Height / 2);
+            circle.MouseLeftButtonDown += OnWorkpieceFormClick;
+            Canvas.SetLeft(circle, center.X - circle.Width  / 2);
+            Canvas.SetTop (circle, center.Y - circle.Height / 2);
             DrawCanvas.Children.Add(circle);
         }
     }
@@ -1764,10 +2348,819 @@ Loaded += (_, _) => UpdateAll();
     }
 }
 
-public sealed class GCodeLine(string text, Brush color)
+public sealed class GCodeColorizer : DocumentColorizingTransformer
 {
-    public string Text  { get; } = text;
-    public Brush  Color { get; } = color;
+    private static Brush Fb(byte r, byte g, byte b)
+    {
+        var br = new SolidColorBrush(Color.FromRgb(r, g, b));
+        br.Freeze();
+        return br;
+    }
+
+    // Vordergrundfarben
+    private static readonly Brush BrG00     = Fb(180, 180, 180); // G00      hellgrau
+    private static readonly Brush BrG01     = Fb(  0,   0,   0); // G01      schwarz
+    private static readonly Brush BrG0203   = Fb( 30,  90, 210); // G02/G03  blau
+    private static readonly Brush BrGOther  = Fb( 80,  80,  80); // andere G-Codes
+    private static readonly Brush BrM       = Fb(200,  20,  20); // M        rot
+    private static readonly Brush BrFS      = Fb(210, 110,   0); // F / S    orange
+    private static readonly Brush BrXYZ     = Fb( 50,  50,  50); // X Y Z    anthrazit (fett)
+    private static readonly Brush BrIJK     = Fb( 80, 150, 230); // I J K    hellblau
+    private static readonly Brush BrN       = Fb(160, 160, 160); // N        Zeilennummer gedimmt
+    private static readonly Brush BrOther   = Fb( 80,  80,  80); // sonstige Parameter
+    private static readonly Brush BrComment = Fb( 60, 130,  60); // Kommentar  grün (kursiv)
+
+    // Typefaces für fett (X Y Z) und kursiv (Kommentare)
+    private static readonly Typeface TfBold   = new(new FontFamily("Consolas"), FontStyles.Normal, FontWeights.Bold,   FontStretches.Normal);
+    private static readonly Typeface TfItalic = new(new FontFamily("Consolas"), FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
+
+    // Token-Regex
+    // c=Kommentar | g=G-Code | m=M-Code | f=Vorschub | s=Drehzahl |
+    // xyz=X/Y/Z  | ijk=I/J/K | ln=N-Zeilennr. | other=Rest
+    private static readonly Regex TokenRx = new(
+        @"(?<c>;[^\r\n]*|\([^)]*\))|(?<g>G\d+(?:\.\d+)?)|(?<m>M\d+)|(?<f>F[+-]?[\d.]+)|(?<s>S[+-]?[\d.]+)|(?<xyz>[XYZ][+-]?[\d.]+)|(?<ijk>[IJK][+-]?[\d.]+)|(?<ln>N\d+)|(?<other>[A-EHLO-RT-W][+-]?[\d.]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    protected override void ColorizeLine(ICSharpCode.AvalonEdit.Document.DocumentLine line)
+    {
+        var text = CurrentContext.Document.GetText(line);
+
+        foreach (Match tok in TokenRx.Matches(text))
+        {
+            Brush?    brush = null;
+            Typeface? tf    = null;
+
+            if (tok.Groups["c"].Success)
+            {
+                brush = BrComment;
+                tf    = TfItalic;
+            }
+            else if (tok.Groups["g"].Success)
+            {
+                var up = tok.Value.ToUpperInvariant();
+                brush = up is "G0" or "G00"                   ? BrG00
+                      : up is "G1" or "G01"                   ? BrG01
+                      : up is "G2" or "G02" or "G3" or "G03" ? BrG0203
+                      : BrGOther;
+            }
+            else if (tok.Groups["m"].Success)    brush = BrM;
+            else if (tok.Groups["f"].Success)    brush = BrFS;
+            else if (tok.Groups["s"].Success)    brush = BrFS;
+            else if (tok.Groups["xyz"].Success)  { brush = BrXYZ; tf = TfBold; }
+            else if (tok.Groups["ijk"].Success)  brush = BrIJK;
+            else if (tok.Groups["ln"].Success)   brush = BrN;
+            else if (tok.Groups["other"].Success) brush = BrOther;
+
+            if (brush is null) continue;
+            int start = line.Offset + tok.Index;
+            int end   = start + tok.Length;
+
+            var capturedBrush = brush;
+            var capturedTf    = tf;
+            ChangeLinePart(start, end, el =>
+            {
+                el.TextRunProperties.SetForegroundBrush(capturedBrush);
+                if (capturedTf is not null)
+                    el.TextRunProperties.SetTypeface(capturedTf);
+            });
+        }
+    }
+}
+
+// Zeilenhintergrund: G00-Zeilen leicht grau, M30-Zeile zartes Rot
+public sealed class GCodeLineBackgroundRenderer : IBackgroundRenderer
+{
+    private static Brush MkBg(byte r, byte g, byte b, byte a)
+    {
+        var br = new SolidColorBrush(Color.FromArgb(a, r, g, b));
+        br.Freeze();
+        return br;
+    }
+
+    private static readonly Brush BgG00 = MkBg(  0,   0,   0,  18); // sehr leichtes Grau
+    private static readonly Brush BgM30 = MkBg(220,  30,  30,  35); // zartes Rot
+    private static readonly Brush BgSel = MkBg(255, 210,   0, 140); // kräftiges Gold für Werkstück-Selektion
+    private static readonly Brush BgHov = MkBg(255, 230,  60,  70); // helleres Gold für Hover
+    private static readonly Pen   PenSel;
+
+    static GCodeLineBackgroundRenderer()
+    {
+        var pen = new Pen(new SolidColorBrush(Color.FromRgb(255, 180, 0)), 1.5);
+        pen.Freeze();
+        PenSel = pen;
+    }
+
+    private static readonly Regex RxG00 = new(@"\bG0*0\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RxM30 = new(@"\bM30\b",  RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Von Werkstück-Klick gesetzte selektierte Zeile (1-basiert, -1 = keine)</summary>
+    public int SelectedLine { get; set; } = -1;
+    /// <summary>Maus-Hover-Zeile im Editor (1-basiert, -1 = keine)</summary>
+    public int HoverLine    { get; set; } = -1;
+
+    public KnownLayer Layer => KnownLayer.Background;
+
+    public void Draw(TextView textView, DrawingContext drawingContext)
+    {
+        if (textView?.Document is null) return;
+        textView.EnsureVisualLines();
+        foreach (var vl in textView.VisualLines)
+        {
+            var docLine = vl.FirstDocumentLine;
+            var text    = textView.Document.GetText(docLine);
+
+            // Werkstück-Selektion hat Vorrang (überschreibt G00/M30-Farbe)
+            if (docLine.LineNumber == SelectedLine)
+            {
+                foreach (var rect in BackgroundGeometryBuilder.GetRectsForSegment(textView, docLine))
+                    drawingContext.DrawRectangle(BgSel, PenSel,
+                        new Rect(0, rect.Y, textView.ActualWidth, rect.Height));
+                continue;
+            }
+            // Hover-Zeile (Maus im Editor)
+            if (docLine.LineNumber == HoverLine)
+            {
+                foreach (var rect in BackgroundGeometryBuilder.GetRectsForSegment(textView, docLine))
+                    drawingContext.DrawRectangle(BgHov, null,
+                        new Rect(0, rect.Y, textView.ActualWidth, rect.Height));
+                continue;
+            }
+
+            Brush? bg = null;
+            if (RxG00.IsMatch(text)) bg = BgG00;
+            if (RxM30.IsMatch(text)) bg = BgM30;  // M30 überschreibt G00
+            if (bg is null) continue;
+
+            foreach (var rect in BackgroundGeometryBuilder.GetRectsForSegment(textView, docLine))
+                drawingContext.DrawRectangle(bg, null,
+                    new Rect(0, rect.Y, textView.ActualWidth, rect.Height));
+        }
+    }
+}
+
+// Richtungspfeil-Spalte: zeigt pro Zeile die Bewegungsrichtung des Fräskopfes
+// Richtung = Vektor vom Standort der Vorzeile zum Ziel der aktuellen Zeile
+public sealed class GCodeArrowMargin : AbstractMargin
+{
+    private const double ColW = 34;
+
+    private List<LineData>? _cachedLines;  // wird in OnRender befüllt
+    private ToolTip?        _tip;
+    private int             _lastTipLine = -1;
+
+    public GCodeArrowMargin()
+    {
+        Width      = ColW;
+        MouseMove  += OnMarginMouseMove;
+        MouseLeave += OnMarginMouseLeave;
+    }
+
+    protected override void OnTextViewChanged(TextView? oldTextView, TextView? newTextView)
+    {
+        if (oldTextView != null)
+        {
+            oldTextView.VisualLinesChanged    -= OnViewChanged;
+            oldTextView.ScrollOffsetChanged   -= OnViewChanged;
+        }
+        base.OnTextViewChanged(oldTextView, newTextView);
+        if (newTextView != null)
+        {
+            newTextView.VisualLinesChanged    += OnViewChanged;
+            newTextView.ScrollOffsetChanged   += OnViewChanged;
+        }
+    }
+
+    private void OnViewChanged(object? sender, EventArgs e) => InvalidateVisual();
+
+    protected override Size MeasureOverride(Size availableSize) => new(ColW, 0);
+
+    // ── Zeichenressourcen ─────────────────────────────────────────────────────
+    private static Pen MkPen(byte r, byte g, byte b, double thick, bool dash = false)
+    {
+        var pen = new Pen(new SolidColorBrush(Color.FromRgb(r, g, b)), thick);
+        if (dash) pen.DashStyle = DashStyles.Dash;
+        pen.Freeze();
+        return pen;
+    }
+    private static Brush MkBr(byte r, byte g, byte b)
+    { var br = new SolidColorBrush(Color.FromRgb(r, g, b)); br.Freeze(); return br; }
+
+    // Eilgang: dünner gestrichelter grauer Pfeil
+    private static readonly Pen   PenRapid  = MkPen(170, 170, 170, 1.2, dash: true);
+    private static readonly Brush BrRapid   = MkBr(170, 170, 170);
+    // Linearbewegung: kräftiger schwarzer Pfeil
+    private static readonly Pen   PenLinear = MkPen( 30,  30,  30, 1.8);
+    private static readonly Brush BrLinear  = MkBr( 30,  30,  30);
+    // Bogen: blau
+    private static readonly Brush BrArc     = MkBr( 30,  90, 210);
+    // M-Codes: rot
+    private static readonly Brush BrM       = MkBr(200,  20,  20);
+    // Hintergrund der Spalte (passend zu AvalonEdit-Zeilennummer-Farbe)
+    private static readonly Brush BgCol     = MkBr(240, 240, 236);
+    private static readonly Pen   PenSep    = new(MkBr(200, 200, 195), 1) { };
+
+    private static readonly Typeface Tf = new("Segoe UI Symbol");
+
+    // ── G-Code Mini-Interpreter ───────────────────────────────────────────────
+    private static readonly Regex RxG = new(@"(?<![.\d])G(\d+(?:\.\d+)?)(?!\d)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RxM = new(@"(?<![.\d])M(\d+)(?!\d)",            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RxX = new(@"(?<![A-Za-z])X([+-]?[\d.]+)",       RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RxY = new(@"(?<![A-Za-z])Y([+-]?[\d.]+)",       RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RxZ = new(@"(?<![A-Za-z])Z([+-]?[\d.]+)",       RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private enum GCmd { None, Rapid, Linear, ArcCW, ArcCCW, MCode, End }
+
+    // DX/DY/DZ = Differenz vom vorherigen Standort zum Ziel dieser Zeile
+    private record LineData(GCmd Cmd, double DX, double DY, double DZ);
+
+    private static List<LineData> ParseDocument(ICSharpCode.AvalonEdit.Document.TextDocument doc)
+    {
+        var inv    = System.Globalization.CultureInfo.InvariantCulture;
+        var result = new List<LineData>(doc.LineCount);
+        double x = 0, y = 0, z = 0;
+        bool abs   = true;
+        int  modal = 1; // modaler G-Code (Standard: G01)
+
+        for (int ln = 1; ln <= doc.LineCount; ln++)
+        {
+            var seg  = doc.GetLineByNumber(ln);
+            var text = doc.GetText(seg).Trim();
+
+            if (string.IsNullOrEmpty(text) || text.StartsWith(";") || text.StartsWith("("))
+            { result.Add(new LineData(GCmd.None, 0, 0, 0)); continue; }
+
+            int  gMode   = modal;
+            bool hasMove = false;
+            bool hasMEnd = false;
+            bool hasM    = false;
+
+            foreach (Match mg in RxG.Matches(text))
+            {
+                if (!double.TryParse(mg.Groups[1].Value, System.Globalization.NumberStyles.Float, inv, out double gn)) continue;
+                switch ((int)gn)
+                {
+                    case 0:  gMode = 0; hasMove = true; break;
+                    case 1:  gMode = 1; hasMove = true; break;
+                    case 2:  gMode = 2; hasMove = true; break;
+                    case 3:  gMode = 3; hasMove = true; break;
+                    case 90: abs = true;  break;
+                    case 91: abs = false; break;
+                }
+            }
+            modal = gMode;
+
+            foreach (Match mm in RxM.Matches(text))
+            {
+                hasM = true;
+                if (int.TryParse(mm.Groups[1].Value, out int mn) && mn == 30) hasMEnd = true;
+            }
+
+            // Zielkoordinaten dieser Zeile ermitteln
+            double nx = x, ny = y, nz = z;
+            var mx = RxX.Match(text); var my = RxY.Match(text); var mz = RxZ.Match(text);
+            if (mx.Success && double.TryParse(mx.Groups[1].Value, System.Globalization.NumberStyles.Float, inv, out double vx))
+            { nx = abs ? vx : x + vx; hasMove = true; }
+            if (my.Success && double.TryParse(my.Groups[1].Value, System.Globalization.NumberStyles.Float, inv, out double vy))
+            { ny = abs ? vy : y + vy; hasMove = true; }
+            if (mz.Success && double.TryParse(mz.Groups[1].Value, System.Globalization.NumberStyles.Float, inv, out double vz))
+            { nz = abs ? vz : z + vz; hasMove = true; }
+
+            // Richtungsvektor: Standort (x,y,z) → Ziel (nx,ny,nz)
+            double dx = nx - x, dy = ny - y, dz = nz - z;
+            x = nx; y = ny; z = nz;
+
+            GCmd cmd = GCmd.None;
+            if      (hasMEnd)  cmd = GCmd.End;
+            else if (hasMove)  cmd = gMode switch { 0 => GCmd.Rapid, 2 => GCmd.ArcCW, 3 => GCmd.ArcCCW, _ => GCmd.Linear };
+            else if (hasM)     cmd = GCmd.MCode;
+
+            result.Add(new LineData(cmd, dx, dy, dz));
+        }
+        return result;
+    }
+
+    // ── Rendering ─────────────────────────────────────────────────────────────
+    protected override void OnRender(DrawingContext dc)
+    {
+        var tv = TextView;
+        if (tv is null) return;
+
+        dc.DrawRectangle(BgCol, null, new Rect(0, 0, ColW, ActualHeight));
+        dc.DrawLine(PenSep, new Point(ColW - 0.5, 0), new Point(ColW - 0.5, ActualHeight));
+
+        var doc = tv.Document;
+        if (doc is null) return;
+
+        double ppd   = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var    lines = ParseDocument(doc);
+        _cachedLines = lines;            // für MouseMove-Tooltip merken
+        double cx    = ColW / 2.0;
+
+        foreach (var vl in tv.VisualLines)
+        {
+            int idx = vl.FirstDocumentLine.LineNumber - 1;
+            if (idx < 0 || idx >= lines.Count) continue;
+
+            double top = vl.GetTextLineVisualYPosition(vl.TextLines[0], VisualYPosition.TextTop) - tv.VerticalOffset;
+            double h   = vl.Height;
+            double cy  = top + h / 2;
+
+            // Pfeilgröße: gut sichtbar, aber nicht zu wuchtig
+            double sz = Math.Clamp(h * 0.60, 7, 13);
+
+            DrawSymbol(dc, lines[idx], cx, cy, sz, ppd);
+        }
+    }
+
+    private static void DrawSymbol(DrawingContext dc, LineData ld, double cx, double cy, double sz, double ppd)
+    {
+        switch (ld.Cmd)
+        {
+            case GCmd.Rapid:
+                // Eilgang: gestrichelter grauer Pfeil in Richtung des Deltas
+                DrawArrow(dc, PenRapid, BrRapid, cx, cy, sz, ld.DX, ld.DY, ld.DZ);
+                break;
+            case GCmd.Linear:
+                // Linearbewegung: kräftiger schwarzer Richtungspfeil
+                DrawArrow(dc, PenLinear, BrLinear, cx, cy, sz, ld.DX, ld.DY, ld.DZ);
+                break;
+            case GCmd.ArcCW:
+                DrawGlyph(dc, "↻", cx, cy, sz * 1.5, BrArc, ppd);
+                break;
+            case GCmd.ArcCCW:
+                DrawGlyph(dc, "↺", cx, cy, sz * 1.5, BrArc, ppd);
+                break;
+            case GCmd.MCode:
+                DrawGlyph(dc, "●", cx, cy, sz * 1.1, BrM, ppd);
+                break;
+            case GCmd.End:
+                DrawGlyph(dc, "■", cx, cy, sz * 1.1, BrM, ppd);
+                break;
+        }
+    }
+
+    // Richtungspfeil: zeigt vom alten Standort (Vorzeile) zum neuen Ziel (diese Zeile).
+    // dx/dy/dz = Differenz im Maschinen-Koordinatensystem.
+    // WPF-Y ist invertiert zu CNC-Y (positive CNC-Y = Bildschirm-oben).
+    private static void DrawArrow(DrawingContext dc, Pen pen, Brush headBrush,
+        double cx, double cy, double sz, double dx, double dy, double dz)
+    {
+        // Winkel im WPF-Koordinatensystem: dy negieren, weil Y-Achse invertiert
+        double angle;
+        if (Math.Abs(dx) > 0.001 || Math.Abs(dy) > 0.001)
+            angle = Math.Atan2(-dy, dx);
+        else if (Math.Abs(dz) > 0.001)
+            angle = dz < 0 ? Math.PI / 2 : -Math.PI / 2; // Z-: eintauchen (↓); Z+: abheben (↑)
+        else
+            return; // kein Delta → kein Pfeil
+
+        // Pfeilschaft
+        double half = sz * 0.68;
+        double x0 = cx - Math.Cos(angle) * half;
+        double y0 = cy - Math.Sin(angle) * half;
+        double x1 = cx + Math.Cos(angle) * half;
+        double y1 = cy + Math.Sin(angle) * half;
+        dc.DrawLine(pen, new Point(x0, y0), new Point(x1, y1));
+
+        // Pfeilspitze (gefülltes Dreieck)
+        double hl = sz * 0.58;   // Länge der Spitze
+        double hw = 0.58;        // halber Öffnungswinkel (rad)
+        double a1 = angle + Math.PI - hw;
+        double a2 = angle + Math.PI + hw;
+        var tip = new Point(x1, y1);
+        var p1  = new Point(x1 + Math.Cos(a1) * hl, y1 + Math.Sin(a1) * hl);
+        var p2  = new Point(x1 + Math.Cos(a2) * hl, y1 + Math.Sin(a2) * hl);
+
+        var fig = new PathFigure { StartPoint = tip, IsClosed = true, IsFilled = true };
+        fig.Segments.Add(new LineSegment(p1, true));
+        fig.Segments.Add(new LineSegment(p2, true));
+        var geo = new PathGeometry();
+        geo.Figures.Add(fig);
+        dc.DrawGeometry(headBrush, null, geo);
+    }
+
+    private static void DrawGlyph(DrawingContext dc, string glyph, double cx, double cy,
+        double sz, Brush brush, double ppd)
+    {
+        var ft = new FormattedText(glyph,
+            System.Globalization.CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight, Tf, sz, brush, ppd);
+        dc.DrawText(ft, new Point(cx - ft.Width / 2, cy - ft.Height / 2));
+    }
+
+    // ── Tooltip ───────────────────────────────────────────────────────────────
+    private void OnMarginMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var tv = TextView;
+        if (tv is null || _cachedLines is null) return;
+
+        double mouseY = e.GetPosition(this).Y;
+        LineData? ld  = null;
+        int       ln  = 0;
+        foreach (var vl in tv.VisualLines)
+        {
+            double top = vl.GetTextLineVisualYPosition(vl.TextLines[0], VisualYPosition.TextTop)
+                         - tv.VerticalOffset;
+            if (mouseY >= top && mouseY < top + vl.Height)
+            {
+                int idx = vl.FirstDocumentLine.LineNumber - 1;
+                if (idx >= 0 && idx < _cachedLines.Count)
+                { ld = _cachedLines[idx]; ln = idx + 1; }
+                break;
+            }
+        }
+
+        if (ld is null || ld.Cmd == GCmd.None)
+        { if (_tip is not null) _tip.IsOpen = false; return; }
+
+        // Inhalt nur neu aufbauen wenn sich die Zeile geändert hat
+        if (_tip is null)
+        {
+            _tip = new ToolTip
+            {
+                Placement       = System.Windows.Controls.Primitives.PlacementMode.Mouse,
+                Background      = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                HasDropShadow   = false,
+                Padding         = new Thickness(0)
+            };
+        }
+        if (ln != _lastTipLine)
+        {
+            _tip.Content  = BuildArrowTooltip(ld, ln);
+            _lastTipLine  = ln;
+        }
+        _tip.IsOpen = true;
+    }
+
+    private void OnMarginMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_tip is not null) _tip.IsOpen = false;
+        _lastTipLine = -1;
+    }
+
+    private static UIElement BuildArrowTooltip(LineData ld, int lineNum)
+    {
+        // ── Pfeil-Canvas (linke Hälfte) ──────────────────────────────────────
+        const double C = 80;
+        var canvas = new Canvas
+        {
+            Width      = C,
+            Height     = C,
+            Background = new SolidColorBrush(Color.FromRgb(28, 28, 34))
+        };
+
+        bool xyMove = Math.Abs(ld.DX) > 0.001 || Math.Abs(ld.DY) > 0.001;
+        bool zMove  = Math.Abs(ld.DZ) > 0.001;
+
+        if (ld.Cmd is GCmd.Rapid or GCmd.Linear)
+        {
+            double angle;
+            if (xyMove)     angle = Math.Atan2(-ld.DY, ld.DX);
+            else if (zMove) angle = ld.DZ < 0 ? Math.PI / 2 : -Math.PI / 2;
+            else            angle = 0;
+
+            double cx = C / 2, cy = C / 2, half = C * 0.34;
+            double x0 = cx - Math.Cos(angle) * half, y0 = cy - Math.Sin(angle) * half;
+            double x1 = cx + Math.Cos(angle) * half, y1 = cy + Math.Sin(angle) * half;
+
+            bool   isRapid = ld.Cmd == GCmd.Rapid;
+            var    col     = isRapid ? Color.FromRgb(150, 150, 150) : Color.FromRgb(230, 230, 225);
+            var    stroke  = new SolidColorBrush(col);
+
+            // Pfeilschaft
+            var shaft = new System.Windows.Shapes.Line
+            {
+                X1 = x0, Y1 = y0, X2 = x1, Y2 = y1,
+                Stroke          = stroke,
+                StrokeThickness = isRapid ? 1.8 : 2.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap   = PenLineCap.Round
+            };
+            if (isRapid) shaft.StrokeDashArray = new System.Windows.Media.DoubleCollection { 4, 2 };
+            canvas.Children.Add(shaft);
+
+            // Startpunkt
+            var dot = new System.Windows.Shapes.Ellipse
+            {
+                Width = 6, Height = 6, Fill = stroke
+            };
+            Canvas.SetLeft(dot, x0 - 3); Canvas.SetTop(dot, y0 - 3);
+            canvas.Children.Add(dot);
+
+            // Pfeilspitze
+            double hl = C * 0.17, hw = 0.44;
+            var head = new System.Windows.Shapes.Polygon
+            {
+                Points = new PointCollection
+                {
+                    new(x1, y1),
+                    new(x1 + Math.Cos(angle + Math.PI - hw) * hl,
+                        y1 + Math.Sin(angle + Math.PI - hw) * hl),
+                    new(x1 + Math.Cos(angle + Math.PI + hw) * hl,
+                        y1 + Math.Sin(angle + Math.PI + hw) * hl)
+                },
+                Fill = stroke
+            };
+            canvas.Children.Add(head);
+
+            // Koordinatenkreuz — volle Breite, deutlich sichtbar
+            var dimBrush = new SolidColorBrush(Color.FromArgb(110, 140, 140, 170));
+            canvas.Children.Add(new System.Windows.Shapes.Line
+            { X1=2, Y1=C/2, X2=C-2, Y2=C/2, Stroke=dimBrush, StrokeThickness=1.0 });
+            canvas.Children.Add(new System.Windows.Shapes.Line
+            { X1=C/2, Y1=2, X2=C/2, Y2=C-2, Stroke=dimBrush, StrokeThickness=1.0 });
+            // Achsenbeschriftung
+            var axFont = new System.Windows.Media.FontFamily("Segoe UI");
+            var lblX = new TextBlock { Text="X", FontSize=9, Foreground=dimBrush, FontFamily=axFont };
+            Canvas.SetLeft(lblX, C-10); Canvas.SetTop(lblX, C/2+2); canvas.Children.Add(lblX);
+            var lblY = new TextBlock { Text="Y", FontSize=9, Foreground=dimBrush, FontFamily=axFont };
+            Canvas.SetLeft(lblY, C/2+3); Canvas.SetTop(lblY, 2); canvas.Children.Add(lblY);
+        }
+        else
+        {
+            // Bogensymbol oder M-Code
+            var sym = ld.Cmd switch
+            {
+                GCmd.ArcCW  => "↻",
+                GCmd.ArcCCW => "↺",
+                GCmd.End    => "■",
+                _           => "●"
+            };
+            var symColor = ld.Cmd is GCmd.ArcCW or GCmd.ArcCCW
+                ? Color.FromRgb(80, 140, 230)
+                : Color.FromRgb(210, 50, 50);
+            var tb = new TextBlock
+            {
+                Text       = sym,
+                FontSize   = 36,
+                Foreground = new SolidColorBrush(symColor)
+            };
+            Canvas.SetLeft(tb, C / 2 - 20); Canvas.SetTop(tb, C / 2 - 26);
+            canvas.Children.Add(tb);
+        }
+
+        // ── Infotext (rechte Hälfte) ──────────────────────────────────────────
+        // Z-only G01: Eintauchen oder Herausziehen, kein XY-Vorschub
+        bool zOnly = ld.Cmd == GCmd.Linear && !xyMove && zMove;
+
+        var (cmdTitle, cmdDesc) = ld.Cmd switch
+        {
+            GCmd.Rapid  => ("G00 — Eilgang",
+                            "Schnelle Positionierfahrt,\nkein Materialabtrag."),
+            GCmd.Linear when zOnly && ld.DZ < 0
+                        => ("G01 — Eintauchen ↓",
+                            "Werkzeug senkrecht in\ndas Material eintauchen."),
+            GCmd.Linear when zOnly && ld.DZ > 0
+                        => ("G01 — Herausziehen ↑",
+                            "Werkzeug senkrecht aus\ndem Material herausziehen."),
+            GCmd.Linear => ("G01 — Linearbewegung",
+                            "Gerades Fräsen entlang\ndes Richtungsvektors."),
+            GCmd.ArcCW  => ("G02 — Bogen ↻",
+                            "Kreisbogen im\nUhrzeigersinn."),
+            GCmd.ArcCCW => ("G03 — Bogen ↺",
+                            "Kreisbogen gegen\nden Uhrzeigersinn."),
+            GCmd.MCode  => ("M-Code",
+                            "Maschinenfunktion\n(Spindel / Kühlmittel …)"),
+            GCmd.End    => ("M30 — Programmende",
+                            "Programm beendet,\nRücksprung zum Anfang."),
+            _           => ("", "")
+        };
+
+        var info = new StackPanel { Margin = new Thickness(10, 8, 12, 9), MinWidth = 160 };
+
+        info.Children.Add(new TextBlock
+        {
+            Text       = $"Zeile {lineNum}",
+            FontSize   = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 125)),
+            Margin     = new Thickness(0, 0, 0, 2)
+        });
+        info.Children.Add(new TextBlock
+        {
+            Text       = cmdTitle,
+            FontWeight = FontWeights.Bold,
+            FontSize   = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(220, 170, 70)),
+            Margin     = new Thickness(0, 0, 0, 4)
+        });
+        info.Children.Add(new TextBlock
+        {
+            Text         = cmdDesc,
+            FontSize     = 11,
+            Foreground   = new SolidColorBrush(Color.FromRgb(195, 195, 190)),
+            TextWrapping = TextWrapping.Wrap,
+            Margin       = new Thickness(0, 0, 0, 6)
+        });
+
+        // Delta-Werte
+        if (ld.Cmd is GCmd.Rapid or GCmd.Linear)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            void AddDelta(string lbl, double v)
+            {
+                if (Math.Abs(v) < 0.001) return;
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 0) };
+                row.Children.Add(new TextBlock
+                {
+                    Text = lbl, Width = 28, FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 125))
+                });
+                row.Children.Add(new TextBlock
+                {
+                    Text = $"{v:+0.###;-0.###} mm",
+                    FontFamily = new FontFamily("Consolas"), FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(210, 210, 200))
+                });
+                info.Children.Add(row);
+            }
+            AddDelta("ΔX:", ld.DX);
+            AddDelta("ΔY:", ld.DY);
+            AddDelta("ΔZ:", ld.DZ);
+
+            double dist = Math.Sqrt(ld.DX * ld.DX + ld.DY * ld.DY);
+            if (dist > 0.001)
+            {
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 0) };
+                row.Children.Add(new TextBlock
+                {
+                    Text = "↔", Width = 28, FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 125))
+                });
+                row.Children.Add(new TextBlock
+                {
+                    Text = $"{dist:0.###} mm",
+                    FontFamily = new FontFamily("Consolas"), FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(140, 180, 210))
+                });
+                info.Children.Add(row);
+            }
+
+            // Kompassrichtung
+            if (xyMove)
+            {
+                double deg = Math.Atan2(-ld.DY, ld.DX) * 180 / Math.PI;
+                if (deg < 0) deg += 360;
+                string compass = deg switch
+                {
+                    >= 337.5 or < 22.5   => "→  Ost",
+                    >= 22.5  and < 67.5  => "↗  Nordost",
+                    >= 67.5  and < 112.5 => "↑  Nord",
+                    >= 112.5 and < 157.5 => "↖  Nordwest",
+                    >= 157.5 and < 202.5 => "←  West",
+                    >= 202.5 and < 247.5 => "↙  Südwest",
+                    >= 247.5 and < 292.5 => "↓  Süd",
+                    _                    => "↘  Südost"
+                };
+                info.Children.Add(new TextBlock
+                {
+                    Text     = $"{compass}  ({deg:0}°)",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(140, 170, 200)),
+                    Margin   = new Thickness(0, 4, 0, 0)
+                });
+            }
+        }
+
+        // Canvas + Text nebeneinander
+        var content = new StackPanel { Orientation = Orientation.Horizontal };
+        content.Children.Add(canvas);
+        content.Children.Add(info);
+
+        return new Border
+        {
+            Background      = new SolidColorBrush(Color.FromRgb(32, 32, 38)),
+            BorderBrush     = new SolidColorBrush(Color.FromRgb(100, 100, 115)),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(7),
+            Child           = content,
+            Effect          = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color = Colors.Black, Opacity = 0.6, BlurRadius = 10, ShadowDepth = 4
+            }
+        };
+    }
+}
+
+public static class GCodeTooltip
+{
+    private static readonly Regex TokenRx = new(
+        @"(?<c>;[^\r\n]*|\([^)]*\))|(?<g>G\d+(?:\.\d+)?)|(?<m>M\d+)|(?<f>F[+-]?[\d.]+)|(?<s>S[+-]?[\d.]+)|(?<xyz>[XYZ][+-]?[\d.]+)|(?<ijk>[IJK][+-]?[\d.]+)|(?<ln>N\d+)|(?<other>[A-EHLO-RT-W][+-]?[\d.]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Gibt (Titel, Beschreibung) für das Token an Position col zurück.</summary>
+    public static (string? Title, string? Desc) GetTooltip(string lineText, int col)
+    {
+        foreach (Match m in TokenRx.Matches(lineText))
+        {
+            if (col >= m.Index && col < m.Index + m.Length)
+                return Explain(m);
+        }
+        return (null, null);
+    }
+
+    private static (string? Title, string? Desc) Explain(Match m)
+    {
+        if (m.Groups["c"].Success)
+            return ("Kommentar", "Wird von der Maschine vollständig ignoriert.");
+        if (m.Groups["g"].Success) return ExplainG(m.Value);
+        if (m.Groups["m"].Success) return ExplainM(m.Value);
+        if (m.Groups["f"].Success)
+            return ("F — Vorschubgeschwindigkeit", $"Werkzeugbewegung mit {m.Value[1..]} mm/min.");
+        if (m.Groups["s"].Success)
+            return ("S — Spindeldrehzahl", $"Spindel dreht mit {m.Value[1..]} U/min.");
+        if (m.Groups["xyz"].Success) return ExplainXYZ(m.Value);
+        if (m.Groups["ijk"].Success) return ExplainIJK(m.Value);
+        if (m.Groups["ln"].Success)
+            return ("N — Zeilennummer", $"Zeilennummer {m.Value[1..]}. Dient der Orientierung im Programm.");
+        return (null, null);
+    }
+
+    private static (string, string) ExplainG(string tok)
+    {
+        return tok.ToUpperInvariant() switch
+        {
+            "G0"  or "G00" => ("G00 — Eilgang",
+                "Schnelle Positionierfahrt ohne Fräsen. Das Werkzeug bewegt sich mit maximaler Geschwindigkeit zum Zielpunkt."),
+            "G1"  or "G01" => ("G01 — Linearbewegung",
+                "Gerades Fräsen mit dem eingestellten Vorschub F. Erzeugt eine gerade Linie im Material."),
+            "G2"  or "G02" => ("G02 — Kreisbogen (Uhrzeigersinn)",
+                "Fräst einen Kreisbogen im Uhrzeigersinn. Mittelpunkt wird mit I/J angegeben."),
+            "G3"  or "G03" => ("G03 — Kreisbogen (Gegenuhrzeigersinn)",
+                "Fräst einen Kreisbogen gegen den Uhrzeigersinn. Mittelpunkt wird mit I/J angegeben."),
+            "G17"          => ("G17 — XY-Ebene",
+                "Wählt die XY-Ebene als aktive Arbeitsebene. Standardeinstellung beim Fräsen."),
+            "G20"          => ("G20 — Maßeinheit: Zoll",
+                "Alle Koordinaten werden in Zoll (inch) interpretiert."),
+            "G21"          => ("G21 — Maßeinheit: Millimeter",
+                "Alle Koordinaten werden in Millimetern interpretiert."),
+            "G28"          => ("G28 — Referenzpunkt anfahren",
+                "Maschine fährt zum Maschinen-Nullpunkt (Referenzpunkt)."),
+            "G40"          => ("G40 — Radiuskorrektur AUS",
+                "Hebt eine aktive Werkzeug-Radiuskorrektur (G41/G42) auf."),
+            "G41"          => ("G41 — Radiuskorrektur links",
+                "Werkzeugmittelpunkt fährt links vom programmierten Pfad. Ausgleich für Frästerdurchmesser."),
+            "G42"          => ("G42 — Radiuskorrektur rechts",
+                "Werkzeugmittelpunkt fährt rechts vom programmierten Pfad. Ausgleich für Frästerdurchmesser."),
+            "G54"          => ("G54 — Werkstück-Nullpunkt 1",
+                "Aktiviert den ersten Werkstück-Koordinatenursprung (Nullpunktversatz 1)."),
+            "G90"          => ("G90 — Absolute Koordinaten",
+                "Alle Koordinaten beziehen sich auf den Werkstück-Nullpunkt."),
+            "G91"          => ("G91 — Inkrementale Koordinaten",
+                "Alle Koordinaten sind relativ zur aktuellen Werkzeugposition angegeben."),
+            "G94"          => ("G94 — Vorschub mm/min",
+                "Vorschubgeschwindigkeit F wird in Millimetern pro Minute interpretiert."),
+            var u          => ($"{u} — G-Code", "Geometrischer Befehl für Bewegung oder Maschinenmodus.")
+        };
+    }
+
+    private static (string, string) ExplainM(string tok)
+    {
+        return tok.ToUpperInvariant() switch
+        {
+            "M3"  or "M03" => ("M03 — Spindel EIN ↻",
+                "Schaltet die Frässpindel im Uhrzeigersinn ein. Drehzahl wird mit S angegeben."),
+            "M4"  or "M04" => ("M04 — Spindel EIN ↺",
+                "Schaltet die Frässpindel gegen den Uhrzeigersinn ein."),
+            "M5"  or "M05" => ("M05 — Spindel AUS",
+                "Hält die Frässpindel an. Sollte vor Werkzeugwechsel und Programmende aufgerufen werden."),
+            "M6"  or "M06" => ("M06 — Werkzeugwechsel",
+                "Löst einen Werkzeugwechsel aus. Werkzeugnummer wird mit T angegeben."),
+            "M8"  or "M08" => ("M08 — Kühlmittel EIN",
+                "Schaltet die Kühlmittelzufuhr ein."),
+            "M9"  or "M09" => ("M09 — Kühlmittel AUS",
+                "Schaltet die Kühlmittelzufuhr aus."),
+            "M30"          => ("M30 — Programmende",
+                "Beendet das G-Code-Programm und setzt die Maschine auf den Programmanfang zurück."),
+            var u          => ($"{u} — M-Code", "Maschinenfunktion (Hilfsfunktion, kein Bewegungsbefehl).")
+        };
+    }
+
+    private static (string, string) ExplainXYZ(string tok)
+    {
+        var axis = char.ToUpperInvariant(tok[0]);
+        var val  = tok[1..];
+        return axis switch
+        {
+            'X' => ("X — Längsachse",   $"Zielposition X = {val} mm (links/rechts)."),
+            'Y' => ("Y — Querachse",    $"Zielposition Y = {val} mm (vorne/hinten)."),
+            'Z' => ("Z — Vertikalachse", $"Zielposition Z = {val} mm. Negative Werte bedeuten Eintauchen ins Material."),
+            _   => (tok, "")
+        };
+    }
+
+    private static (string, string) ExplainIJK(string tok)
+    {
+        var axis = char.ToUpperInvariant(tok[0]);
+        var val  = tok[1..];
+        return axis switch
+        {
+            'I' => ("I — Bogenmittelpunkt X", $"Abstand {val} mm in X-Richtung vom Startpunkt zum Bogenmittelpunkt."),
+            'J' => ("J — Bogenmittelpunkt Y", $"Abstand {val} mm in Y-Richtung vom Startpunkt zum Bogenmittelpunkt."),
+            'K' => ("K — Bogenmittelpunkt Z", $"Abstand {val} mm in Z-Richtung vom Startpunkt zum Bogenmittelpunkt."),
+            _   => (tok, "")
+        };
+    }
 }
 
 public class Werkzeug

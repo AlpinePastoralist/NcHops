@@ -7,9 +7,11 @@ namespace NCHops;
 public enum MoveType { Rapid, Line, ArcCW, ArcCCW }
 
 public record Move(MoveType Type, double X, double Y,
-    double Xe = 0, double Ye = 0, double I = 0, double J = 0);
+    double Xe = 0, double Ye = 0, double I = 0, double J = 0, int LineNumber = 0);
 
 public record SideMove(string Cmd, double X, double Z);
+
+public record DrillHole(double X, double Y, int LineNumber);
 
 public static class GCodeParser
 {
@@ -52,9 +54,11 @@ public static class GCodeParser
         var moves = new List<Move>();
         double x = 0, y = 0;
         bool hasPos = false;
+        int ln = 0;
 
         foreach (var raw in text.Split('\n'))
         {
+            ln++;
             var line = StripComment(raw.Trim());
             if (string.IsNullOrEmpty(line)) continue;
 
@@ -70,10 +74,15 @@ public static class GCodeParser
 
             if (mode is MoveType.Rapid or MoveType.Line)
             {
-                if (vals.TryGetValue('X', out var nx)) x = nx;
-                if (vals.TryGetValue('Y', out var ny)) y = ny;
+                bool hasX = vals.TryGetValue('X', out var nx);
+                bool hasY = vals.TryGetValue('Y', out var ny);
+                if (hasX) x = nx;
+                if (hasY) y = ny;
                 hasPos = true;
-                moves.Add(new Move(mode.Value, x, y));
+                // Z-Only-Moves (z.B. G01 Z-22) haben keine XY-Bewegung →
+                // in der Topansicht nicht zeichnen
+                if (hasX || hasY)
+                    moves.Add(new Move(mode.Value, x, y, LineNumber: ln));
             }
             else if (hasPos)
             {
@@ -82,20 +91,22 @@ public static class GCodeParser
                 double ye = vals.TryGetValue('Y', out var vy) ? vy : ys;
                 double I = vals.TryGetValue('I', out var vi) ? vi : 0;
                 double J = vals.TryGetValue('J', out var vj) ? vj : 0;
-                moves.Add(new Move(mode.Value, xs, ys, xe, ye, I, J));
+                moves.Add(new Move(mode.Value, xs, ys, xe, ye, I, J, ln));
                 x = xe; y = ye;
             }
         }
         return moves;
     }
 
-    public static List<Point> ParseDrillPoints(string text)
+    public static List<DrillHole> ParseDrillPoints(string text)
     {
-        var points = new List<Point>();
+        var holes = new List<DrillHole>();
         double x = 0, y = 0;
+        int ln = 0;
 
         foreach (var raw in text.Split('\n'))
         {
+            ln++;
             var line = StripComment(raw.Trim());
             if (string.IsNullOrEmpty(line)) continue;
 
@@ -108,13 +119,12 @@ public static class GCodeParser
 
             if (hasZ && !hasX && !hasY && z < 0)
             {
-                var point = new Point(x, y);
-                if (!points.Any(p => Math.Abs(p.X - point.X) < 0.0001 && Math.Abs(p.Y - point.Y) < 0.0001))
-                    points.Add(point);
+                if (!holes.Any(h => Math.Abs(h.X - x) < 0.0001 && Math.Abs(h.Y - y) < 0.0001))
+                    holes.Add(new DrillHole(x, y, ln));
             }
         }
 
-        return points;
+        return holes;
     }
 
     public static List<SideMove> ParseSideView(string text)

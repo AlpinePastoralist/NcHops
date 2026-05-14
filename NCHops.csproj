@@ -10,14 +10,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="icon.ico"/>
-    <Content Include="maple.png" CopyToOutputDirectory="PreserveNewest"/>
+    <Resource Include="icon.ico" />
+    <Content Include="maple.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- PfadFräsenDialog deaktiviert -->
-    <Page    Remove="PfadFräsenDialog.xaml"/>
-    <Compile Remove="PfadFräsenDialog.xaml.cs"/>
+    <Page Remove="PfadFräsenDialog.xaml" />
+    <Compile Remove="PfadFräsenDialog.xaml.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
   </ItemGroup>
 
 </Project>
