@@ -270,6 +270,25 @@
                 </MenuItem>
             </MenuItem>
 
+            <!-- Gravieren ───────────────────────────────────── -->
+            <MenuItem Header="Gravieren">
+                <MenuItem Header="Textfeld A umriss" Click="OnGravieren">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="A" FontSize="13"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Textfeld A carve"  Click="OnVCarve">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="▲" FontSize="11"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Textfeld A Tasche" Click="OnTextfeldTasche">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="▬" FontSize="11"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+
             <!-- Ansicht ─────────────────────────────────────── -->
             <MenuItem Header="Ansicht">
                 <MenuItem Header="Raster einblenden" x:Name="MnuRaster"
@@ -291,6 +310,13 @@
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}"
                                    FontFamily="Segoe MDL2 Assets" Text="&#xE713;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="Fräsbreite simulieren" x:Name="MnuFraesbreite"
+                          IsCheckable="True" Click="OnFraesbreiteAnzeigen">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="⬛" FontSize="10"/>
                     </MenuItem.Icon>
                 </MenuItem>
             </MenuItem>
@@ -455,10 +481,12 @@
 
             <!-- Canvas mit Hintergrund-Icon -->
             <Grid Grid.Column="0" Background="{StaticResource BgLightBrush}" ClipToBounds="True">
+                <!-- Wasserzeichen-Canvas: KEIN RenderTransform → zoom-invariant -->
+                <Canvas x:Name="WatermarkCanvas" IsHitTestVisible="False" Panel.ZIndex="0"/>
                 <Canvas x:Name="DrawCanvas"
                         Background="Transparent"
                         SizeChanged="OnCanvasSizeChanged" ClipToBounds="True"
-                        Panel.ZIndex="0"/>
+                        Panel.ZIndex="1"/>
                 <!-- Zoom-Anzeige -->
                 <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
                         Margin="0,0,6,6" Padding="5,2"
@@ -504,7 +532,8 @@
                                  SelectionMode="Extended"
                                  MouseDoubleClick="OnHistoryDoubleClick"
                                  PreviewMouseRightButtonDown="OnHistoryRightClick"
-                                 PreviewKeyDown="OnHistoryKeyDown">
+                                 PreviewKeyDown="OnHistoryKeyDown"
+                                 SelectionChanged="OnHistorySelectionChanged">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
                                     <Setter Property="Padding" Value="8,6"/>
@@ -562,7 +591,119 @@
                     </Grid>
                 </TabItem>
 
-                <!-- Tab 2: G-Code Editor -->
+                <!-- Tab 2: Eigenschaften (Gravieren) -->
+                <TabItem Header="Eigenschaften" x:Name="TabEigenschaften">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  Background="{StaticResource BgLightBrush}">
+                        <StackPanel Margin="10" x:Name="EigPanel">
+
+                            <TextBlock x:Name="TbEigKein"
+                                       Text="Kein Gravieren-Eintrag ausgewählt."
+                                       Foreground="{StaticResource TextDarkBrush}"
+                                       Opacity="0.5" TextWrapping="Wrap"
+                                       Margin="0,0,0,8"/>
+
+                            <StackPanel x:Name="PnlGravieren" Visibility="Collapsed">
+
+                                <TextBlock Text="Text:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBox x:Name="EigText"
+                                         AcceptsReturn="True" Height="60"
+                                         TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         VerticalContentAlignment="Top"
+                                         Margin="0,0,0,10"
+                                         TextChanged="OnEigTextChanged"/>
+
+                                <TextBlock Text="Schriftart:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="EigFont" IsEditable="True"
+                                          Margin="0,0,0,10"
+                                          SelectionChanged="OnEigFontChanged"
+                                          KeyUp="OnEigFontKeyUp"/>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Feldbreite (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigTextBreite" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Feldhöhe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigTextHoehe" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Zeilenhöhe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigFontSize" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <TextBlock Text="Ausrichtung:" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <RadioButton x:Name="EigAusrLinks"  Content="Links"  GroupName="Ausrichtung"
+                                                 IsChecked="True" Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnEigAusrichtungChanged"/>
+                                    <RadioButton x:Name="EigAusrMitte"  Content="Mittig" GroupName="Ausrichtung"
+                                                 Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnEigAusrichtungChanged"/>
+                                    <RadioButton x:Name="EigAusrRechts" Content="Rechts" GroupName="Ausrichtung"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnEigAusrichtungChanged"/>
+                                </StackPanel>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock x:Name="LblEigTiefe" Text="Tiefe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigTiefe" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Schneidenwinkel (°):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigSchneidenWinkel" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Vorschub:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigVorschub" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Drehzahl:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigDrehzahl" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock x:Name="TbEigInfo"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           FontSize="11" TextWrapping="Wrap"
+                                           Margin="0,4,0,0"/>
+                            </StackPanel>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Tab 3: G-Code Editor -->
                 <TabItem Header="G-Code" x:Name="TabGCode">
                     <avalon:TextEditor x:Name="GCodeBox"
                                        FontFamily="Consolas" FontSize="12"

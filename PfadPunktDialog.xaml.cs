@@ -93,7 +93,8 @@ public partial class PfadPunktDialog : Window
             VorschubFz:      w?.VorschubFz ?? 500,
             Radiuskorrektur: vis ? radiuskorrektur : "Mittig",
             Bezugspunkt:     GetBezug(),
-            Typ:             PfadPunktTyp.Start // wird vom Aufrufer überschrieben
+            Typ:             PfadPunktTyp.Start, // wird vom Aufrufer überschrieben
+            Eintauchwinkel:  w?.Eintauchwinkel ?? 90
         );
         DialogResult = true;
     }
@@ -107,4 +108,4 @@ public record PfadPunktParams(
     double XRel, double YRel, double ZTiefe, double ZZustellung,
     double FraeserD, double Drehzahl, double Vorschub, double VorschubFz,
     string Radiuskorrektur, string Bezugspunkt, PfadPunktTyp Typ,
-    double Verrundung = 0);
+    double Verrundung = 0, double Eintauchwinkel = 90);

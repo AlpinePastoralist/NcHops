@@ -7,9 +7,9 @@ namespace NCHops;
 public enum MoveType { Rapid, Line, ArcCW, ArcCCW }
 
 public record Move(MoveType Type, double X, double Y,
-    double Xe = 0, double Ye = 0, double I = 0, double J = 0, int LineNumber = 0);
+    double Xe = 0, double Ye = 0, double I = 0, double J = 0, int LineNumber = 0, double ToolWidthMm = 0);
 
-public record SideMove(string Cmd, double X, double Z);
+public record SideMove(string Cmd, double X, double Z, int LineNumber = 0);
 
 public record DrillHole(double X, double Y, int LineNumber);
 
@@ -49,17 +49,45 @@ public static class GCodeParser
     private static readonly Regex RxG2  = new(@"^G2($|[^0-9])", RegexOptions.Compiled);
     private static readonly Regex RxG3  = new(@"^G3($|[^0-9])", RegexOptions.Compiled);
 
+    // Compute effective tool cut-width at a given depth.
+    // angle = full included tip angle (degrees); 180 = flat end mill.
+    private static double EffectiveToolWidth(double diam, double angleDeg, double z)
+    {
+        if (diam <= 0) return 0;
+        if (angleDeg >= 180) return diam;
+        double halfRad = angleDeg / 2.0 * Math.PI / 180.0;
+        double vWidth  = 2.0 * Math.Abs(z) * Math.Tan(halfRad);
+        return Math.Min(vWidth, diam);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex RxToolComment = new(
+        @"\(TOOL\s+D=([\d.]+)\s+ANGLE=([\d.]+)\)",
+        System.Text.RegularExpressions.RegexOptions.Compiled |
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     public static List<Move> ParseTopView(string text)
     {
         var moves = new List<Move>();
-        double x = 0, y = 0;
+        double x = 0, y = 0, curZ = 0;
+        double toolD = 0, toolAngle = 180;
         bool hasPos = false;
         int ln = 0;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
 
         foreach (var raw in text.Split('\n'))
         {
             ln++;
-            var line = StripComment(raw.Trim());
+            var trimmed = raw.Trim();
+
+            // Parse TOOL comment (full line, before stripping)
+            var tm = RxToolComment.Match(trimmed);
+            if (tm.Success)
+            {
+                toolD     = double.Parse(tm.Groups[1].Value, inv);
+                toolAngle = double.Parse(tm.Groups[2].Value, inv);
+            }
+
+            var line = StripComment(trimmed);
             if (string.IsNullOrEmpty(line)) continue;
 
             MoveType? mode = null;
@@ -71,6 +99,9 @@ public static class GCodeParser
             if (mode == null) continue;
 
             var vals = ParseWords(line);
+            if (vals.TryGetValue('Z', out var nz)) curZ = nz;
+
+            double tw = mode == MoveType.Rapid ? 0 : EffectiveToolWidth(toolD, toolAngle, curZ);
 
             if (mode is MoveType.Rapid or MoveType.Line)
             {
@@ -82,7 +113,7 @@ public static class GCodeParser
                 // Z-Only-Moves (z.B. G01 Z-22) haben keine XY-Bewegung →
                 // in der Topansicht nicht zeichnen
                 if (hasX || hasY)
-                    moves.Add(new Move(mode.Value, x, y, LineNumber: ln));
+                    moves.Add(new Move(mode.Value, x, y, LineNumber: ln, ToolWidthMm: tw));
             }
             else if (hasPos)
             {
@@ -91,7 +122,7 @@ public static class GCodeParser
                 double ye = vals.TryGetValue('Y', out var vy) ? vy : ys;
                 double I = vals.TryGetValue('I', out var vi) ? vi : 0;
                 double J = vals.TryGetValue('J', out var vj) ? vj : 0;
-                moves.Add(new Move(mode.Value, xs, ys, xe, ye, I, J, ln));
+                moves.Add(new Move(mode.Value, xs, ys, xe, ye, I, J, ln, tw));
                 x = xe; y = ye;
             }
         }
@@ -133,9 +164,11 @@ public static class GCodeParser
         var inv    = System.Globalization.CultureInfo.InvariantCulture;
         var style  = System.Globalization.NumberStyles.Float;
         double x = 0, y = 0, z = 0;
+        int ln = 0;
 
         foreach (var raw in text.Split('\n'))
         {
+            ln++;
             var line = StripComment(raw.Trim());
             if (string.IsNullOrEmpty(line)) continue;
 
@@ -185,7 +218,7 @@ public static class GCodeParser
                         double a  = startA + (endA - startA) * s / steps;
                         double xi = cx + r * Math.Cos(a);
                         double zi = z + (ze - z) * s / steps;
-                        moves.Add(new SideMove("G1", xi, zi));
+                        moves.Add(new SideMove("G1", xi, zi, ln));
                     }
                 }
                 x = xe; y = ye; z = ze;
@@ -195,7 +228,7 @@ public static class GCodeParser
                 if (nx.HasValue) x = nx.Value;
                 if (ny.HasValue) y = ny.Value;
                 if (nz.HasValue) z = nz.Value;
-                moves.Add(new SideMove(cmd, x, z));
+                moves.Add(new SideMove(cmd, x, z, ln));
             }
         }
         return moves;

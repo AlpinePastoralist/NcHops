@@ -16,6 +16,7 @@ public static class GCodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("(Benötigte Werkzeuge:)");
         sb.AppendLine("(planfräser)");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
         sb.AppendLine();
         sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine(Sz());
@@ -165,6 +166,7 @@ public static class GCodeGenerator
         sb.AppendLine("(Tasche fräsen)");
         sb.AppendLine($"(X={F(ax)} Y={F(ay)} B={F(p.Breite)} H={F(p.Höhe)})");
         sb.AppendLine($"(D={p.FraeserD}, Bezug={p.Bezugspunkt})");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
 
         if (ix1 <= ix0 || iy1 <= iy0)
         {
@@ -193,11 +195,43 @@ public static class GCodeGenerator
         double zx1 = hasRoughArea ? rx1 : ix1;
         double zy1 = hasRoughArea ? ry1 : iy1;
 
-        sb.AppendLine($"G00 X{F(zx0)} Y{F(zy0)}");
+        // Eintauchrampe: von prevZ diagonal auf curZ absenken (entlang X-Achse der Tasche)
+        void AppendEntry(double prevZ, double nextZ)
+        {
+            double dz    = Math.Abs(nextZ - prevZ);
+            double angle = p.Eintauchwinkel;
+            if (angle >= 90 || angle <= 0 || dz < 1e-6)
+            {
+                sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
+                return;
+            }
+            double rampLen = (dz / 2.0) / Math.Tan(angle * Math.PI / 180.0);
+            if (ix0 + rampLen > ix1)
+            {
+                sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
+                return;
+            }
+            double midZ = prevZ - dz / 2.0;
+            sb.AppendLine($"G01 X{F(ix0 + rampLen)} Z{F(midZ)} F{(int)p.VorschubFz}");
+            sb.AppendLine($"G01 X{F(ix0)} Z{F(nextZ)} F{(int)p.VorschubFz}");
+        }
+
+        double lastToolX = zx0;
+        double lastToolY = zy0;
+
         while (curZ > depth)
         {
+            double prevDepth = curZ;
             curZ = Math.Max(depth, curZ - zStep);
-            sb.AppendLine($"G01 Z{F(curZ)} F{(int)p.VorschubFz}");
+
+            // 1. G00 zur Taschenecke (Materialkante) in XY
+            sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
+            // 2. G00 runter auf vorherige Räumebene (Z=0 beim ersten Pass)
+            sb.AppendLine($"G00 Z{F(prevDepth)}");
+            // 3. Eintauchrampe diagonal auf neue Tiefe
+            AppendEntry(prevDepth, curZ);
+            // 4. auf Räumstartpunkt vorfahren
+            sb.AppendLine($"G01 X{F(zx0)} Y{F(zy0)} F{(int)p.Vorschub}");
 
             double y       = zy0;
             bool rightward = true;
@@ -211,22 +245,30 @@ public static class GCodeGenerator
                 sb.AppendLine($"G01 Y{F(y)} F{(int)p.Vorschub}");
                 rightward = !rightward;
             }
+            lastToolX = rightward ? zx1 : zx0;
+            lastToolY = zy1;
 
             if (curZ > depth)
-            {
                 sb.AppendLine(Sz());
-                sb.AppendLine($"G00 X{F(zx0)} Y{F(zy0)}");
-            }
         }
 
-        // Schlichten: Konturfahrt im Gegenlauf (Uhrzeigersinn) auf voller Tiefe
-        sb.AppendLine(Sz());
-        sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
-        sb.AppendLine($"G01 Z{F(depth)} F{(int)p.VorschubFz}");
-        sb.AppendLine($"G01 X{F(ix1)} Y{F(iy0)} F{(int)p.Vorschub}");
-        sb.AppendLine($"G01 X{F(ix1)} Y{F(iy1)} F{(int)p.Vorschub}");
-        sb.AppendLine($"G01 X{F(ix0)} Y{F(iy1)} F{(int)p.Vorschub}");
-        sb.AppendLine($"G01 X{F(ix0)} Y{F(iy0)} F{(int)p.Vorschub}");
+        // Schlichten: nächstgelegene Ecke direkt anfahren (kein Austauchen), Kontur im Uhrzeigersinn
+        (double x, double y)[] corners = [(ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1)];
+        int startCorner = 0;
+        double minDist  = double.MaxValue;
+        for (int i = 0; i < 4; i++)
+        {
+            double dx = corners[i].x - lastToolX;
+            double dy = corners[i].y - lastToolY;
+            double d  = dx * dx + dy * dy;
+            if (d < minDist) { minDist = d; startCorner = i; }
+        }
+        sb.AppendLine($"G01 X{F(corners[startCorner].x)} Y{F(corners[startCorner].y)} F{(int)p.Vorschub}");
+        for (int i = 1; i <= 4; i++)
+        {
+            var c = corners[(startCorner + i) % 4];
+            sb.AppendLine($"G01 X{F(c.x)} Y{F(c.y)} F{(int)p.Vorschub}");
+        }
 
         sb.AppendLine(Sz());
         sb.AppendLine("M05");
@@ -248,6 +290,7 @@ public static class GCodeGenerator
         sb.AppendLine("(Kreistasche fräsen)");
         sb.AppendLine($"(Mitte X={F(cx)} Y={F(cy)}, D={F(p.Durchmesser)})");
         sb.AppendLine($"(D={p.FraeserD}, Eintauchwinkel={p.Eintauchwinkel}°, Bezug={p.Bezugspunkt})");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
 
         if (Rm <= 0)
         {
@@ -341,6 +384,7 @@ public static class GCodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("(Umfahren)");
+        sb.AppendLine($"(TOOL D={F(p.Diameter)} ANGLE=180)");
         sb.AppendLine($"(A={p.A})");
         sb.AppendLine($"(D={p.Diameter})");
         sb.AppendLine($"(Fertigradius={p.Radius})");
@@ -831,16 +875,42 @@ public static class GCodeGenerator
 
         var sb = new StringBuilder();
         sb.AppendLine("(Pfad Fräsen)");
+        sb.AppendLine($"(TOOL D={F(sp.FraeserD)} ANGLE=180)");
         sb.AppendLine($"M03 S{(int)sp.Drehzahl}");
         sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
 
         double zStep = Math.Abs(sp.ZZustellung);
         double curZ  = 0;
+
+        void AppendEntry(double prevZ, double nextZ)
+        {
+            double dz    = Math.Abs(nextZ - prevZ);
+            double angle = sp.Eintauchwinkel;
+            if (moves.Count >= 2 && !moves[1].IsArc && angle > 0 && angle < 90 && dz > 1e-6)
+            {
+                double dx      = moves[1].X - moves[0].X;
+                double dy      = moves[1].Y - moves[0].Y;
+                double segLen  = Math.Sqrt(dx * dx + dy * dy);
+                double rampLen = (dz / 2.0) / Math.Tan(angle * Math.PI / 180.0);
+                if (segLen >= rampLen * 2 && segLen > 1e-9)
+                {
+                    double ux = dx / segLen, uy = dy / segLen;
+                    double midZ = prevZ - dz / 2.0;
+                    sb.AppendLine($"G01 X{F(moves[0].X + ux * rampLen)} Y{F(moves[0].Y + uy * rampLen)} Z{F(midZ)} F{(int)sp.VorschubFz}");
+                    sb.AppendLine($"G01 X{F(moves[0].X)} Y{F(moves[0].Y)} Z{F(nextZ)} F{(int)sp.VorschubFz}");
+                    return;
+                }
+            }
+            sb.AppendLine($"G01 Z{F(nextZ)} F{(int)sp.VorschubFz}");
+        }
+
         while (curZ > z)
         {
+            double prevDepth = curZ;
             curZ = Math.Max(z, curZ - zStep);
-            sb.AppendLine($"G01 Z{F(curZ)} F{(int)sp.VorschubFz}");
+            sb.AppendLine($"G00 Z{F(prevDepth)}");
+            AppendEntry(prevDepth, curZ);
 
             for (int i = 1; i < moves.Count; i++)
             {
@@ -1206,7 +1276,7 @@ public static class GCodeGenerator
         return (a.x + t * da.x, a.y + t * da.y);
     }
 
-    private static (double x, double y) ConvertBezugspunkt(string ref_, double xRel, double yRel, double w, double h)
+    public static (double x, double y) ConvertBezugspunkt(string ref_, double xRel, double yRel, double w, double h)
         => ref_ switch
         {
             "Unten links"  => (xRel, yRel),
@@ -1220,4 +1290,817 @@ public static class GCodeGenerator
             "Mitte"  => (w / 2 + xRel, h / 2 + yRel),
             _              => (xRel, yRel)
         };
+
+    // ── Gravieren ────────────────────────────────────────────────────────
+
+    public static string Gravieren(GraviereParams p, double workW, double workH)
+    {
+        var sb  = new StringBuilder();
+        var ctx = BuildTextGeo(p, workW, workH);
+
+        double scale  = ctx.Scale;
+        double multiH = ctx.MultiH;
+        var flat2     = ctx.Flat;
+        double zDepth = -Math.Abs(p.ZTiefe);
+
+        double MX(double wx) => ctx.Ox + wx * scale;
+        double MY(double wy) => ctx.Oy + ctx.YOffset + (multiH - wy) * scale;
+
+        double halfRad        = Math.Min(p.SchneidenWinkel, 179.9) / 2.0 * Math.PI / 180.0;
+        double vWidth         = 2.0 * Math.Abs(p.ZTiefe) * Math.Tan(halfRad);
+        double effectiveWidth = (p.FraeserD > 0) ? Math.Min(vWidth, p.FraeserD) : vWidth;
+        sb.AppendLine($"(FraeserD={F(effectiveWidth)})");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE={F(p.SchneidenWinkel)})");
+        sb.AppendLine("(Gravieren)");
+        sb.AppendLine($"(Text: {p.Text.Replace('\n', ' ').Replace('\r', ' ')})");
+        sb.AppendLine($"(Font: {p.FontFamily}, {F(p.FontSizeMm)} mm, Winkel={p.SchneidenWinkel}°)");
+        sb.AppendLine();
+        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
+        sb.AppendLine(Sz());
+
+        foreach (var figure in flat2.Figures)
+        {
+            double sx = MX(figure.StartPoint.X);
+            double sy = MY(figure.StartPoint.Y);
+
+            sb.AppendLine($"G00 X{F(sx)} Y{F(sy)}");
+            sb.AppendLine($"G01 Z{F(zDepth)} F{(int)(p.Vorschub * 0.3)}");
+
+            foreach (var seg in figure.Segments)
+            {
+                IEnumerable<System.Windows.Point> pts = seg switch
+                {
+                    System.Windows.Media.PolyLineSegment pls => pls.Points,
+                    System.Windows.Media.LineSegment ls      => [ls.Point],
+                    _                                         => []
+                };
+                foreach (var pt in pts)
+                    sb.AppendLine($"G01 X{F(MX(pt.X))} Y{F(MY(pt.Y))} F{(int)p.Vorschub}");
+            }
+
+            if (figure.IsClosed)
+                sb.AppendLine($"G01 X{F(sx)} Y{F(sy)} F{(int)p.Vorschub}");
+
+            sb.AppendLine(Sz());
+        }
+
+        sb.AppendLine(Sz());
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
+    public record TextGeoCtx(
+        System.Windows.Media.Geometry  AlignedGeo,
+        System.Windows.Media.PathGeometry Flat,
+        double Scale, double MultiH,
+        double Ox, double Oy, double YOffset);
+
+    public static TextGeoCtx BuildTextGeo(GraviereParams p, double workW, double workH)
+    {
+        var typef = new System.Windows.Media.Typeface(
+            new System.Windows.Media.FontFamily(p.FontFamily),
+            System.Windows.FontStyles.Normal,
+            System.Windows.FontWeights.Normal,
+            System.Windows.FontStretches.Normal);
+
+        const double emSize = 1000.0;
+        var ft = new System.Windows.Media.FormattedText(
+            string.IsNullOrEmpty(p.Text) ? " " : p.Text,
+            CultureInfo.InvariantCulture,
+            System.Windows.FlowDirection.LeftToRight,
+            typef, emSize,
+            System.Windows.Media.Brushes.Black, 1.0);
+
+        var ftLine = new System.Windows.Media.FormattedText(
+            "Ag", CultureInfo.InvariantCulture,
+            System.Windows.FlowDirection.LeftToRight,
+            typef, emSize, System.Windows.Media.Brushes.Black, 1.0);
+        double lineH = ftLine.Height > 1e-6 ? ftLine.Height : 1;
+
+        double scale = p.FontSizeMm > 0 ? p.FontSizeMm / lineH : 1.0;
+
+        ft.TextAlignment = p.Ausrichtung switch
+        {
+            "Mitte"  => System.Windows.TextAlignment.Center,
+            "Rechts" => System.Windows.TextAlignment.Right,
+            _        => System.Windows.TextAlignment.Left
+        };
+        if (p.TextBreite > 0 && scale > 0)
+            ft.MaxTextWidth = p.TextBreite / scale;
+
+        double multiH  = ft.Height > 1e-6 ? ft.Height : 1;
+        double fieldH  = p.TextHoehe > 0 ? p.TextHoehe
+                       : (p.FontSizeMm > 0 ? p.FontSizeMm : multiH * scale);
+        double yOffset = (fieldH - multiH * scale) / 2.0;
+
+        var geo2  = ft.BuildGeometry(new System.Windows.Point(0, 0));
+        var flat2 = geo2.GetFlattenedPathGeometry(0.5, System.Windows.Media.ToleranceType.Absolute);
+
+        var (ox, oy) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+        return new TextGeoCtx(geo2, flat2, scale, multiH, ox, oy, yOffset);
+    }
+
+    // ── Textfeld-Tasche (Clipper2-basiert, exakter Polygon-Offset) ──────────
+
+    public static string TextfeldTasche(GraviereParams p, double workW, double workH)
+    {
+        const double allow   = 0.5; // Schlichtaufmaß mm
+        const double arcTolMm = 0.05; // Bogentoleranz mm
+
+        var sb  = new StringBuilder();
+        var ctx = BuildTextGeo(p, workW, workH);
+
+        double scale  = ctx.Scale;
+        double multiH = ctx.MultiH;
+
+        // WPF ↔ CNC-mm Koordinatenumrechnung
+        double MX(double wx) => ctx.Ox + wx * scale;
+        double MY(double wy) => ctx.Oy + ctx.YOffset + (multiH - wy) * scale;
+        double WX(double cx) => (cx - ctx.Ox) / scale;
+        double WY(double cy) => multiH - (cy - ctx.Oy - ctx.YOffset) / scale;
+
+        double r     = p.FraeserD / 2.0;
+        double step  = Math.Max(0.1, p.FraeserD * 0.5);
+        double depth = -Math.Abs(p.ZTiefe);
+
+        // Clipper2 arbeitet in WPF-Koordinaten (Y-down) — 1 WPF-Einheit = scale mm
+        double rWpf     = r     / scale;
+        double allowWpf = allow / scale;
+        double arcTol   = Math.Max(0.5, arcTolMm / scale);
+
+        var geo = ctx.Flat;
+        if (geo.Bounds.IsEmpty || scale < 1e-9)
+        { sb.AppendLine("(kein Text)"); sb.AppendLine("M05"); return sb.ToString(); }
+
+        // WPF-PathFigure → Clipper2 PathD (in WPF-Koordinaten, Y nach unten)
+        Clipper2Lib.PathD FigToPath(System.Windows.Media.PathFigure fig)
+        {
+            var path = new Clipper2Lib.PathD();
+            path.Add(new Clipper2Lib.PointD(fig.StartPoint.X, fig.StartPoint.Y));
+            foreach (var seg in fig.Segments)
+            {
+                IEnumerable<System.Windows.Point> pts = seg switch
+                {
+                    System.Windows.Media.PolyLineSegment pls => pls.Points,
+                    System.Windows.Media.LineSegment ls      => [ls.Point],
+                    _                                         => []
+                };
+                foreach (var pt in pts)
+                    path.Add(new Clipper2Lib.PointD(pt.X, pt.Y));
+            }
+            return path;
+        }
+
+        // Exakte Schnittlinienberechnung: horizontale Linie wpfY schneidet die Offset-Pfade
+        // Gibt sortierte CNC-mm X-Werte zurück; EvenOdd-Paarung ergibt die Fräsintervalle.
+        List<double> Scanline(Clipper2Lib.PathsD paths, double wpfY)
+        {
+            var xs = new List<double>();
+            foreach (var path in paths)
+            {
+                int n = path.Count;
+                for (int i = 0; i < n; i++)
+                {
+                    var a = path[i]; var b = path[(i + 1) % n];
+                    if ((a.y < wpfY) != (b.y < wpfY))
+                    {
+                        double t = (wpfY - a.y) / (b.y - a.y);
+                        xs.Add(MX(a.x + t * (b.x - a.x)));
+                    }
+                }
+            }
+            xs.Sort();
+            return xs;
+        }
+
+        // Prüft ob ein CNC-mm Punkt in den Offset-Pfaden liegt (EvenOdd-Regel)
+        bool InOffsetPaths(Clipper2Lib.PathsD paths, double cncX, double cncY)
+        {
+            var pt    = new Clipper2Lib.PointD(WX(cncX), WY(cncY));
+            int count = 0;
+            foreach (var path in paths)
+                if (Clipper2Lib.Clipper.PointInPolygon(pt, path, 6) !=
+                    Clipper2Lib.PointInPolygonResult.IsOutside) count++;
+            return (count & 1) == 1;
+        }
+
+        // Diagonalen Übergang (lastX/Y → targetX/scanY) auf Kollisionsfreiheit prüfen
+        bool CanDiag(Clipper2Lib.PathsD paths, double lx, double ly, double tx, double ty)
+        {
+            for (int i = 1; i <= 5; i++)
+            {
+                double t = i / 6.0;
+                if (!InOffsetPaths(paths, lx + (tx - lx) * t, ly + (ty - ly) * t)) return false;
+            }
+            return true;
+        }
+
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
+        sb.AppendLine("(Textfeld-Tasche fräsen)");
+        sb.AppendLine($"(Text: {p.Text.Replace('\n', ' ').Replace('\r', ' ')})");
+        sb.AppendLine($"(Font: {p.FontFamily}, {F(p.FontSizeMm)} mm)");
+        sb.AppendLine();
+        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
+        sb.AppendLine(Sz());
+
+        var groups = GroupFiguresByLetter(geo.Figures.ToList());
+
+        foreach (var group in groups)
+        {
+            // Buchstabenpfade für Clipper2 aufbauen
+            var letterPaths = new Clipper2Lib.PathsD();
+            foreach (var fig in group)
+                if (fig.IsClosed) letterPaths.Add(FigToPath(fig));
+            if (letterPaths.Count == 0) continue;
+
+            // Exakter Polygon-Offset: Schrupp (r+allow) und Schlicht (r)
+            var roughPaths  = Clipper2Lib.Clipper.InflatePaths(letterPaths, -(rWpf + allowWpf),
+                                  Clipper2Lib.JoinType.Round, Clipper2Lib.EndType.Polygon, 2.0, 6, arcTol);
+            var finishPaths = Clipper2Lib.Clipper.InflatePaths(letterPaths, -rWpf,
+                                  Clipper2Lib.JoinType.Round, Clipper2Lib.EndType.Polygon, 2.0, 6, arcTol);
+
+            // ── Schrupp-Zickzack ──────────────────────────────────────────────
+            // EvenOdd-Scanline über alle roughPaths gemeinsam (korrekt für Löcher).
+            // Intervalle werden spaltenweise verarbeitet: erst alle linken Segmente
+            // (ivs[0]) von unten nach oben, dann alle rechten (ivs[1]) usw.
+            // Dadurch je ein Eintauchen pro Streifen statt eines pro Zeile.
+            if (roughPaths.Count > 0)
+            {
+                double allMinY = roughPaths.SelectMany(q => q).Min(pt => MY(pt.y));
+                double allMaxY = roughPaths.SelectMany(q => q).Max(pt => MY(pt.y));
+
+                var rows = new List<(double scanY, List<(double x0, double x1)> ivs)>();
+                for (double scanY = allMinY; scanY <= allMaxY + step * 0.01; scanY += step)
+                {
+                    var xCuts = Scanline(roughPaths, WY(scanY));
+                    var ivs   = new List<(double x0, double x1)>();
+                    for (int i = 0; i + 1 < xCuts.Count; i += 2)
+                        if (xCuts[i + 1] > xCuts[i] + 0.01) ivs.Add((xCuts[i], xCuts[i + 1]));
+                    rows.Add((scanY, ivs));
+                }
+
+                int maxIvs = rows.Count > 0 ? rows.Max(r => r.ivs.Count) : 0;
+
+                for (int pass = 0; pass < maxIvs; pass++)
+                {
+                    bool   atDepth   = false;
+                    double lastX = 0, lastY = 0;
+                    bool   rightward = true;
+                    int    lastRi    = -1;
+                    double lastIvX0  = 0, lastIvX1 = 0;
+
+                    for (int ri = 0; ri < rows.Count; ri++)
+                    {
+                        var (scanY, ivs) = rows[ri];
+                        if (pass >= ivs.Count) { rightward = !rightward; continue; }
+
+                        var iv         = ivs[pass];
+                        double targetX = rightward ? iv.x0 : iv.x1;
+
+                        // adjacent: aufeinanderfolgende Zeile UND beide Punkte
+                        // (Startpunkt lastX und Ziel targetX) liegen jeweils im
+                        // Intervall der anderen Zeile (±step). Bidirektional, damit
+                        // Übergänge breites→schmales Intervall nicht fälschlich
+                        // als sicher eingestuft werden (z.B. Kreuzung→Arm).
+                        bool adjacent = (ri == lastRi + 1) &&
+                                        (targetX >= lastIvX0 - step) &&
+                                        (targetX <= lastIvX1 + step) &&
+                                        (lastX   >= iv.x0    - step) &&
+                                        (lastX   <= iv.x1    + step);
+
+                        if (!atDepth)
+                        {
+                            sb.AppendLine($"G00 X{F(targetX)} Y{F(scanY)}");
+                            sb.AppendLine($"G01 Z{F(depth)} F{(int)(p.Vorschub * 0.3)}");
+                            atDepth = true;
+                        }
+                        else if (adjacent || CanDiag(roughPaths, lastX, lastY, targetX, scanY))
+                            sb.AppendLine($"G01 X{F(targetX)} Y{F(scanY)} F{(int)p.Vorschub}");
+                        else
+                        {
+                            sb.AppendLine(Sz());
+                            sb.AppendLine($"G00 X{F(targetX)} Y{F(scanY)}");
+                            sb.AppendLine($"G01 Z{F(depth)} F{(int)(p.Vorschub * 0.3)}");
+                        }
+
+                        if (rightward) sb.AppendLine($"G01 X{F(iv.x1)} F{(int)p.Vorschub}");
+                        else           sb.AppendLine($"G01 X{F(iv.x0)} F{(int)p.Vorschub}");
+
+                        lastX    = rightward ? iv.x1 : iv.x0;
+                        lastY    = scanY;
+                        rightward = !rightward;
+                        lastRi   = ri;
+                        lastIvX0 = iv.x0;
+                        lastIvX1 = iv.x1;
+                    }
+                    if (atDepth) sb.AppendLine(Sz());
+                }
+            }
+            else
+                sb.AppendLine("(Buchstabe zu schmal für Schrupp-Durchgang)");
+
+            // ── Schlicht-Kontur im Gegenlauf ──────────────────────────────────
+            if (finishPaths.Count == 0)
+            { sb.AppendLine("(Buchstabe zu schmal für Schlicht-Kontur)"); continue; }
+
+            foreach (var fPath in finishPaths)
+            {
+                if (fPath.Count < 3) continue;
+                // Konvertierung in CNC-mm + Gegenlauf (Umkehrung)
+                var cncPts = fPath.Select(pt => (X: MX(pt.x), Y: MY(pt.y))).ToList();
+                cncPts.Reverse();
+
+                double sx = cncPts[0].X, sy = cncPts[0].Y;
+                sb.AppendLine($"G00 X{F(sx)} Y{F(sy)}");
+                sb.AppendLine($"G01 Z{F(depth)} F{(int)(p.Vorschub * 0.3)}");
+                foreach (var pt2 in cncPts.Skip(1))
+                    sb.AppendLine($"G01 X{F(pt2.X)} Y{F(pt2.Y)} F{(int)p.Vorschub}");
+                sb.AppendLine($"G01 X{F(sx)} Y{F(sy)} F{(int)p.Vorschub}");
+                sb.AppendLine(Sz());
+            }
+        }
+
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
+    // Buchstaben-Figuren nach Buchstabe gruppieren:
+    // Löcher (Figuren deren Bounds in einer anderen enthalten sind) werden
+    // ihrer umgebenden Aussenkontur zugeordnet.
+    private static List<List<System.Windows.Media.PathFigure>> GroupFiguresByLetter(
+        List<System.Windows.Media.PathFigure> figures)
+    {
+        if (figures.Count == 0) return [];
+
+        var infos = figures
+            .Select(f => { var pg = new System.Windows.Media.PathGeometry(); pg.Figures.Add(f); return (Fig: f, Bounds: pg.Bounds); })
+            .Where(t => !t.Bounds.IsEmpty)
+            .ToList();
+
+        var isHole = new bool[infos.Count];
+        for (int i = 0; i < infos.Count; i++)
+            for (int j = 0; j < infos.Count; j++)
+                if (i != j && TaBoundsContains(infos[j].Bounds, infos[i].Bounds))
+                    { isHole[i] = true; break; }
+
+        var groups = infos
+            .Select((t, i) => (t, i))
+            .Where(x => !isHole[x.i])
+            .OrderBy(x => x.t.Bounds.Left)
+            .Select(x => new List<System.Windows.Media.PathFigure> { x.t.Fig })
+            .ToList();
+
+        for (int i = 0; i < infos.Count; i++)
+        {
+            if (!isHole[i]) continue;
+            List<System.Windows.Media.PathFigure>? best = null;
+            double bestArea = double.MaxValue;
+            foreach (var g in groups)
+            {
+                var pgG = new System.Windows.Media.PathGeometry(); pgG.Figures.Add(g[0]);
+                var b = pgG.Bounds;
+                if (TaBoundsContains(b, infos[i].Bounds))
+                {
+                    double a = b.Width * b.Height;
+                    if (a < bestArea) { bestArea = a; best = g; }
+                }
+            }
+            best?.Add(infos[i].Fig);
+        }
+        return groups;
+    }
+
+    private static bool TaBoundsContains(System.Windows.Rect outer, System.Windows.Rect inner)
+    {
+        const double eps = 2.0;
+        return inner.Left >= outer.Left - eps && inner.Right  <= outer.Right  + eps &&
+               inner.Top  >= outer.Top  - eps && inner.Bottom <= outer.Bottom + eps;
+    }
+
+    // ── V-Carve ───────────────────────────────────────────────────────────
+
+    public static string VCarve(GraviereParams p, double workW, double workH)
+    {
+        var sb  = new StringBuilder();
+        var ctx = BuildTextGeo(p, workW, workH);
+
+        double scale  = ctx.Scale;
+        double multiH = ctx.MultiH;
+        double MX(double wx) => ctx.Ox + wx * scale;
+        double MY(double wy) => ctx.Oy + ctx.YOffset + (multiH - wy) * scale;
+
+        double halfRad    = Math.Min(p.SchneidenWinkel, 179.9) / 2.0 * Math.PI / 180.0;
+        double tanHalf    = Math.Max(Math.Tan(halfRad), 1e-6);
+        double maxDepthMm = Math.Abs(p.ZTiefe);
+        double maxRadius  = maxDepthMm * tanHalf;
+
+        double effW = p.FraeserD > 0
+            ? Math.Min(2.0 * maxRadius, p.FraeserD)
+            : 2.0 * maxRadius;
+
+        sb.AppendLine($"(FraeserD={F(effW)})");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE={F(p.SchneidenWinkel)})");
+        sb.AppendLine("(Gravieren)");
+        sb.AppendLine($"(VCarve: {p.Text.Replace('\n', ' ').Replace('\r', ' ')})");
+        sb.AppendLine($"(Font: {p.FontFamily}, Zeilenhöhe={F(p.FontSizeMm)} mm, Winkel={p.SchneidenWinkel}°)");
+        sb.AppendLine();
+        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
+        sb.AppendLine(Sz());
+
+        var edges = new List<(double x1, double y1, double x2, double y2)>();
+        double minX = double.MaxValue, maxX = double.MinValue;
+        double minY = double.MaxValue, maxY = double.MinValue;
+
+        foreach (var fig in ctx.Flat.Figures)
+        {
+            var pts = new List<System.Windows.Point> { fig.StartPoint };
+            foreach (var seg in fig.Segments)
+            {
+                if (seg is System.Windows.Media.PolyLineSegment pls) pts.AddRange(pls.Points);
+                else if (seg is System.Windows.Media.LineSegment ls)  pts.Add(ls.Point);
+            }
+            for (int i = 0; i < pts.Count - 1; i++)
+                edges.Add((pts[i].X, pts[i].Y, pts[i + 1].X, pts[i + 1].Y));
+            if (fig.IsClosed && pts.Count > 1)
+                edges.Add((pts[^1].X, pts[^1].Y, pts[0].X, pts[0].Y));
+            foreach (var pt in pts)
+            {
+                if (pt.X < minX) minX = pt.X; if (pt.X > maxX) maxX = pt.X;
+                if (pt.Y < minY) minY = pt.Y; if (pt.Y > maxY) maxY = pt.Y;
+            }
+        }
+
+        if (edges.Count == 0) { sb.AppendLine("M05"); return sb.ToString(); }
+
+        const double pxPerMm = 6.0;
+        double pixSize   = 1.0 / (pxPerMm * scale);
+        double margin    = pixSize * 2;
+        double gx0 = minX - margin, gy0 = minY - margin;
+        double gx1 = maxX + margin, gy1 = maxY + margin;
+        int W = Math.Max(4, (int)Math.Ceiling((gx1 - gx0) / pixSize));
+        int H = Math.Max(4, (int)Math.Ceiling((gy1 - gy0) / pixSize));
+        const int maxPx = 1400;
+        if (W > maxPx || H > maxPx)
+        {
+            double factor = Math.Max((double)W / maxPx, (double)H / maxPx);
+            pixSize *= factor;
+            W = Math.Max(4, (int)Math.Ceiling((gx1 - gx0) / pixSize));
+            H = Math.Max(4, (int)Math.Ceiling((gy1 - gy0) / pixSize));
+        }
+        double pixToMm = pixSize * scale;
+
+        var inside   = VCarveRasterize(edges, gx0, gy0, pixSize, W, H);
+        var edt      = VCarveEDT(inside, W, H);
+        var skeleton = VCarveThin(inside, W, H);
+        var paths    = VCarveTracePaths(skeleton, edt, W, H);
+
+        double maxRadPx       = p.FraeserD > 0 ? maxRadius / pixToMm : double.MaxValue;
+        double finAllowanceMm = p.FraeserD > 0 ? p.FraeserD * 0.05  : 0.0;
+
+        foreach (var path in paths)
+        {
+            if (path.Count == 0) continue;
+            bool firstOnPath = true;
+            foreach (var (px, py) in path)
+            {
+                bool isWide = edt[px, py] * pixToMm > maxRadius && p.FraeserD > 0;
+                if (isWide)
+                {
+                    if (!firstOnPath) { sb.AppendLine(Sz()); firstOnPath = true; }
+                    continue;
+                }
+                double rMm = edt[px, py] * pixToMm;
+                double z   = -Math.Min(rMm / tanHalf, maxDepthMm);
+                double gxp = MX(gx0 + (px + 0.5) * pixSize);
+                double gyp = MY(gy0 + (py + 0.5) * pixSize);
+                if (firstOnPath)
+                {
+                    sb.AppendLine($"G00 X{F(gxp)} Y{F(gyp)}");
+                    sb.AppendLine($"G01 Z{F(z)} F{(int)(p.Vorschub * 0.3)}");
+                    firstOnPath = false;
+                }
+                else
+                    sb.AppendLine($"G01 X{F(gxp)} Y{F(gyp)} Z{F(z)} F{(int)p.Vorschub}");
+            }
+            if (!firstOnPath) sb.AppendLine(Sz());
+        }
+
+        if (p.FraeserD > 0 && maxRadius > 0)
+        {
+            double finAllowancePx = finAllowanceMm / pixToMm;
+            double clearThreshPx  = maxRadPx + finAllowancePx;
+            int    rowStep        = Math.Max(1, (int)Math.Round(p.FraeserD * 0.05 / pixToMm));
+
+            var finishedChains = new List<List<(int py, int pxL, int pxR)>>();
+            var openChains     = new List<List<(int py, int pxL, int pxR)>>();
+            var rowIntervals   = new List<(int pxL, int pxR)>();
+
+            for (int py = rowStep / 2; py < H; py += rowStep)
+            {
+                rowIntervals.Clear();
+                int startPx = -1;
+                for (int px = 0; px <= W; px++)
+                {
+                    bool inClear = px < W && edt[px, py] > clearThreshPx;
+                    if (inClear && startPx < 0)  { startPx = px; }
+                    else if (!inClear && startPx >= 0) { rowIntervals.Add((startPx, px - 1)); startPx = -1; }
+                }
+
+                if (rowIntervals.Count == 0)
+                {
+                    finishedChains.AddRange(openChains);
+                    openChains.Clear();
+                    continue;
+                }
+
+                var used     = new bool[openChains.Count];
+                var nextOpen = new List<List<(int, int, int)>>();
+
+                foreach (var (pxL, pxR) in rowIntervals)
+                {
+                    int    best     = -1;
+                    double bestOvlp = -1.0;
+                    for (int k = 0; k < openChains.Count; k++)
+                    {
+                        if (used[k]) continue;
+                        var last = openChains[k][^1];
+                        double ovlp = Math.Min(pxR, last.pxR) - (double)Math.Max(pxL, last.pxL);
+                        if (ovlp > bestOvlp) { bestOvlp = ovlp; best = k; }
+                    }
+                    if (best >= 0)
+                    {
+                        used[best] = true;
+                        openChains[best].Add((py, pxL, pxR));
+                        nextOpen.Add(openChains[best]);
+                    }
+                    else
+                    {
+                        nextOpen.Add(new List<(int, int, int)> { (py, pxL, pxR) });
+                    }
+                }
+                for (int k = 0; k < openChains.Count; k++)
+                    if (!used[k]) finishedChains.Add(openChains[k]);
+                openChains = nextOpen;
+            }
+            finishedChains.AddRange(openChains);
+
+            foreach (var chain in finishedChains)
+            {
+                if (chain.Count == 0) continue;
+                bool goRight = true, first = true;
+
+                foreach (var (py, pxL, pxR) in chain)
+                {
+                    double wyc = gy0 + (py + 0.5) * pixSize;
+                    double gyc = MY(wyc);
+                    double gxL = MX(gx0 +  pxL      * pixSize);
+                    double gxR = MX(gx0 + (pxR + 1) * pixSize);
+
+                    if (first)
+                    {
+                        sb.AppendLine($"G00 X{F(goRight ? gxL : gxR)} Y{F(gyc)}");
+                        sb.AppendLine($"G01 Z{F(-maxDepthMm)} F{(int)(p.Vorschub * 0.3)}");
+                        first = false;
+                    }
+                    else
+                    {
+                        sb.AppendLine($"G01 X{F(goRight ? gxL : gxR)} Y{F(gyc)} F{(int)p.Vorschub}");
+                    }
+                    sb.AppendLine($"G01 X{F(goRight ? gxR : gxL)} F{(int)p.Vorschub}");
+                    goRight = !goRight;
+                }
+                if (!first) sb.AppendLine(Sz());
+            }
+        }
+
+        if (p.FraeserD > 0)
+        {
+            foreach (var fig in ctx.Flat.Figures)
+            {
+                if (!fig.IsClosed) continue;
+                var wpfPts = new List<System.Windows.Point> { fig.StartPoint };
+                foreach (var seg in fig.Segments)
+                {
+                    if (seg is System.Windows.Media.PolyLineSegment pls) wpfPts.AddRange(pls.Points);
+                    else if (seg is System.Windows.Media.LineSegment ls)  wpfPts.Add(ls.Point);
+                }
+                if (wpfPts.Count < 3) continue;
+
+                var cncPts = wpfPts.Select(pt => (x: MX(pt.X), y: MY(pt.Y))).ToList();
+
+                double area = 0;
+                for (int i = 0; i < cncPts.Count; i++)
+                {
+                    var (ax, ay) = cncPts[i];
+                    var (bx, by) = cncPts[(i + 1) % cncPts.Count];
+                    area += ax * by - bx * ay;
+                }
+                double sign = area < 0 ? -1.0 : 1.0;
+
+                var moves = ComputeClosedOffsetMoves(cncPts, maxRadius, sign, null);
+                if (moves.Count < 3) continue;
+
+                double bxMin = double.MaxValue, bxMax = double.MinValue;
+                double byMin = double.MaxValue, byMax = double.MinValue;
+                foreach (var mv in moves)
+                {
+                    if (mv.X < bxMin) bxMin = mv.X; if (mv.X > bxMax) bxMax = mv.X;
+                    if (mv.Y < byMin) byMin = mv.Y; if (mv.Y > byMax) byMax = mv.Y;
+                }
+                if (bxMax - bxMin < maxRadius * 0.1 && byMax - byMin < maxRadius * 0.1) continue;
+
+                sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
+                sb.AppendLine($"G01 Z{F(-maxDepthMm)} F{(int)(p.Vorschub * 0.3)}");
+                for (int i = 1; i < moves.Count; i++)
+                {
+                    var mv = moves[i];
+                    if (mv.IsArc)
+                        sb.AppendLine($"{(mv.CW ? "G02" : "G03")} X{F(mv.X)} Y{F(mv.Y)} I{F(mv.I)} J{F(mv.J)} F{(int)p.Vorschub}");
+                    else
+                        sb.AppendLine($"G01 X{F(mv.X)} Y{F(mv.Y)} F{(int)p.Vorschub}");
+                }
+                sb.AppendLine(Sz());
+            }
+        }
+
+        sb.AppendLine(Sz());
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
+    private static bool[,] VCarveRasterize(
+        List<(double x1, double y1, double x2, double y2)> edges,
+        double gx0, double gy0, double pixSize, int W, int H)
+    {
+        var grid = new bool[W, H];
+        var xs   = new List<double>(32);
+        for (int py = 0; py < H; py++)
+        {
+            double wy = gy0 + (py + 0.5) * pixSize;
+            xs.Clear();
+            foreach (var (x1, y1, x2, y2) in edges)
+            {
+                if ((y1 - wy) * (y2 - wy) >= 0) continue;
+                xs.Add(x1 + (wy - y1) / (y2 - y1) * (x2 - x1));
+            }
+            if (xs.Count < 2) continue;
+            xs.Sort();
+            for (int i = 0; i + 1 < xs.Count; i += 2)
+            {
+                int pxL = Math.Max(0,     (int)Math.Floor((xs[i    ] - gx0) / pixSize));
+                int pxR = Math.Min(W - 1, (int)Math.Floor((xs[i + 1] - gx0) / pixSize));
+                for (int px = pxL; px <= pxR; px++)
+                    grid[px, py] = true;
+            }
+        }
+        return grid;
+    }
+
+    private static float[,] VCarveEDT(bool[,] inside, int W, int H)
+    {
+        const float D1 = 1.0f, D2 = 1.414f;
+        var d = new float[W, H];
+        for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+            d[x, y] = inside[x, y] ? 999999f : 0f;
+
+        for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+        {
+            if (!inside[x, y]) continue;
+            if (x > 0)              d[x, y] = Math.Min(d[x, y], d[x-1, y  ] + D1);
+            if (y > 0)              d[x, y] = Math.Min(d[x, y], d[x,   y-1] + D1);
+            if (x > 0   && y > 0)  d[x, y] = Math.Min(d[x, y], d[x-1, y-1] + D2);
+            if (x < W-1 && y > 0)  d[x, y] = Math.Min(d[x, y], d[x+1, y-1] + D2);
+        }
+        for (int y = H-1; y >= 0; y--)
+        for (int x = W-1; x >= 0; x--)
+        {
+            if (!inside[x, y]) continue;
+            if (x < W-1)              d[x, y] = Math.Min(d[x, y], d[x+1, y  ] + D1);
+            if (y < H-1)              d[x, y] = Math.Min(d[x, y], d[x,   y+1] + D1);
+            if (x < W-1 && y < H-1)  d[x, y] = Math.Min(d[x, y], d[x+1, y+1] + D2);
+            if (x > 0   && y < H-1)  d[x, y] = Math.Min(d[x, y], d[x-1, y+1] + D2);
+        }
+        return d;
+    }
+
+    private static bool[,] VCarveThin(bool[,] src, int W, int H)
+    {
+        var cur = (bool[,])src.Clone();
+        var del = new bool[W, H];
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (int y = 1; y < H-1; y++)
+            for (int x = 1; x < W-1; x++)
+            {
+                if (!cur[x, y]) continue;
+                int p2 = cur[x,   y-1]?1:0, p3 = cur[x+1, y-1]?1:0;
+                int p4 = cur[x+1, y  ]?1:0, p5 = cur[x+1, y+1]?1:0;
+                int p6 = cur[x,   y+1]?1:0, p7 = cur[x-1, y+1]?1:0;
+                int p8 = cur[x-1, y  ]?1:0, p9 = cur[x-1, y-1]?1:0;
+                int B  = p2+p3+p4+p5+p6+p7+p8+p9;
+                if (B < 2 || B > 6) continue;
+                int A = (p2==0&&p3==1?1:0)+(p3==0&&p4==1?1:0)+(p4==0&&p5==1?1:0)
+                      + (p5==0&&p6==1?1:0)+(p6==0&&p7==1?1:0)+(p7==0&&p8==1?1:0)
+                      + (p8==0&&p9==1?1:0)+(p9==0&&p2==1?1:0);
+                if (A != 1) continue;
+                if (p2*p4*p6 != 0) continue;
+                if (p4*p6*p8 != 0) continue;
+                del[x, y] = true;
+            }
+            for (int y = 1; y < H-1; y++)
+            for (int x = 1; x < W-1; x++)
+                if (del[x, y]) { cur[x, y] = false; del[x, y] = false; changed = true; }
+
+            for (int y = 1; y < H-1; y++)
+            for (int x = 1; x < W-1; x++)
+            {
+                if (!cur[x, y]) continue;
+                int p2 = cur[x,   y-1]?1:0, p3 = cur[x+1, y-1]?1:0;
+                int p4 = cur[x+1, y  ]?1:0, p5 = cur[x+1, y+1]?1:0;
+                int p6 = cur[x,   y+1]?1:0, p7 = cur[x-1, y+1]?1:0;
+                int p8 = cur[x-1, y  ]?1:0, p9 = cur[x-1, y-1]?1:0;
+                int B  = p2+p3+p4+p5+p6+p7+p8+p9;
+                if (B < 2 || B > 6) continue;
+                int A = (p2==0&&p3==1?1:0)+(p3==0&&p4==1?1:0)+(p4==0&&p5==1?1:0)
+                      + (p5==0&&p6==1?1:0)+(p6==0&&p7==1?1:0)+(p7==0&&p8==1?1:0)
+                      + (p8==0&&p9==1?1:0)+(p9==0&&p2==1?1:0);
+                if (A != 1) continue;
+                if (p2*p4*p8 != 0) continue;
+                if (p2*p6*p8 != 0) continue;
+                del[x, y] = true;
+            }
+            for (int y = 1; y < H-1; y++)
+            for (int x = 1; x < W-1; x++)
+                if (del[x, y]) { cur[x, y] = false; del[x, y] = false; changed = true; }
+        }
+        return cur;
+    }
+
+    private static List<List<(int x, int y)>> VCarveTracePaths(
+        bool[,] sk, float[,] edt, int W, int H)
+    {
+        var visited = new bool[W, H];
+        var result  = new List<List<(int, int)>>();
+
+        int Degree(int x, int y)
+        {
+            int cnt = 0;
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                int nx = x+dx, ny = y+dy;
+                if ((uint)nx < (uint)W && (uint)ny < (uint)H && sk[nx, ny]) cnt++;
+            }
+            return cnt;
+        }
+
+        (int x, int y) Next(int x, int y)
+        {
+            int bx = -1, by = -1;
+            float best = -1f;
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                int nx = x+dx, ny = y+dy;
+                if ((uint)nx >= (uint)W || (uint)ny >= (uint)H) continue;
+                if (!sk[nx, ny] || visited[nx, ny]) continue;
+                if (edt[nx, ny] > best) { best = edt[nx, ny]; bx = nx; by = ny; }
+            }
+            return (bx, by);
+        }
+
+        void Walk(int sx, int sy)
+        {
+            if (!sk[sx, sy] || visited[sx, sy]) return;
+            var path = new List<(int, int)>();
+            int cx = sx, cy = sy;
+            while (cx >= 0)
+            {
+                if (visited[cx, cy]) break;
+                visited[cx, cy] = true;
+                path.Add((cx, cy));
+                var (nx, ny) = Next(cx, cy);
+                cx = nx; cy = ny;
+            }
+            if (path.Count >= 1) result.Add(path);
+        }
+
+        for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+            if (sk[x, y] && !visited[x, y] && Degree(x, y) <= 1)
+                Walk(x, y);
+
+        for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+            if (sk[x, y] && !visited[x, y])
+                Walk(x, y);
+
+        return result;
+    }
 }

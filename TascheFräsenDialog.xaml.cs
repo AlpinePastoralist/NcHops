@@ -66,18 +66,19 @@ public partial class TascheFräsenDialog : Window
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         var w = CbWerkzeug.SelectedItem as Werkzeug;
         Result = new TascheFräsenParams(
-            XRel:        double.Parse(TxtXRel.Text,   inv),
-            YRel:        double.Parse(TxtYRel.Text,   inv),
-            Breite:      double.Parse(TxtBreite.Text, inv),
-            Höhe:        double.Parse(TxtHöhe.Text,   inv),
-            ZTiefe:      double.Parse(TxtZTiefe.Text, inv),
-            ZZustellung: w?.ZZustellung ?? 5,
-            FraeserD:    w?.Durchmesser ?? 10,
-            Faktor:      w != null ? w.RaeumzustellungXY / 100.0 : 0.75,
-            Vorschub:    w?.VorschubFxy ?? 3000,
-            VorschubFz:  w?.VorschubFz ?? 500,
-            Drehzahl:    w?.Drehzahl ?? 18000,
-            Bezugspunkt: GetBezug()
+            XRel:           double.Parse(TxtXRel.Text,   inv),
+            YRel:           double.Parse(TxtYRel.Text,   inv),
+            Breite:         double.Parse(TxtBreite.Text, inv),
+            Höhe:           double.Parse(TxtHöhe.Text,   inv),
+            ZTiefe:         double.Parse(TxtZTiefe.Text, inv),
+            ZZustellung:    w?.ZZustellung ?? 5,
+            FraeserD:       w?.Durchmesser ?? 10,
+            Faktor:         w != null ? w.RaeumzustellungXY / 100.0 : 0.75,
+            Vorschub:       w?.VorschubFxy ?? 3000,
+            VorschubFz:     w?.VorschubFz ?? 500,
+            Drehzahl:       w?.Drehzahl ?? 18000,
+            Bezugspunkt:    GetBezug(),
+            Eintauchwinkel: w?.Eintauchwinkel ?? 90
         );
         DialogResult = true;
     }
@@ -90,4 +91,5 @@ public record TascheFräsenParams(
     double ZTiefe, double ZZustellung,
     double FraeserD, double Faktor,
     double Vorschub, double VorschubFz, double Drehzahl,
-    string Bezugspunkt);
+    string Bezugspunkt,
+    double Eintauchwinkel = 90);
