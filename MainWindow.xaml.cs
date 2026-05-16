@@ -63,6 +63,11 @@ public partial class MainWindow : Window
     private List<Move>      _cachedTopMoves    = [];
     private List<SideMove>  _cachedSideMoves   = [];
     private List<DrillHole> _cachedDrillPoints = [];
+
+    // V-Carve: Cache {GraviereParams → Kreisliste} und Ergebnisliste für G-Code
+    private readonly Dictionary<GraviereParams, List<GCodeGenerator.VCarveCircle>>
+        _vCarveCache = new();
+    public List<GCodeGenerator.VCarveCircle> VCarveCenters { get; private set; } = [];
     private static readonly string WerkzeugDatei = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "NCHops", "werkzeuge.json");
@@ -136,6 +141,13 @@ public partial class MainWindow : Window
 
         Loaded += (_, _) =>
         {
+            // Schriftarten-ComboBox in den Eigenschaften befüllen
+            var fontNames = System.Windows.Media.Fonts.SystemFontFamilies
+                                .Select(f => f.Source)
+                                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                                .ToList();
+            EigFont.ItemsSource = fontNames;
+
             DrawCanvas.MouseDown  += OnCanvasMouseDown;
             DrawCanvas.MouseMove  += OnCanvasMouseMove;
             DrawCanvas.MouseUp    += OnCanvasMouseUp;
@@ -335,8 +347,12 @@ public partial class MainWindow : Window
         var entry = HistoryList.SelectedItem as HistoryEntry;
         if (entry?.Params is GraviereParams p)
         {
-            TbEigKein.Visibility    = Visibility.Collapsed;
-            PnlGravieren.Visibility = Visibility.Visible;
+            // Visibility nur ändern wenn kein Apply läuft (sonst verliert EigText den Fokus)
+            if (!_eigSuppressUpdate)
+            {
+                TbEigKein.Visibility    = Visibility.Collapsed;
+                PnlGravieren.Visibility = Visibility.Visible;
+            }
 
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             static void Set(TextBox tb, string val)
@@ -344,11 +360,17 @@ public partial class MainWindow : Window
 
             _eigSuppressUpdate = true;
             Set(EigText,            p.Text);
-            if (!EigFont.IsKeyboardFocused) EigFont.Text = p.FontFamily;
+            if (!EigFont.IsKeyboardFocused)
+            {
+                var match = (EigFont.ItemsSource as IEnumerable<string>)?
+                    .FirstOrDefault(f => f.Equals(p.FontFamily, StringComparison.OrdinalIgnoreCase));
+                if (match != null) EigFont.SelectedItem = match;
+                else               EigFont.Text         = p.FontFamily;
+            }
             Set(EigTextBreite,      p.TextBreite.ToString(inv));
             Set(EigTextHoehe,       p.TextHoehe.ToString(inv));
             Set(EigFontSize,        p.FontSizeMm.ToString(inv));
-            LblEigTiefe.Text = "Tiefe (mm):";
+            LblEigTiefe.Text = "Max. Tiefe (mm):";
             Set(EigTiefe,           p.ZTiefe.ToString(inv));
             Set(EigSchneidenWinkel, p.SchneidenWinkel.ToString(inv));
             Set(EigVorschub,        p.Vorschub.ToString(inv));
@@ -360,7 +382,7 @@ public partial class MainWindow : Window
 
             TbEigInfo.Text = $"Pos: X={p.XRel} Y={p.YRel}  Bezug: {p.Bezugspunkt}";
         }
-        else
+        else if (!_eigSuppressUpdate)
         {
             TbEigKein.Visibility    = Visibility.Visible;
             PnlGravieren.Visibility = Visibility.Collapsed;
@@ -393,10 +415,16 @@ public partial class MainWindow : Window
                            : EigAusrMitte.IsChecked  == true ? "Mitte"
                            : "Links";
 
+        // SelectedItem hat Vorrang vor Text — bei editierbarem ComboBox kann
+        // Text beim SelectionChanged-Event noch nicht aktualisiert sein.
+        string fontFamily = (EigFont.SelectedItem as string)
+                          ?? EigFont.Text.Trim();
+        if (string.IsNullOrWhiteSpace(fontFamily)) return;
+
         var np = p with
         {
             Text            = EigText.Text,
-            FontFamily      = EigFont.Text.Trim(),
+            FontFamily      = fontFamily,
             FontSizeMm      = fs,
             TextBreite      = tw,
             TextHoehe       = th,
@@ -410,10 +438,15 @@ public partial class MainWindow : Window
         TbEigInfo.Text = $"Pos: X={np.XRel} Y={np.YRel}  Bezug: {np.Bezugspunkt}" +
                          $"  →  Schnittbreite: {effW:F3} mm";
         string lbl2 = np.IsTasche ? "Textfeld-Tasche" : np.IsVCarve ? "V-Carve" : "Gravieren";
-        _history[idx] = new HistoryEntry(lbl2,
-            $"\"{np.Text.Replace('\n', ' ')}\" {np.FontFamily} {np.FontSizeMm} mm", np);
-        RegenerateGCodeFromHistory();
+        // _eigSuppressUpdate + _suppressHistoryRegen: verhindert Panel-Flicker und doppeltes Regenerieren
+        // während der ObservableCollection Replace-Event HistoryList.SelectionChanged auslöst
+        _eigSuppressUpdate    = true;
+        _suppressHistoryRegen = true;
+        try { _history[idx] = new HistoryEntry(lbl2,
+            $"\"{np.Text.Replace('\n', ' ')}\" {np.FontFamily} {np.FontSizeMm} mm", np); }
+        finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
 
+        RegenerateGCodeFromHistory();
         HistoryList.SelectedIndex = idx;
     }
 
@@ -673,6 +706,7 @@ public partial class MainWindow : Window
 
     private void RegenerateGCodeFromHistory()
     {
+        _vCarveCache.Clear(); // VCarve-Kreise neu berechnen beim nächsten Zeichnen
         var sb = new System.Text.StringBuilder();
         var pfadBuffer = new List<PfadPunktParams>();
         double lastStartZ = 0;
@@ -1875,7 +1909,7 @@ public partial class MainWindow : Window
     private void DrawGCodeTopView()
     {
         var moves = _cachedTopMoves;
-        if (moves.Count == 0 || _topRect.IsEmpty) return;
+        if (_topRect.IsEmpty) return;
 
         double wx = WorkX, wy = WorkY;
         if (wx <= 0 || wy <= 0) return;
@@ -1883,6 +1917,9 @@ public partial class MainWindow : Window
         double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
         Point MmToPx(double x, double y) =>
             new(_topRect.Left + x * scale, _topRect.Bottom - y * scale);
+
+        if (moves.Count > 0)
+        {
 
         var rapidDash = new System.Windows.Media.DoubleCollection { 5, 3 };
         rapidDash.Freeze();
@@ -2235,10 +2272,12 @@ public partial class MainWindow : Window
             DrawCanvas.Children.Add(circle);
         }
 
-        // ── Textfeld-Tasche: Buchstaben-Konturen grau anzeigen ────
+        } // end if (moves.Count > 0)
+
+        // ── Gravieren: Buchstaben-Konturen grau anzeigen (Tasche + V-Carve) ─
         foreach (var entry in _history)
         {
-            if (entry.Params is not GraviereParams gp || !gp.IsTasche) continue;
+            if (entry.Params is not GraviereParams gp || (!gp.IsTasche && !gp.IsVCarve)) continue;
             var tctx = GCodeGenerator.BuildTextGeo(gp, wx, wy);
             if (tctx.Flat.Bounds.IsEmpty) continue;
 
@@ -2277,6 +2316,52 @@ public partial class MainWindow : Window
                 IsHitTestVisible = false
             });
         }
+
+        // ── V-Carve: einbeschriebene Kreise (blau) ───────────────────
+        var allVCarveCenters = new List<GCodeGenerator.VCarveCircle>();
+        foreach (var entry in _history)
+        {
+            if (entry.Params is not GraviereParams gp || !gp.IsVCarve) continue;
+
+            // Cache: nur einmal pro Parameterset berechnen
+            if (!_vCarveCache.TryGetValue(gp, out var circles))
+            {
+                circles = GCodeGenerator.ComputeVCarveCircles(gp, wx, wy);
+                _vCarveCache[gp] = circles;
+            }
+            allVCarveCenters.AddRange(circles);
+
+            if (circles.Count == 0) continue;
+
+            // Alle Kreise als eine einzige StreamGeometry (performant)
+            var circleGeo = new StreamGeometry();
+            using (var sg = circleGeo.Open())
+            {
+                foreach (var c in circles)
+                {
+                    double rPx = c.R * scale;
+                    if (rPx < 0.3) continue;
+                    var ctr = MmToPx(c.X, c.Y);
+                    // Kreis = zwei Halbkreis-Arcs (WPF-StreamGeometry-Einschränkung)
+                    var left  = new System.Windows.Point(ctr.X - rPx, ctr.Y);
+                    var right = new System.Windows.Point(ctr.X + rPx, ctr.Y);
+                    var sz    = new System.Windows.Size(rPx, rPx);
+                    sg.BeginFigure(right, true, true);
+                    sg.ArcTo(left,  sz, 0, false, System.Windows.Media.SweepDirection.Clockwise,    true, false);
+                    sg.ArcTo(right, sz, 0, false, System.Windows.Media.SweepDirection.Clockwise,    true, false);
+                }
+            }
+            circleGeo.Freeze();
+            DrawCanvas.Children.Add(new System.Windows.Shapes.Path
+            {
+                Data            = circleGeo,
+                Stroke          = new SolidColorBrush(Color.FromRgb(0, 80, 210)),
+                StrokeThickness = 0.8 / _zoom,
+                Fill            = System.Windows.Media.Brushes.Transparent,
+                IsHitTestVisible = false
+            });
+        }
+        VCarveCenters = allVCarveCenters; // absolute CNC-Koordinaten der Kreismittelpunkte
 
         // ── Gravieren-Textfelder (grau gepunktet) ─────────────────
         foreach (var entry in _history)

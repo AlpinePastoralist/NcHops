@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 
 namespace NCHops;
@@ -1677,430 +1677,344 @@ public static class GCodeGenerator
                inner.Top  >= outer.Top  - eps && inner.Bottom <= outer.Bottom + eps;
     }
 
-    // ── V-Carve ───────────────────────────────────────────────────────────
+    // ── V-Carve: Einbeschriebene Kreise (Konturabtastung / Medialachs) ───
 
-    public static string VCarve(GraviereParams p, double workW, double workH)
+    /// CNC-Koordinaten (mm), Radius (mm) und Figur-Index eines einbeschriebenen Kreises.
+    public record VCarveCircle(double X, double Y, double R, int FigIdx = -1);
+
+    /// <summary>
+    /// Läuft entlang einer geschlossenen PathFigure und liefert alle
+    /// stepWpf-WPF-Einheiten einen Punkt (x,y) mit Einheitstangente (tx,ty).
+    /// </summary>
+    private static IEnumerable<(double x, double y, double tx, double ty)>
+        WalkFigure(System.Windows.Media.PathFigure fig, double stepWpf)
     {
-        var sb  = new StringBuilder();
+        // Stützpunkte sammeln
+        var pts = new List<(double x, double y)>();
+        pts.Add((fig.StartPoint.X, fig.StartPoint.Y));
+        foreach (var seg in fig.Segments)
+        {
+            if (seg is System.Windows.Media.PolyLineSegment pls)
+                foreach (var p in pls.Points) pts.Add((p.X, p.Y));
+            else if (seg is System.Windows.Media.LineSegment ls)
+                pts.Add((ls.Point.X, ls.Point.Y));
+        }
+        if (pts.Count < 3) yield break;
+        int n = pts.Count;
+
+        // Kanten mit kumulativen Startpositionen aufbauen
+        var edges = new (double ex, double ey, double len,
+                         double utx, double uty, double cum)[n];
+        int eCount = 0;
+        double cumLen = 0;
+        for (int i = 0; i < n; i++)
+        {
+            int j  = (i + 1) % n;
+            double dx = pts[j].x - pts[i].x;
+            double dy = pts[j].y - pts[i].y;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1e-10) continue;
+            edges[eCount++] = (pts[i].x, pts[i].y, len, dx / len, dy / len, cumLen);
+            cumLen += len;
+        }
+        if (eCount == 0 || cumLen < 1e-9) yield break;
+
+        int ei = 0;
+        for (double s = 0.0; s < cumLen - 1e-9; s += stepWpf)
+        {
+            // Zur richtigen Kante vorrücken
+            while (ei + 1 < eCount && edges[ei + 1].cum <= s + 1e-12)
+                ei++;
+            var e = edges[ei];
+            double t = Math.Clamp(s - e.cum, 0.0, e.len);
+            yield return (e.ex + e.utx * t, e.ey + e.uty * t, e.utx, e.uty);
+        }
+    }
+
+    /// <summary>
+    /// Berechnet für jeden Konturpunkt alle 0,5 mm den größten einbeschriebenen
+    /// Kreis, der innen tangiert und keine andere Konturlinie schneidet.
+    /// Gibt CNC-Koordinaten (mm) und Radien zurück.
+    /// </summary>
+    /// Signierte Fläche einer Polygon-Liste in WPF-Koordinaten (Y-nach-unten).
+    /// > 0 → Uhrzeigersinn (CW) auf dem Bildschirm
+    /// < 0 → Gegenuhrzeigersinn (CCW)
+    private static double SignedArea(System.Windows.Media.PathFigure fig)
+    {
+        double a = 0;
+        double prevX = fig.StartPoint.X, prevY = fig.StartPoint.Y;
+        double firstX = prevX, firstY = prevY;
+        foreach (var seg in fig.Segments)
+        {
+            if (seg is System.Windows.Media.PolyLineSegment pls)
+                foreach (var pt in pls.Points)
+                { a += prevX * pt.Y - pt.X * prevY; prevX = pt.X; prevY = pt.Y; }
+            else if (seg is System.Windows.Media.LineSegment ls)
+            { var pt = ls.Point; a += prevX * pt.Y - pt.X * prevY; prevX = pt.X; prevY = pt.Y; }
+        }
+        a += prevX * firstY - firstX * prevY; // closing edge
+        return a * 0.5;
+    }
+
+    /// Quadratische Distanz Punkt→Segment (kein sqrt nötig für Vergleiche).
+    private static double PtSegDist2(double px, double py,
+                                     double ax, double ay, double bx, double by)
+    {
+        double dx = bx - ax, dy = by - ay;
+        double len2 = dx * dx + dy * dy;
+        if (len2 < 1e-20) return (px - ax) * (px - ax) + (py - ay) * (py - ay);
+        double t  = Math.Clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0.0, 1.0);
+        double qx = ax + t * dx - px;
+        double qy = ay + t * dy - py;
+        return qx * qx + qy * qy;
+    }
+
+    public static List<VCarveCircle> ComputeVCarveCircles(
+        GraviereParams p, double workW, double workH, double sampleStepMm = 0.5)
+    {
         var ctx = BuildTextGeo(p, workW, workH);
+        if (ctx.Flat.Bounds.IsEmpty) return [];
 
         double scale  = ctx.Scale;
         double multiH = ctx.MultiH;
-        double MX(double wx) => ctx.Ox + wx * scale;
-        double MY(double wy) => ctx.Oy + ctx.YOffset + (multiH - wy) * scale;
+        double stepW  = sampleStepMm / scale;
+        // Feinschritt für Eck-Verdichtung: ≈ 0.15 mm; Abdeckung bis 2×stepW beidseitig
+        double fineStepW  = stepW * 0.3;
+        int    extraSteps = (int)Math.Ceiling(2.0 * stepW / fineStepW) + 2;
 
-        double halfRad    = Math.Min(p.SchneidenWinkel, 179.9) / 2.0 * Math.PI / 180.0;
-        double tanHalf    = Math.Max(Math.Tan(halfRad), 1e-6);
-        double maxDepthMm = Math.Abs(p.ZTiefe);
-        double maxRadius  = maxDepthMm * tanHalf;
+        double maxRmm = p.SchneidenWinkel < 179.9
+            ? p.ZTiefe * Math.Tan(p.SchneidenWinkel * 0.5 * Math.PI / 180.0)
+            : p.FraeserD * 0.5;
+        double maxRw = maxRmm / scale;
 
-        double effW = p.FraeserD > 0
-            ? Math.Min(2.0 * maxRadius, p.FraeserD)
-            : 2.0 * maxRadius;
+        var figs = ctx.Flat.Figures.Where(f => f.IsClosed).ToList();
+        if (figs.Count == 0) return [];
 
-        sb.AppendLine($"(FraeserD={F(effW)})");
+        var fillGeo = ctx.Flat.Clone();
+        fillGeo.FillRule = System.Windows.Media.FillRule.EvenOdd;
+        fillGeo.Freeze();
+        double probe = 0.1 / scale;
+
+        // ── Alle Polygon-Segmente vorberechnen (Einwärts-Normale + Tangente) ─
+        var segs = new List<(double ax, double ay, double bx, double by,
+                              int figIdx, double inx, double iny,
+                              double tsx, double tsy)>(figs.Count * 500);
+
+        // Per-Figur-Daten für die Bogen-Abtastung
+        var figPts    = new List<(double x, double y)[]>(figs.Count);
+        var figEdgeTsx = new List<double[]>(figs.Count);
+        var figEdgeTsy = new List<double[]>(figs.Count);
+
+        for (int fi = 0; fi < figs.Count; fi++)
+        {
+            var fig = figs[fi];
+            var ptsList = new List<(double x, double y)>();
+            ptsList.Add((fig.StartPoint.X, fig.StartPoint.Y));
+            foreach (var seg in fig.Segments)
+            {
+                if (seg is System.Windows.Media.PolyLineSegment pls)
+                    foreach (var pt in pls.Points) ptsList.Add((pt.X, pt.Y));
+                else if (seg is System.Windows.Media.LineSegment ls)
+                    ptsList.Add((ls.Point.X, ls.Point.Y));
+            }
+            var pts  = ptsList.ToArray();
+            int nPts = pts.Length;
+
+            var edgeTsx = new double[nPts];
+            var edgeTsy = new double[nPts];
+
+            for (int k = 0; k < nPts; k++)
+            {
+                int k2 = (k + 1) % nPts;
+                double ddx = pts[k2].x - pts[k].x, ddy = pts[k2].y - pts[k].y;
+                double sLen = Math.Sqrt(ddx * ddx + ddy * ddy);
+                double etsx = 0, etsy = 0, einx = 0, einy = 0;
+                if (sLen > 1e-10)
+                {
+                    etsx = ddx / sLen; etsy = ddy / sLen;
+                    double lnx = -etsy, lny = etsx;
+                    double mx = (pts[k].x + pts[k2].x) * 0.5;
+                    double my = (pts[k].y + pts[k2].y) * 0.5;
+                    bool lIn = fillGeo.FillContains(new System.Windows.Point(mx + lnx*probe, my + lny*probe));
+                    bool rIn = fillGeo.FillContains(new System.Windows.Point(mx - lnx*probe, my - lny*probe));
+                    if      ( lIn && !rIn) { einx =  lnx; einy =  lny; }
+                    else if (!lIn &&  rIn) { einx = -lnx; einy = -lny; }
+                }
+                edgeTsx[k] = etsx; edgeTsy[k] = etsy;
+                segs.Add((pts[k].x, pts[k].y, pts[k2].x, pts[k2].y, fi, einx, einy, etsx, etsy));
+            }
+            figPts.Add(pts);
+            figEdgeTsx.Add(edgeTsx);
+            figEdgeTsy.Add(edgeTsy);
+        }
+        var segsArr = segs.ToArray();
+        var result  = new List<VCarveCircle>();
+
+        // ── Pro Figur: Bogenpositionen sortiert abtasten ──────────────────────
+        // Reguläre Punkte alle stepW + Verdichtungspunkte nahe Eckpunkten werden
+        // in einem SortedSet zusammengeführt, sodass die Kreise exakt in Kontur-
+        // reihenfolge entstehen. VCarve kann so ohne Rückzug innerhalb einer Figur
+        // durchfahren – insbesondere durch scharfe Innenecken.
+        for (int fi = 0; fi < figs.Count; fi++)
+        {
+            var    pts    = figPts[fi];
+            int    nPts   = pts.Length;
+            var    edgeTsx = figEdgeTsx[fi];
+            var    edgeTsy = figEdgeTsy[fi];
+
+            // Bogenlängen bis zu jedem Polygon-Knoten berechnen
+            var arcLen = new double[nPts + 1];
+            for (int k = 0; k < nPts; k++)
+            {
+                int    k2 = (k + 1) % nPts;
+                double dx = pts[k2].x - pts[k].x, dy = pts[k2].y - pts[k].y;
+                arcLen[k + 1] = arcLen[k] + Math.Sqrt(dx * dx + dy * dy);
+            }
+            double totalArc = arcLen[nPts];
+            if (totalArc < stepW) continue;
+
+            // Eckpunkte und ihre Bogenpositionen
+            var cornerArcPositions = new List<double>();
+            for (int k = 0; k < nPts; k++)
+            {
+                int    kP  = (k - 1 + nPts) % nPts;
+                double dot = edgeTsx[kP] * edgeTsx[k] + edgeTsy[kP] * edgeTsy[k];
+                if (dot <= 0.990)
+                    cornerArcPositions.Add(arcLen[k]);
+            }
+
+            // Sortiertes Set aller Bogenabtastpositionen
+            var sampleSet = new SortedSet<double>();
+            for (double pos = 0; pos < totalArc; pos += stepW)
+                sampleSet.Add(pos);
+            foreach (double ca in cornerArcPositions)
+            {
+                sampleSet.Add(ca);
+                for (int s = 1; s <= extraSteps; s++)
+                {
+                    double p1 = ca - s * fineStepW;
+                    double p2 = ca + s * fineStepW;
+                    if (p1 >= 0)       sampleSet.Add(p1);
+                    if (p2 < totalArc) sampleSet.Add(p2);
+                }
+            }
+
+            // Interpolator: gibt (px,py,tx,ty) an Bogenposition arcPos zurück
+            (double px, double py, double tx, double ty) PolyInterp(double arcPos)
+            {
+                int lo = 0, hi = nPts - 1;
+                while (lo < hi)
+                {
+                    int mid = (lo + hi + 1) / 2;
+                    if (arcLen[mid] <= arcPos) lo = mid; else hi = mid - 1;
+                }
+                double ax  = pts[lo].x,          ay  = pts[lo].y;
+                double bx  = pts[(lo + 1) % nPts].x, by  = pts[(lo + 1) % nPts].y;
+                double eLen = arcLen[lo + 1] - arcLen[lo];
+                double t   = eLen > 1e-12 ? (arcPos - arcLen[lo]) / eLen : 0;
+                double ddx = bx - ax, ddy = by - ay;
+                double len = Math.Sqrt(ddx * ddx + ddy * ddy);
+                return (ax + t * ddx, ay + t * ddy,
+                        len > 1e-12 ? ddx / len : 1.0,
+                        len > 1e-12 ? ddy / len : 0.0);
+            }
+
+            // Einbeschriebenen Kreis an jeder Abtastposition berechnen
+            foreach (double arcPos in sampleSet)
+            {
+                var (px, py, tx, ty) = PolyInterp(arcPos);
+
+                double lnx    = -ty, lny = tx;
+                bool   leftIn  = fillGeo.FillContains(new System.Windows.Point(px + lnx*probe, py + lny*probe));
+                bool   rightIn = fillGeo.FillContains(new System.Windows.Point(px - lnx*probe, py - lny*probe));
+                double nx, ny;
+                if      ( leftIn && !rightIn) { nx =  lnx; ny =  lny; }
+                else if (!leftIn &&  rightIn) { nx = -lnx; ny = -lny; }
+                else continue;
+
+                double rLo = 0.0, rHi = maxRw;
+                for (int iter = 0; iter < 22; iter++)
+                {
+                    double mid  = (rLo + rHi) * 0.5;
+                    double cx   = px + nx * mid, cy = py + ny * mid;
+                    double mid2 = mid * mid;
+                    bool   valid = true;
+                    foreach (var (ax, ay, bx, by, segFi, sinx, siny, stsx, stsy) in segsArr)
+                    {
+                        if (segFi == fi
+                            && sinx * nx + siny * ny > 0.0
+                            && stsx * tx + stsy * ty > 0.866)
+                            continue;
+                        if (PtSegDist2(cx, cy, ax, ay, bx, by) < mid2 - 1e-9)
+                        { valid = false; break; }
+                    }
+                    if (valid) rLo = mid; else rHi = mid;
+                }
+                double r = rLo;
+                if (r * scale < 0.05) continue;
+                double wpfCx = px + nx * r, wpfCy = py + ny * r;
+                if (!fillGeo.FillContains(new System.Windows.Point(wpfCx, wpfCy))) continue;
+                result.Add(new VCarveCircle(
+                    ctx.Ox + wpfCx * scale,
+                    ctx.Oy + ctx.YOffset + (multiH - wpfCy) * scale,
+                    r * scale,
+                    fi));    // FigIdx → Figur-Grenze in VCarve erkennen
+            }
+        }
+
+        return result;
+    }
+
+    // ── V-Carve G-Code ───────────────────────────────────────────────────
+    // Kreise sind bereits in Kontur-Reihenfolge (nach FigIdx + Bogenposition
+    // sortiert). Innerhalb einer Figur wird KEIN Rückzug erzeugt – der Fräser
+    // durchfährt Innenecken kontinuierlich mit variabler Tiefe.
+
+    public static string VCarve(GraviereParams p, double workW, double workH)
+    {
+        var circles = ComputeVCarveCircles(p, workW, workH);
+        if (circles.Count == 0) return string.Empty;
+
+        double halfRad = p.SchneidenWinkel * 0.5 * Math.PI / 180.0;
+        double tanHalf = Math.Tan(halfRad);
+        int    zFeed   = Math.Max(1, (int)(p.Vorschub * 0.3));
+
+        var sb = new StringBuilder();
+        sb.AppendLine("(V-Carve Gravur)");
+        sb.AppendLine($"(Text: {p.Text.Replace('\n', ' ')})");
+        sb.AppendLine($"(Schrift: {p.FontFamily}, Höhe: {p.FontSizeMm:F2} mm)");
+        sb.AppendLine($"(Stichel: Winkel={p.SchneidenWinkel}°, D={p.FraeserD:F2} mm)");
+        sb.AppendLine($"(Max. Tiefe: {p.ZTiefe:F3} mm)");
         sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE={F(p.SchneidenWinkel)})");
-        sb.AppendLine("(Gravieren)");
-        sb.AppendLine($"(VCarve: {p.Text.Replace('\n', ' ').Replace('\r', ' ')})");
-        sb.AppendLine($"(Font: {p.FontFamily}, Zeilenhöhe={F(p.FontSizeMm)} mm, Winkel={p.SchneidenWinkel}°)");
         sb.AppendLine();
         sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
 
-        var edges = new List<(double x1, double y1, double x2, double y2)>();
-        double minX = double.MaxValue, maxX = double.MinValue;
-        double minY = double.MaxValue, maxY = double.MinValue;
-
-        foreach (var fig in ctx.Flat.Figures)
+        int prevFi = -1;
+        foreach (var c in circles)
         {
-            var pts = new List<System.Windows.Point> { fig.StartPoint };
-            foreach (var seg in fig.Segments)
+            double z = -(c.R / tanHalf);
+            if (z < -p.ZTiefe) z = -p.ZTiefe;
+
+            if (c.FigIdx != prevFi)
             {
-                if (seg is System.Windows.Media.PolyLineSegment pls) pts.AddRange(pls.Points);
-                else if (seg is System.Windows.Media.LineSegment ls)  pts.Add(ls.Point);
+                // Neue Figur: Rückzug (falls nötig) + Eilgang zum Startpunkt
+                if (prevFi >= 0) sb.AppendLine(Sz());
+                sb.AppendLine();
+                sb.AppendLine($"G00 X{F(c.X)} Y{F(c.Y)}");
+                sb.AppendLine($"G01 Z{F(z)} F{zFeed}");
+                prevFi = c.FigIdx;
             }
-            for (int i = 0; i < pts.Count - 1; i++)
-                edges.Add((pts[i].X, pts[i].Y, pts[i + 1].X, pts[i + 1].Y));
-            if (fig.IsClosed && pts.Count > 1)
-                edges.Add((pts[^1].X, pts[^1].Y, pts[0].X, pts[0].Y));
-            foreach (var pt in pts)
+            else
             {
-                if (pt.X < minX) minX = pt.X; if (pt.X > maxX) maxX = pt.X;
-                if (pt.Y < minY) minY = pt.Y; if (pt.Y > maxY) maxY = pt.Y;
+                // Gleiche Figur: kontinuierlicher Schnitt, variable Tiefe, KEIN Rückzug
+                sb.AppendLine($"G01 X{F(c.X)} Y{F(c.Y)} Z{F(z)} F{(int)p.Vorschub}");
             }
         }
 
-        if (edges.Count == 0) { sb.AppendLine("M05"); return sb.ToString(); }
-
-        const double pxPerMm = 6.0;
-        double pixSize   = 1.0 / (pxPerMm * scale);
-        double margin    = pixSize * 2;
-        double gx0 = minX - margin, gy0 = minY - margin;
-        double gx1 = maxX + margin, gy1 = maxY + margin;
-        int W = Math.Max(4, (int)Math.Ceiling((gx1 - gx0) / pixSize));
-        int H = Math.Max(4, (int)Math.Ceiling((gy1 - gy0) / pixSize));
-        const int maxPx = 1400;
-        if (W > maxPx || H > maxPx)
-        {
-            double factor = Math.Max((double)W / maxPx, (double)H / maxPx);
-            pixSize *= factor;
-            W = Math.Max(4, (int)Math.Ceiling((gx1 - gx0) / pixSize));
-            H = Math.Max(4, (int)Math.Ceiling((gy1 - gy0) / pixSize));
-        }
-        double pixToMm = pixSize * scale;
-
-        var inside   = VCarveRasterize(edges, gx0, gy0, pixSize, W, H);
-        var edt      = VCarveEDT(inside, W, H);
-        var skeleton = VCarveThin(inside, W, H);
-        var paths    = VCarveTracePaths(skeleton, edt, W, H);
-
-        double maxRadPx       = p.FraeserD > 0 ? maxRadius / pixToMm : double.MaxValue;
-        double finAllowanceMm = p.FraeserD > 0 ? p.FraeserD * 0.05  : 0.0;
-
-        foreach (var path in paths)
-        {
-            if (path.Count == 0) continue;
-            bool firstOnPath = true;
-            foreach (var (px, py) in path)
-            {
-                bool isWide = edt[px, py] * pixToMm > maxRadius && p.FraeserD > 0;
-                if (isWide)
-                {
-                    if (!firstOnPath) { sb.AppendLine(Sz()); firstOnPath = true; }
-                    continue;
-                }
-                double rMm = edt[px, py] * pixToMm;
-                double z   = -Math.Min(rMm / tanHalf, maxDepthMm);
-                double gxp = MX(gx0 + (px + 0.5) * pixSize);
-                double gyp = MY(gy0 + (py + 0.5) * pixSize);
-                if (firstOnPath)
-                {
-                    sb.AppendLine($"G00 X{F(gxp)} Y{F(gyp)}");
-                    sb.AppendLine($"G01 Z{F(z)} F{(int)(p.Vorschub * 0.3)}");
-                    firstOnPath = false;
-                }
-                else
-                    sb.AppendLine($"G01 X{F(gxp)} Y{F(gyp)} Z{F(z)} F{(int)p.Vorschub}");
-            }
-            if (!firstOnPath) sb.AppendLine(Sz());
-        }
-
-        if (p.FraeserD > 0 && maxRadius > 0)
-        {
-            double finAllowancePx = finAllowanceMm / pixToMm;
-            double clearThreshPx  = maxRadPx + finAllowancePx;
-            int    rowStep        = Math.Max(1, (int)Math.Round(p.FraeserD * 0.05 / pixToMm));
-
-            var finishedChains = new List<List<(int py, int pxL, int pxR)>>();
-            var openChains     = new List<List<(int py, int pxL, int pxR)>>();
-            var rowIntervals   = new List<(int pxL, int pxR)>();
-
-            for (int py = rowStep / 2; py < H; py += rowStep)
-            {
-                rowIntervals.Clear();
-                int startPx = -1;
-                for (int px = 0; px <= W; px++)
-                {
-                    bool inClear = px < W && edt[px, py] > clearThreshPx;
-                    if (inClear && startPx < 0)  { startPx = px; }
-                    else if (!inClear && startPx >= 0) { rowIntervals.Add((startPx, px - 1)); startPx = -1; }
-                }
-
-                if (rowIntervals.Count == 0)
-                {
-                    finishedChains.AddRange(openChains);
-                    openChains.Clear();
-                    continue;
-                }
-
-                var used     = new bool[openChains.Count];
-                var nextOpen = new List<List<(int, int, int)>>();
-
-                foreach (var (pxL, pxR) in rowIntervals)
-                {
-                    int    best     = -1;
-                    double bestOvlp = -1.0;
-                    for (int k = 0; k < openChains.Count; k++)
-                    {
-                        if (used[k]) continue;
-                        var last = openChains[k][^1];
-                        double ovlp = Math.Min(pxR, last.pxR) - (double)Math.Max(pxL, last.pxL);
-                        if (ovlp > bestOvlp) { bestOvlp = ovlp; best = k; }
-                    }
-                    if (best >= 0)
-                    {
-                        used[best] = true;
-                        openChains[best].Add((py, pxL, pxR));
-                        nextOpen.Add(openChains[best]);
-                    }
-                    else
-                    {
-                        nextOpen.Add(new List<(int, int, int)> { (py, pxL, pxR) });
-                    }
-                }
-                for (int k = 0; k < openChains.Count; k++)
-                    if (!used[k]) finishedChains.Add(openChains[k]);
-                openChains = nextOpen;
-            }
-            finishedChains.AddRange(openChains);
-
-            foreach (var chain in finishedChains)
-            {
-                if (chain.Count == 0) continue;
-                bool goRight = true, first = true;
-
-                foreach (var (py, pxL, pxR) in chain)
-                {
-                    double wyc = gy0 + (py + 0.5) * pixSize;
-                    double gyc = MY(wyc);
-                    double gxL = MX(gx0 +  pxL      * pixSize);
-                    double gxR = MX(gx0 + (pxR + 1) * pixSize);
-
-                    if (first)
-                    {
-                        sb.AppendLine($"G00 X{F(goRight ? gxL : gxR)} Y{F(gyc)}");
-                        sb.AppendLine($"G01 Z{F(-maxDepthMm)} F{(int)(p.Vorschub * 0.3)}");
-                        first = false;
-                    }
-                    else
-                    {
-                        sb.AppendLine($"G01 X{F(goRight ? gxL : gxR)} Y{F(gyc)} F{(int)p.Vorschub}");
-                    }
-                    sb.AppendLine($"G01 X{F(goRight ? gxR : gxL)} F{(int)p.Vorschub}");
-                    goRight = !goRight;
-                }
-                if (!first) sb.AppendLine(Sz());
-            }
-        }
-
-        if (p.FraeserD > 0)
-        {
-            foreach (var fig in ctx.Flat.Figures)
-            {
-                if (!fig.IsClosed) continue;
-                var wpfPts = new List<System.Windows.Point> { fig.StartPoint };
-                foreach (var seg in fig.Segments)
-                {
-                    if (seg is System.Windows.Media.PolyLineSegment pls) wpfPts.AddRange(pls.Points);
-                    else if (seg is System.Windows.Media.LineSegment ls)  wpfPts.Add(ls.Point);
-                }
-                if (wpfPts.Count < 3) continue;
-
-                var cncPts = wpfPts.Select(pt => (x: MX(pt.X), y: MY(pt.Y))).ToList();
-
-                double area = 0;
-                for (int i = 0; i < cncPts.Count; i++)
-                {
-                    var (ax, ay) = cncPts[i];
-                    var (bx, by) = cncPts[(i + 1) % cncPts.Count];
-                    area += ax * by - bx * ay;
-                }
-                double sign = area < 0 ? -1.0 : 1.0;
-
-                var moves = ComputeClosedOffsetMoves(cncPts, maxRadius, sign, null);
-                if (moves.Count < 3) continue;
-
-                double bxMin = double.MaxValue, bxMax = double.MinValue;
-                double byMin = double.MaxValue, byMax = double.MinValue;
-                foreach (var mv in moves)
-                {
-                    if (mv.X < bxMin) bxMin = mv.X; if (mv.X > bxMax) bxMax = mv.X;
-                    if (mv.Y < byMin) byMin = mv.Y; if (mv.Y > byMax) byMax = mv.Y;
-                }
-                if (bxMax - bxMin < maxRadius * 0.1 && byMax - byMin < maxRadius * 0.1) continue;
-
-                sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
-                sb.AppendLine($"G01 Z{F(-maxDepthMm)} F{(int)(p.Vorschub * 0.3)}");
-                for (int i = 1; i < moves.Count; i++)
-                {
-                    var mv = moves[i];
-                    if (mv.IsArc)
-                        sb.AppendLine($"{(mv.CW ? "G02" : "G03")} X{F(mv.X)} Y{F(mv.Y)} I{F(mv.I)} J{F(mv.J)} F{(int)p.Vorschub}");
-                    else
-                        sb.AppendLine($"G01 X{F(mv.X)} Y{F(mv.Y)} F{(int)p.Vorschub}");
-                }
-                sb.AppendLine(Sz());
-            }
-        }
-
+        sb.AppendLine();
         sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
-    }
-
-    private static bool[,] VCarveRasterize(
-        List<(double x1, double y1, double x2, double y2)> edges,
-        double gx0, double gy0, double pixSize, int W, int H)
-    {
-        var grid = new bool[W, H];
-        var xs   = new List<double>(32);
-        for (int py = 0; py < H; py++)
-        {
-            double wy = gy0 + (py + 0.5) * pixSize;
-            xs.Clear();
-            foreach (var (x1, y1, x2, y2) in edges)
-            {
-                if ((y1 - wy) * (y2 - wy) >= 0) continue;
-                xs.Add(x1 + (wy - y1) / (y2 - y1) * (x2 - x1));
-            }
-            if (xs.Count < 2) continue;
-            xs.Sort();
-            for (int i = 0; i + 1 < xs.Count; i += 2)
-            {
-                int pxL = Math.Max(0,     (int)Math.Floor((xs[i    ] - gx0) / pixSize));
-                int pxR = Math.Min(W - 1, (int)Math.Floor((xs[i + 1] - gx0) / pixSize));
-                for (int px = pxL; px <= pxR; px++)
-                    grid[px, py] = true;
-            }
-        }
-        return grid;
-    }
-
-    private static float[,] VCarveEDT(bool[,] inside, int W, int H)
-    {
-        const float D1 = 1.0f, D2 = 1.414f;
-        var d = new float[W, H];
-        for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-            d[x, y] = inside[x, y] ? 999999f : 0f;
-
-        for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-        {
-            if (!inside[x, y]) continue;
-            if (x > 0)              d[x, y] = Math.Min(d[x, y], d[x-1, y  ] + D1);
-            if (y > 0)              d[x, y] = Math.Min(d[x, y], d[x,   y-1] + D1);
-            if (x > 0   && y > 0)  d[x, y] = Math.Min(d[x, y], d[x-1, y-1] + D2);
-            if (x < W-1 && y > 0)  d[x, y] = Math.Min(d[x, y], d[x+1, y-1] + D2);
-        }
-        for (int y = H-1; y >= 0; y--)
-        for (int x = W-1; x >= 0; x--)
-        {
-            if (!inside[x, y]) continue;
-            if (x < W-1)              d[x, y] = Math.Min(d[x, y], d[x+1, y  ] + D1);
-            if (y < H-1)              d[x, y] = Math.Min(d[x, y], d[x,   y+1] + D1);
-            if (x < W-1 && y < H-1)  d[x, y] = Math.Min(d[x, y], d[x+1, y+1] + D2);
-            if (x > 0   && y < H-1)  d[x, y] = Math.Min(d[x, y], d[x-1, y+1] + D2);
-        }
-        return d;
-    }
-
-    private static bool[,] VCarveThin(bool[,] src, int W, int H)
-    {
-        var cur = (bool[,])src.Clone();
-        var del = new bool[W, H];
-        bool changed = true;
-        while (changed)
-        {
-            changed = false;
-            for (int y = 1; y < H-1; y++)
-            for (int x = 1; x < W-1; x++)
-            {
-                if (!cur[x, y]) continue;
-                int p2 = cur[x,   y-1]?1:0, p3 = cur[x+1, y-1]?1:0;
-                int p4 = cur[x+1, y  ]?1:0, p5 = cur[x+1, y+1]?1:0;
-                int p6 = cur[x,   y+1]?1:0, p7 = cur[x-1, y+1]?1:0;
-                int p8 = cur[x-1, y  ]?1:0, p9 = cur[x-1, y-1]?1:0;
-                int B  = p2+p3+p4+p5+p6+p7+p8+p9;
-                if (B < 2 || B > 6) continue;
-                int A = (p2==0&&p3==1?1:0)+(p3==0&&p4==1?1:0)+(p4==0&&p5==1?1:0)
-                      + (p5==0&&p6==1?1:0)+(p6==0&&p7==1?1:0)+(p7==0&&p8==1?1:0)
-                      + (p8==0&&p9==1?1:0)+(p9==0&&p2==1?1:0);
-                if (A != 1) continue;
-                if (p2*p4*p6 != 0) continue;
-                if (p4*p6*p8 != 0) continue;
-                del[x, y] = true;
-            }
-            for (int y = 1; y < H-1; y++)
-            for (int x = 1; x < W-1; x++)
-                if (del[x, y]) { cur[x, y] = false; del[x, y] = false; changed = true; }
-
-            for (int y = 1; y < H-1; y++)
-            for (int x = 1; x < W-1; x++)
-            {
-                if (!cur[x, y]) continue;
-                int p2 = cur[x,   y-1]?1:0, p3 = cur[x+1, y-1]?1:0;
-                int p4 = cur[x+1, y  ]?1:0, p5 = cur[x+1, y+1]?1:0;
-                int p6 = cur[x,   y+1]?1:0, p7 = cur[x-1, y+1]?1:0;
-                int p8 = cur[x-1, y  ]?1:0, p9 = cur[x-1, y-1]?1:0;
-                int B  = p2+p3+p4+p5+p6+p7+p8+p9;
-                if (B < 2 || B > 6) continue;
-                int A = (p2==0&&p3==1?1:0)+(p3==0&&p4==1?1:0)+(p4==0&&p5==1?1:0)
-                      + (p5==0&&p6==1?1:0)+(p6==0&&p7==1?1:0)+(p7==0&&p8==1?1:0)
-                      + (p8==0&&p9==1?1:0)+(p9==0&&p2==1?1:0);
-                if (A != 1) continue;
-                if (p2*p4*p8 != 0) continue;
-                if (p2*p6*p8 != 0) continue;
-                del[x, y] = true;
-            }
-            for (int y = 1; y < H-1; y++)
-            for (int x = 1; x < W-1; x++)
-                if (del[x, y]) { cur[x, y] = false; del[x, y] = false; changed = true; }
-        }
-        return cur;
-    }
-
-    private static List<List<(int x, int y)>> VCarveTracePaths(
-        bool[,] sk, float[,] edt, int W, int H)
-    {
-        var visited = new bool[W, H];
-        var result  = new List<List<(int, int)>>();
-
-        int Degree(int x, int y)
-        {
-            int cnt = 0;
-            for (int dy = -1; dy <= 1; dy++)
-            for (int dx = -1; dx <= 1; dx++)
-            {
-                if (dx == 0 && dy == 0) continue;
-                int nx = x+dx, ny = y+dy;
-                if ((uint)nx < (uint)W && (uint)ny < (uint)H && sk[nx, ny]) cnt++;
-            }
-            return cnt;
-        }
-
-        (int x, int y) Next(int x, int y)
-        {
-            int bx = -1, by = -1;
-            float best = -1f;
-            for (int dy = -1; dy <= 1; dy++)
-            for (int dx = -1; dx <= 1; dx++)
-            {
-                if (dx == 0 && dy == 0) continue;
-                int nx = x+dx, ny = y+dy;
-                if ((uint)nx >= (uint)W || (uint)ny >= (uint)H) continue;
-                if (!sk[nx, ny] || visited[nx, ny]) continue;
-                if (edt[nx, ny] > best) { best = edt[nx, ny]; bx = nx; by = ny; }
-            }
-            return (bx, by);
-        }
-
-        void Walk(int sx, int sy)
-        {
-            if (!sk[sx, sy] || visited[sx, sy]) return;
-            var path = new List<(int, int)>();
-            int cx = sx, cy = sy;
-            while (cx >= 0)
-            {
-                if (visited[cx, cy]) break;
-                visited[cx, cy] = true;
-                path.Add((cx, cy));
-                var (nx, ny) = Next(cx, cy);
-                cx = nx; cy = ny;
-            }
-            if (path.Count >= 1) result.Add(path);
-        }
-
-        for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-            if (sk[x, y] && !visited[x, y] && Degree(x, y) <= 1)
-                Walk(x, y);
-
-        for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-            if (sk[x, y] && !visited[x, y])
-                Walk(x, y);
-
-        return result;
     }
 }
