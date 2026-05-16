@@ -47,7 +47,8 @@ public partial class ReihenlochbohrungDialog : Window
             Diameter:   w?.Durchmesser ?? 5,
             Bohrtiefe:  double.Parse(TxtBohrtiefe.Text, inv),
             Zustellung: w?.ZZustellung ?? 10,
-            VorschubFz: w?.VorschubFz ?? 500
+            VorschubFz: w?.VorschubFz ?? 500,
+            Drehzahl:   w?.Drehzahl ?? 20000
         );
         DialogResult = true;
     }
@@ -59,4 +60,4 @@ public record ReihenlochbohrungParams(
     double StartX, double StartY,
     int CountX, int CountY,
     double SpacingX, double SpacingY,
-    double Diameter, double Bohrtiefe, double Zustellung, double VorschubFz);
+    double Diameter, double Bohrtiefe, double Zustellung, double VorschubFz, double Drehzahl);

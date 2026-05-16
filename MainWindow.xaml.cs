@@ -45,6 +45,26 @@ public partial class MainWindow : Window
     private int _selectionSource    =  0;   // 0=Draufsicht, 1=Seitenansicht
     private GCodeLineBackgroundRenderer? _gcodeBgRenderer;
     private readonly DispatcherTimer _hlTimer;   // Debounce 80 ms
+    private readonly DispatcherTimer _eigTimer;  // Debounce 400 ms für Eigenschaften-Texteingabe
+    private readonly DispatcherTimer _simTimer;  // ~60 fps Animations-Tick
+
+    // Simulation state
+    private bool   _simPlaying;
+    private bool   _simSliderBusy; // verhindert Rückkopplungsschleife beim Slider-Update
+    private bool   _simPathDirty = true;
+    private double _simPosMm;
+    private double _simTotalMm;
+    private double _simSpeedMult = 1.0;
+    private DateTime _simLastTick;
+
+    private record struct SimSeg(
+        double X0, double Y0, double X1, double Y1,
+        double Len, double CumStart,
+        bool IsRapid, double FeedMmMin,
+        bool IsArc, double Cx, double Cy, double R, double A0, double DA);
+
+    private List<SimSeg> _simSegs = [];
+    private CancellationTokenSource? _regenCts;
     private bool _rasterEnabled;
     private double _rasterX = 50.0;
     private double _rasterY = 50.0;
@@ -175,6 +195,15 @@ public partial class MainWindow : Window
             { _hlTimer.Stop(); UpdateAll(); }, Dispatcher);
         _hlTimer.Stop();
 
+        _eigTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(400),
+            DispatcherPriority.Background, (_, _) =>
+            { _eigTimer.Stop(); ApplyEigenschaften(); }, Dispatcher);
+        _eigTimer.Stop();
+
+        _simTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16),
+            DispatcherPriority.Render, OnSimTick, Dispatcher);
+        _simTimer.Stop();
+
         HistoryList.ItemsSource = _history;
         _history.CollectionChanged += (_, _) => { if (!_suppressHistoryRegen) RegenerateGCodeFromHistory(); };
         WerkzeugGrid.ItemsSource = _werkzeuge;
@@ -219,6 +248,49 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(this, $"Speichern fehlgeschlagen:\n{ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OnFraesenSenden(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_gcodeContent))
+        {
+            MessageBox.Show(this, "Kein G-Code vorhanden.", "Fräsen",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var downloads = System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile);
+        downloads = System.IO.Path.Combine(downloads, "Downloads");
+        string fileName = DateTime.Now.ToString("yyMMdd-HHmm") + ".nc";
+        string filePath = System.IO.Path.Combine(downloads, fileName);
+
+        try
+        {
+            var text = _gcodeContent.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+            File.WriteAllText(filePath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Speichern fehlgeschlagen:\n{ex.Message}", "Fehler",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        const string estlcam = @"C:\Program Files (x86)\Estlcam11\estlcam64.exe";
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName  = estlcam,
+                Arguments = $"\"{filePath}\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Estlcam konnte nicht gestartet werden:\n{ex.Message}", "Fehler",
+                MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -321,20 +393,30 @@ public partial class MainWindow : Window
     }
 
     // ── Gravieren ─────────────────────────────────────────────────
-    private void OnGravieren      (object sender, RoutedEventArgs e) => OpenGravierenDialog(isVCarve: false);
+    private void OnGravieren      (object sender, RoutedEventArgs e) => OpenGravierenDialog();
     private void OnVCarve         (object sender, RoutedEventArgs e) => OpenGravierenDialog(isVCarve: true);
+    private void OnVCarveRaster   (object sender, RoutedEventArgs e) => OpenGravierenDialog(isVCarveRaster: true);
     private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGravierenDialog(isTasche: true);
 
-    private void OpenGravierenDialog(bool isVCarve = false, bool isTasche = false)
+    private void OpenGravierenDialog(bool isVCarve = false, bool isTasche = false, bool isVCarveRaster = false)
     {
-        string title = isTasche  ? "Gravieren – Textfeld A Tasche"
-                     : isVCarve  ? "Gravieren – Textfeld A carve"
+        string title = isTasche       ? "Gravieren – Textfeld A Tasche"
+                     : isVCarveRaster ? "Gravieren – Textfeld A carve (Raster)"
+                     : isVCarve       ? "Gravieren – Textfeld A carve"
                      : "Gravieren – Textfeld A umriss";
         var dlg = new GravierenDialog(werkzeuge: _werkzeuge.ToList(), workX: WorkX, workY: WorkY)
                       { Owner = this, Title = title };
         if (dlg.ShowDialog() != true) return;
-        var p     = dlg.Result! with { IsVCarve = isVCarve, IsTasche = isTasche };
-        string label = isTasche ? "Textfeld-Tasche" : isVCarve ? "V-Carve" : "Gravieren";
+        var p = dlg.Result! with
+        {
+            IsVCarve       = isVCarve,
+            IsTasche       = isTasche,
+            IsVCarveRaster = isVCarveRaster
+        };
+        string label = isTasche       ? "Textfeld-Tasche"
+                     : isVCarveRaster ? "V-Carve Raster"
+                     : isVCarve       ? "V-Carve"
+                     : "Gravieren";
         _history.Add(new HistoryEntry(label,
             $"\"{p.Text.Replace('\n', ' ')}\" {p.FontFamily} {p.FontSizeMm} mm", p));
     }
@@ -437,7 +519,10 @@ public partial class MainWindow : Window
 
         TbEigInfo.Text = $"Pos: X={np.XRel} Y={np.YRel}  Bezug: {np.Bezugspunkt}" +
                          $"  →  Schnittbreite: {effW:F3} mm";
-        string lbl2 = np.IsTasche ? "Textfeld-Tasche" : np.IsVCarve ? "V-Carve" : "Gravieren";
+        string lbl2 = np.IsTasche       ? "Textfeld-Tasche"
+                    : np.IsVCarveRaster ? "V-Carve Raster"
+                    : np.IsVCarve       ? "V-Carve"
+                    : "Gravieren";
         // _eigSuppressUpdate + _suppressHistoryRegen: verhindert Panel-Flicker und doppeltes Regenerieren
         // während der ObservableCollection Replace-Event HistoryList.SelectionChanged auslöst
         _eigSuppressUpdate    = true;
@@ -450,10 +535,13 @@ public partial class MainWindow : Window
         HistoryList.SelectedIndex = idx;
     }
 
-    private void OnEigTextChanged(object sender, TextChangedEventArgs e)          => ApplyEigenschaften();
+    // Texteingabe → Debounce (400 ms), damit VCarve-Berechnung nicht jeden Tastendruck blockiert
+    private void OnEigTextChanged(object sender, TextChangedEventArgs e)          => RestartEigTimer();
+    private void OnEigSizeChanged(object sender, TextChangedEventArgs e)          => RestartEigTimer();
+    // Auswahl-Events → sofort (einmalige Aktion, kein Tipp-Blockieren)
     private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)     => ApplyEigenschaften();
-    private void OnEigFontKeyUp(object sender, KeyEventArgs e)                    => ApplyEigenschaften();
-    private void OnEigSizeChanged(object sender, TextChangedEventArgs e)          => ApplyEigenschaften();
+    private void OnEigFontKeyUp(object sender, KeyEventArgs e)                    => RestartEigTimer();
+    private void RestartEigTimer() { _eigTimer.Stop(); _eigTimer.Start(); }
     private void OnEigAusrichtungChanged(object sender, RoutedEventArgs e)        => ApplyEigenschaften();
     private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateEigenschaften();
 
@@ -634,8 +722,9 @@ public partial class MainWindow : Window
             }
             case GraviereParams p:
             {
-                string dlgTitle = p.IsTasche  ? "Gravieren – Textfeld A Tasche"
-                                : p.IsVCarve  ? "Gravieren – Textfeld A carve"
+                string dlgTitle = p.IsTasche       ? "Gravieren – Textfeld A Tasche"
+                                : p.IsVCarveRaster ? "Gravieren – Textfeld A carve (Raster)"
+                                : p.IsVCarve       ? "Gravieren – Textfeld A carve"
                                 : "Gravieren – Textfeld A umriss";
                 var dlg = new GravierenDialog(p, werkzeuge: _werkzeuge.ToList())
                               { Owner = this, Title = dlgTitle };
@@ -653,9 +742,13 @@ public partial class MainWindow : Window
                     Drehzahl        = p.Drehzahl,
                     Ausrichtung     = p.Ausrichtung,
                     IsVCarve        = p.IsVCarve,
-                    IsTasche        = p.IsTasche
+                    IsTasche        = p.IsTasche,
+                    IsVCarveRaster  = p.IsVCarveRaster
                 };
-                string lbl = np.IsTasche ? "Textfeld-Tasche" : np.IsVCarve ? "V-Carve" : "Gravieren";
+                string lbl = np.IsTasche       ? "Textfeld-Tasche"
+                           : np.IsVCarveRaster ? "V-Carve Raster"
+                           : np.IsVCarve       ? "V-Carve"
+                           : "Gravieren";
                 _history[idx] = new HistoryEntry(lbl,
                     $"\"{np.Text.Replace('\n', ' ')}\" {np.FontFamily} {np.FontSizeMm} mm", np);
                 break;
@@ -706,65 +799,90 @@ public partial class MainWindow : Window
 
     private void RegenerateGCodeFromHistory()
     {
-        _vCarveCache.Clear(); // VCarve-Kreise neu berechnen beim nächsten Zeichnen
-        var sb = new System.Text.StringBuilder();
-        var pfadBuffer = new List<PfadPunktParams>();
-        double lastStartZ = 0;
-        string lastRadiuskorrektur = "Mittig";
-        double lastFraeserD = 0;
+        // Laufende Berechnung abbrechen (z. B. vorheriger Tastendruck noch in Arbeit)
+        _regenCts?.Cancel();
+        var cts = _regenCts = new CancellationTokenSource();
 
-        void FlushPfad()
-        {
-            if (pfadBuffer.Count == 0) return;
-            var c = GCodeGenerator.PfadFräsen(pfadBuffer, WorkX, WorkY);
-            if (!string.IsNullOrEmpty(c)) sb.AppendLine(c);
-            pfadBuffer.Clear();
-        }
+        // Snapshot auf UI-Thread – keine Zugriffe auf UI-Objekte im Hintergrund-Thread nötig
+        var historySnap = _history.ToList();
+        double workX = WorkX, workY = WorkY;
 
-        foreach (var entry in _history)
+        // STA-Thread: WPF-Geometrie (FormattedText, PathGeometry) erfordert STA
+        var t = new Thread(() =>
         {
-            if (entry.Params is PfadPunktParams pfad)
+            var sb          = new System.Text.StringBuilder();
+            var pfadBuffer  = new List<PfadPunktParams>();
+            double lastStartZ          = 0;
+            string lastRadiuskorrektur = "Mittig";
+            double lastFraeserD        = 0;
+
+            void FlushPfad()
             {
-                if (pfad.Typ == PfadPunktTyp.Start)
-                {
-                    FlushPfad();
-                    lastStartZ          = pfad.ZTiefe;
-                    lastRadiuskorrektur = pfad.Radiuskorrektur;
-                    lastFraeserD        = pfad.FraeserD;
-                    pfadBuffer.Add(pfad);
-                }
-                else
-                {
-                    pfadBuffer.Add(pfad with {
-                        ZTiefe          = lastStartZ,
-                        Radiuskorrektur = lastRadiuskorrektur,
-                        FraeserD        = lastFraeserD
-                    });
-                }
-                continue;
+                if (pfadBuffer.Count == 0) return;
+                var c = GCodeGenerator.PfadFräsen(pfadBuffer, workX, workY);
+                if (!string.IsNullOrEmpty(c)) sb.AppendLine(c);
+                pfadBuffer.Clear();
             }
 
-            FlushPfad();
-            string code = entry.Params switch
+            foreach (var entry in historySnap)
             {
-                PlanfräsenParams p        => GCodeGenerator.Planfräsen(p),
-                BohrungParams p           => GCodeGenerator.Bohrung(p, WorkX, WorkY),
-                ReihenlochbohrungParams p => GCodeGenerator.Reihenlochbohrung(p),
-                UmfahrenParams p          => GCodeGenerator.Umfahren(p, WorkX, WorkY),
-                TascheFräsenParams p      => GCodeGenerator.Tasche(p, WorkX, WorkY),
-                KreistascheParams p       => GCodeGenerator.Kreistasche(p, WorkX, WorkY),
-                GraviereParams p when p.IsTasche  => GCodeGenerator.TextfeldTasche(p, WorkX, WorkY),
-                GraviereParams p when p.IsVCarve  => GCodeGenerator.VCarve(p, WorkX, WorkY),
-                GraviereParams p                  => GCodeGenerator.Gravieren(p, WorkX, WorkY),
-                _                         => string.Empty
-            };
-            if (!string.IsNullOrEmpty(code)) sb.AppendLine(code);
-        }
-        FlushPfad();
+                if (cts.IsCancellationRequested) return;
 
-        GCodeText = sb.ToString();
-        UpdatePfadMenuState();
-        UpdateAll();
+                if (entry.Params is PfadPunktParams pfad)
+                {
+                    if (pfad.Typ == PfadPunktTyp.Start)
+                    {
+                        FlushPfad();
+                        lastStartZ          = pfad.ZTiefe;
+                        lastRadiuskorrektur = pfad.Radiuskorrektur;
+                        lastFraeserD        = pfad.FraeserD;
+                        pfadBuffer.Add(pfad);
+                    }
+                    else
+                    {
+                        pfadBuffer.Add(pfad with {
+                            ZTiefe          = lastStartZ,
+                            Radiuskorrektur = lastRadiuskorrektur,
+                            FraeserD        = lastFraeserD
+                        });
+                    }
+                    continue;
+                }
+
+                FlushPfad();
+                string code = entry.Params switch
+                {
+                    PlanfräsenParams p        => GCodeGenerator.Planfräsen(p),
+                    BohrungParams p           => GCodeGenerator.Bohrung(p, workX, workY),
+                    ReihenlochbohrungParams p => GCodeGenerator.Reihenlochbohrung(p),
+                    UmfahrenParams p          => GCodeGenerator.Umfahren(p, workX, workY),
+                    TascheFräsenParams p      => GCodeGenerator.Tasche(p, workX, workY),
+                    KreistascheParams p       => GCodeGenerator.Kreistasche(p, workX, workY),
+                    GraviereParams p when p.IsTasche       => GCodeGenerator.TextfeldTasche(p, workX, workY),
+                    GraviereParams p when p.IsVCarveRaster => GCodeGenerator.VCarveRaster(p, workX, workY),
+                    GraviereParams p when p.IsVCarve       => GCodeGenerator.VCarve(p, workX, workY),
+                    GraviereParams p                       => GCodeGenerator.Gravieren(p, workX, workY),
+                    _                         => string.Empty
+                };
+                if (!string.IsNullOrEmpty(code)) sb.AppendLine(code);
+            }
+            FlushPfad();
+
+            if (cts.IsCancellationRequested) return;
+            var result = sb.ToString();
+
+            Dispatcher.InvokeAsync(() =>
+            {
+                if (cts.IsCancellationRequested) return;
+                _vCarveCache.Clear();
+                GCodeText = result;
+                UpdatePfadMenuState();
+                UpdateAll();
+            });
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.IsBackground = true;
+        t.Start();
     }
 
 #if false // ── Pfad Fräsen Panel ────────────────────────────────────────
@@ -1137,6 +1255,7 @@ public partial class MainWindow : Window
             _gcodeContent    = value;
             _parsedGCodeText = null;
             _gcodeBoxDirty   = true;
+            _simPathDirty    = true;
 
             // TextBox nur aktualisieren wenn G-Code Tab aktiv ist
             if (IsGCodeTabActive())
@@ -2277,7 +2396,7 @@ public partial class MainWindow : Window
         // ── Gravieren: Buchstaben-Konturen grau anzeigen (Tasche + V-Carve) ─
         foreach (var entry in _history)
         {
-            if (entry.Params is not GraviereParams gp || (!gp.IsTasche && !gp.IsVCarve)) continue;
+            if (entry.Params is not GraviereParams gp || (!gp.IsTasche && !gp.IsVCarve && !gp.IsVCarveRaster)) continue;
             var tctx = GCodeGenerator.BuildTextGeo(gp, wx, wy);
             if (tctx.Flat.Bounds.IsEmpty) continue;
 
@@ -2326,7 +2445,9 @@ public partial class MainWindow : Window
             // Cache: nur einmal pro Parameterset berechnen
             if (!_vCarveCache.TryGetValue(gp, out var circles))
             {
-                circles = GCodeGenerator.ComputeVCarveCircles(gp, wx, wy);
+                // Auflösung skaliert mit Schriftgrösse: 5% der Höhe, min 0.05 mm, max 0.5 mm
+                double step = Math.Clamp(gp.FontSizeMm / 120.0, 0.05, 0.5);
+                circles = GCodeGenerator.ComputeVCarveCircles(gp, wx, wy, step);
                 _vCarveCache[gp] = circles;
             }
             allVCarveCenters.AddRange(circles);
@@ -2340,15 +2461,15 @@ public partial class MainWindow : Window
                 foreach (var c in circles)
                 {
                     double rPx = c.R * scale;
-                    if (rPx < 0.3) continue;
+                    if (rPx < 0.01) continue; // R=0-Punkte überspringen (geometrisch degeneriert)
                     var ctr = MmToPx(c.X, c.Y);
                     // Kreis = zwei Halbkreis-Arcs (WPF-StreamGeometry-Einschränkung)
                     var left  = new System.Windows.Point(ctr.X - rPx, ctr.Y);
                     var right = new System.Windows.Point(ctr.X + rPx, ctr.Y);
                     var sz    = new System.Windows.Size(rPx, rPx);
                     sg.BeginFigure(right, true, true);
-                    sg.ArcTo(left,  sz, 0, false, System.Windows.Media.SweepDirection.Clockwise,    true, false);
-                    sg.ArcTo(right, sz, 0, false, System.Windows.Media.SweepDirection.Clockwise,    true, false);
+                    sg.ArcTo(left,  sz, 0, false, System.Windows.Media.SweepDirection.Clockwise, true, false);
+                    sg.ArcTo(right, sz, 0, false, System.Windows.Media.SweepDirection.Clockwise, true, false);
                 }
             }
             circleGeo.Freeze();
@@ -2861,6 +2982,210 @@ public partial class MainWindow : Window
         if (dashed)
             line.StrokeDashArray = new System.Windows.Media.DoubleCollection { 5, 3 };
         return line;
+    }
+
+    // ── G-Code Simulation ───────────────────────────────────────────────────
+
+    private void BuildSimPath()
+    {
+        _simSegs.Clear();
+        _simTotalMm = 0;
+        var moves = GCodeParser.ParseTopView(_gcodeContent);
+        double prevX = 0, prevY = 0;
+
+        foreach (var m in moves)
+        {
+            bool   rapid = m.Type == MoveType.Rapid;
+            double feed  = rapid ? 3000 : (m.FeedRate > 0 ? m.FeedRate : 800);
+
+            if (m.Type is MoveType.Rapid or MoveType.Line)
+            {
+                double dx = m.X - prevX, dy = m.Y - prevY;
+                double len = Math.Sqrt(dx * dx + dy * dy);
+                if (len > 1e-9)
+                {
+                    _simSegs.Add(new SimSeg(prevX, prevY, m.X, m.Y, len, _simTotalMm,
+                        rapid, feed, false, 0, 0, 0, 0, 0));
+                    _simTotalMm += len;
+                }
+                prevX = m.X; prevY = m.Y;
+            }
+            else // Arc
+            {
+                double cx = m.X + m.I, cy = m.Y + m.J;
+                double r  = Math.Sqrt(m.I * m.I + m.J * m.J);
+                if (r > 1e-9)
+                {
+                    double a0 = Math.Atan2(m.Y - cy, m.X - cx);
+                    double a1 = Math.Atan2(m.Ye - cy, m.Xe - cx);
+                    bool   cw = m.Type == MoveType.ArcCW;
+                    double da = a1 - a0;
+                    bool full = Math.Abs(m.Xe - m.X) < 1e-6 && Math.Abs(m.Ye - m.Y) < 1e-6;
+                    if (full) da = cw ? -2 * Math.PI : 2 * Math.PI;
+                    else
+                    {
+                        if ( cw && da > 0) da -= 2 * Math.PI;
+                        if (!cw && da < 0) da += 2 * Math.PI;
+                    }
+                    double len = Math.Abs(da) * r;
+                    _simSegs.Add(new SimSeg(m.X, m.Y, m.Xe, m.Ye, len, _simTotalMm,
+                        false, feed, true, cx, cy, r, a0, da));
+                    _simTotalMm += len;
+                }
+                prevX = m.Xe; prevY = m.Ye;
+            }
+        }
+
+        _simPathDirty = false;
+        _simSliderBusy = true;
+        SimSlider.Maximum = _simTotalMm > 0 ? _simTotalMm : 1;
+        SimSlider.Value   = 0;
+        _simSliderBusy = false;
+        _simPosMm = 0;
+        TxtSimPos.Text = "0 mm";
+    }
+
+    private (double x, double y, bool rapid, double feed) SimInterp(double posMm)
+    {
+        if (_simSegs.Count == 0) return (0, 0, false, 800);
+        posMm = Math.Clamp(posMm, 0, _simTotalMm);
+
+        int lo = 0, hi = _simSegs.Count - 1;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) / 2;
+            if (_simSegs[mid].CumStart <= posMm) lo = mid; else hi = mid - 1;
+        }
+        var s = _simSegs[lo];
+        double t = s.Len > 1e-12 ? Math.Clamp((posMm - s.CumStart) / s.Len, 0, 1) : 1.0;
+
+        double x, y;
+        if (!s.IsArc)
+        {
+            x = s.X0 + t * (s.X1 - s.X0);
+            y = s.Y0 + t * (s.Y1 - s.Y0);
+        }
+        else
+        {
+            double a = s.A0 + t * s.DA;
+            x = s.Cx + s.R * Math.Cos(a);
+            y = s.Cy + s.R * Math.Sin(a);
+        }
+        return (x, y, s.IsRapid, s.FeedMmMin);
+    }
+
+    private void DrawSimTool(double xMm, double yMm, bool rapid)
+    {
+        SimToolCanvas.Children.Clear();
+        if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
+
+        double scale  = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+        // DrawCanvas-lokale Koordinaten → Bildschirmkoordinaten (Zoom + Pan)
+        double px     = (_topRect.Left   + xMm * scale) * _zoom + _panX;
+        double py     = (_topRect.Bottom - yMm * scale) * _zoom + _panY;
+        double rPx    = Math.Max(6, 2.0 * scale * _zoom);
+
+        var color  = rapid ? Color.FromArgb(200, 80, 80, 255) : Color.FromArgb(200, 255, 100, 0);
+        var stroke = new SolidColorBrush(color);
+        var fill   = new SolidColorBrush(Color.FromArgb(50, color.R, color.G, color.B));
+
+        var circle = new System.Windows.Shapes.Ellipse
+        {
+            Width = rPx * 2, Height = rPx * 2,
+            Stroke = stroke, StrokeThickness = 2,
+            Fill   = fill
+        };
+        Canvas.SetLeft(circle, px - rPx);
+        Canvas.SetTop(circle,  py - rPx);
+        SimToolCanvas.Children.Add(circle);
+    }
+
+    private void OnSimPlay(object sender, RoutedEventArgs e)
+    {
+        if (_simPathDirty) BuildSimPath();
+        if (_simTotalMm <= 0) return;
+
+        if (_simPosMm >= _simTotalMm - 1e-6) _simPosMm = 0;
+
+        _simPlaying = !_simPlaying;
+        BtnSimPlay.Content = _simPlaying ? "⏸" : "▶";
+
+        if (_simPlaying)
+        {
+            _simLastTick = DateTime.UtcNow;
+            _simTimer.Start();
+        }
+        else _simTimer.Stop();
+    }
+
+    private void OnSimStop(object sender, RoutedEventArgs e)
+    {
+        _simPlaying = false;
+        _simTimer.Stop();
+        _simPosMm          = 0;
+        BtnSimPlay.Content = "▶";
+        _simSliderBusy     = true;
+        SimSlider.Value    = 0;
+        _simSliderBusy     = false;
+        TxtSimPos.Text     = "0 mm";
+        SimToolCanvas.Children.Clear();
+    }
+
+    private void OnSimSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_simSliderBusy) return;
+        _simPosMm = SimSlider.Value;
+        TxtSimPos.Text = $"{_simPosMm:F0} mm";
+        var (x, y, rapid, _) = SimInterp(_simPosMm);
+        DrawSimTool(x, y, rapid);
+    }
+
+    private void OnSimSliderMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_simPlaying)
+        {
+            _simPlaying = false;
+            _simTimer.Stop();
+            BtnSimPlay.Content = "▶";
+        }
+    }
+
+    private void OnSimSliderMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e) { }
+
+    private void OnSimSpeedChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _simSpeedMult = CbSimSpeed.SelectedIndex switch
+        {
+            1 => 2.0, 2 => 5.0, 3 => 10.0, _ => 1.0
+        };
+    }
+
+    private void OnSimTick(object? sender, EventArgs e)
+    {
+        var now       = DateTime.UtcNow;
+        double elMs   = Math.Min((now - _simLastTick).TotalMilliseconds, 100);
+        _simLastTick  = now;
+
+        var (_, _, rapid, feedMmMin) = SimInterp(_simPosMm);
+        double effFeed = rapid ? Math.Max(feedMmMin, 3000) : Math.Max(feedMmMin, 100);
+        double deltaMm = effFeed / 60000.0 * elMs * _simSpeedMult;
+
+        _simPosMm = Math.Min(_simPosMm + deltaMm, _simTotalMm);
+
+        _simSliderBusy  = true;
+        SimSlider.Value = _simPosMm;
+        _simSliderBusy  = false;
+        TxtSimPos.Text  = $"{_simPosMm:F0} mm";
+
+        var (x, y, isRapid, _) = SimInterp(_simPosMm);
+        DrawSimTool(x, y, isRapid);
+
+        if (_simPosMm >= _simTotalMm)
+        {
+            _simPlaying        = false;
+            _simTimer.Stop();
+            BtnSimPlay.Content = "▶";
+        }
     }
 }
 

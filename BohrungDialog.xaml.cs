@@ -67,6 +67,7 @@ public partial class BohrungDialog : Window
             Zustellung:  w?.ZZustellung ?? 5,
             Durchmesser: w?.Durchmesser ?? 10,
             VorschubFz:  w?.VorschubFz ?? 500,
+            Drehzahl:    w?.Drehzahl ?? 20000,
             Bezugspunkt: GetBezug()
         );
         DialogResult = true;
@@ -77,4 +78,4 @@ public partial class BohrungDialog : Window
 
 public record BohrungParams(
     double XRel, double YRel, double Bohrtiefe, double Zustellung, double Durchmesser,
-    double VorschubFz, string Bezugspunkt);
+    double VorschubFz, double Drehzahl, string Bezugspunkt);

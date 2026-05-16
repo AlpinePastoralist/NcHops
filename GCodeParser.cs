@@ -7,7 +7,7 @@ namespace NCHops;
 public enum MoveType { Rapid, Line, ArcCW, ArcCCW }
 
 public record Move(MoveType Type, double X, double Y,
-    double Xe = 0, double Ye = 0, double I = 0, double J = 0, int LineNumber = 0, double ToolWidthMm = 0);
+    double Xe = 0, double Ye = 0, double I = 0, double J = 0, int LineNumber = 0, double ToolWidthMm = 0, double FeedRate = 0);
 
 public record SideMove(string Cmd, double X, double Z, int LineNumber = 0);
 
@@ -68,7 +68,7 @@ public static class GCodeParser
     public static List<Move> ParseTopView(string text)
     {
         var moves = new List<Move>();
-        double x = 0, y = 0, curZ = 0;
+        double x = 0, y = 0, curZ = 0, curF = 0;
         double toolD = 0, toolAngle = 180;
         bool hasPos = false;
         int ln = 0;
@@ -99,9 +99,16 @@ public static class GCodeParser
             if (mode == null) continue;
 
             var vals = ParseWords(line);
+            double prevZ = curZ;
             if (vals.TryGetValue('Z', out var nz)) curZ = nz;
+            if (vals.TryGetValue('F', out var nf)) curF = nf;
 
-            double tw = mode == MoveType.Rapid ? 0 : EffectiveToolWidth(toolD, toolAngle, curZ);
+            // Bei V-Bit mit simultaner X/Y/Z-Bewegung: Start- und End-Z können sehr
+            // unterschiedlich sein. Breite = Maximum der beiden Enden, damit der breitere
+            // Schnittbereich korrekt dargestellt wird (z. B. aufsteigender Move von tief→0).
+            double tw = mode == MoveType.Rapid ? 0 : Math.Max(
+                EffectiveToolWidth(toolD, toolAngle, prevZ),
+                EffectiveToolWidth(toolD, toolAngle, curZ));
 
             if (mode is MoveType.Rapid or MoveType.Line)
             {
@@ -113,7 +120,7 @@ public static class GCodeParser
                 // Z-Only-Moves (z.B. G01 Z-22) haben keine XY-Bewegung →
                 // in der Topansicht nicht zeichnen
                 if (hasX || hasY)
-                    moves.Add(new Move(mode.Value, x, y, LineNumber: ln, ToolWidthMm: tw));
+                    moves.Add(new Move(mode.Value, x, y, LineNumber: ln, ToolWidthMm: tw, FeedRate: curF));
             }
             else if (hasPos)
             {
@@ -122,7 +129,7 @@ public static class GCodeParser
                 double ye = vals.TryGetValue('Y', out var vy) ? vy : ys;
                 double I = vals.TryGetValue('I', out var vi) ? vi : 0;
                 double J = vals.TryGetValue('J', out var vj) ? vj : 0;
-                moves.Add(new Move(mode.Value, xs, ys, xe, ye, I, J, ln, tw));
+                moves.Add(new Move(mode.Value, xs, ys, xe, ye, I, J, ln, tw, curF));
                 x = xe; y = ye;
             }
         }

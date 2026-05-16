@@ -189,6 +189,12 @@
                                    FontFamily="Segoe MDL2 Assets" Text="&#xE74E;"/>
                     </MenuItem.Icon>
                 </MenuItem>
+                <MenuItem Header="Fräsen..." Click="OnFraesenSenden">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE768;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
                 <Separator/>
                 <MenuItem Header="Beenden" Click="OnBeenden">
                     <MenuItem.Icon>
@@ -280,6 +286,11 @@
                 <MenuItem Header="Textfeld A carve"  Click="OnVCarve">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}" Text="▲" FontSize="11"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Textfeld A carve (Raster)"  Click="OnVCarveRaster">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="▦" FontSize="11"/>
                     </MenuItem.Icon>
                 </MenuItem>
                 <MenuItem Header="Textfeld A Tasche" Click="OnTextfeldTasche">
@@ -479,22 +490,74 @@
                 <ColumnDefinition Width="*"  MinWidth="180"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Canvas mit Hintergrund-Icon -->
-            <Grid Grid.Column="0" Background="{StaticResource BgLightBrush}" ClipToBounds="True">
-                <!-- Wasserzeichen-Canvas: KEIN RenderTransform → zoom-invariant -->
-                <Canvas x:Name="WatermarkCanvas" IsHitTestVisible="False" Panel.ZIndex="0"/>
-                <Canvas x:Name="DrawCanvas"
-                        Background="Transparent"
-                        SizeChanged="OnCanvasSizeChanged" ClipToBounds="True"
-                        Panel.ZIndex="1"/>
-                <!-- Zoom-Anzeige -->
-                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                        Margin="0,0,6,6" Padding="5,2"
-                        Background="#99000000" CornerRadius="3"
-                        IsHitTestVisible="False" Panel.ZIndex="10">
-                    <TextBlock x:Name="TxtZoomLevel"
-                               Text="100 %" Foreground="White"
-                               FontSize="11" FontFamily="Consolas"/>
+            <!-- Canvas mit Hintergrund-Icon + Simulationssteuerleiste -->
+            <Grid Grid.Column="0" Background="{StaticResource BgLightBrush}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Zeichenbereich -->
+                <Grid Grid.Row="0" ClipToBounds="True">
+                    <!-- Wasserzeichen-Canvas: KEIN RenderTransform → zoom-invariant -->
+                    <Canvas x:Name="WatermarkCanvas" IsHitTestVisible="False" Panel.ZIndex="0"/>
+                    <Canvas x:Name="DrawCanvas"
+                            Background="Transparent"
+                            SizeChanged="OnCanvasSizeChanged" ClipToBounds="True"
+                            Panel.ZIndex="1"/>
+                    <!-- Simulations-Werkzeugkopf -->
+                    <Canvas x:Name="SimToolCanvas" IsHitTestVisible="False" Panel.ZIndex="5"/>
+                    <!-- Zoom-Anzeige -->
+                    <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                            Margin="0,0,6,6" Padding="5,2"
+                            Background="#99000000" CornerRadius="3"
+                            IsHitTestVisible="False" Panel.ZIndex="10">
+                        <TextBlock x:Name="TxtZoomLevel"
+                                   Text="100 %" Foreground="White"
+                                   FontSize="11" FontFamily="Consolas"/>
+                    </Border>
+                </Grid>
+
+                <!-- Simulationssteuerleiste -->
+                <Border Grid.Row="1"
+                        Background="{StaticResource AccentBrush}"
+                        BorderBrush="{StaticResource AccentPressBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="6,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="BtnSimPlay" Grid.Column="0"
+                                Content="▶" Width="28" Height="22" Padding="0"
+                                Click="OnSimPlay" ToolTip="Simulieren abspielen / pausieren"/>
+                        <Button x:Name="BtnSimStop" Grid.Column="1"
+                                Content="■" Width="28" Height="22" Padding="0"
+                                Margin="4,0,0,0" Click="OnSimStop" ToolTip="Simulation zurücksetzen"/>
+                        <Slider x:Name="SimSlider" Grid.Column="2"
+                                Margin="8,0" Minimum="0" Maximum="1" Value="0"
+                                VerticalAlignment="Center"
+                                ValueChanged="OnSimSliderChanged"
+                                MouseDown="OnSimSliderMouseDown"
+                                MouseUp="OnSimSliderMouseUp"/>
+                        <TextBlock x:Name="TxtSimPos" Grid.Column="3"
+                                   Text="0 mm" VerticalAlignment="Center"
+                                   Margin="6,0,4,0" FontFamily="Consolas" FontSize="11"
+                                   Foreground="{StaticResource TextOnAccentBrush}"
+                                   MinWidth="60"/>
+                        <ComboBox x:Name="CbSimSpeed" Grid.Column="4"
+                                  Width="52" Height="22" FontSize="11"
+                                  SelectedIndex="0" SelectionChanged="OnSimSpeedChanged">
+                            <ComboBoxItem Content="1×"/>
+                            <ComboBoxItem Content="2×"/>
+                            <ComboBoxItem Content="5×"/>
+                            <ComboBoxItem Content="10×"/>
+                        </ComboBox>
+                    </Grid>
                 </Border>
             </Grid>
 
