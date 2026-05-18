@@ -2346,7 +2346,7 @@ public static class GCodeGenerator
     /// neu ab. X, Y und R werden linear interpoliert → glatte Z-Tiefenübergänge im G-Code.
     /// </summary>
     internal static List<VCarveCircle> ResampleVCarveCircles(
-        List<VCarveCircle> raw, double dedupMm = 0.05, double spacingMm = 0.2)
+        List<VCarveCircle> raw, double dedupMm = 0.05, double spacingMm = 0.2, double simplifyMm = 1.0)
     {
         if (raw.Count == 0) return raw;
         double dedupSq = dedupMm * dedupMm;
@@ -2383,6 +2383,7 @@ public static class GCodeGenerator
 
             // 3. Gleichmässige Neuabtastung
             int nSamples = Math.Max(2, (int)Math.Round(total / spacingMm) + 1);
+            var figRes = new List<VCarveCircle>(nSamples);
             int seg = 0;
             for (int s = 0; s < nSamples; s++)
             {
@@ -2391,13 +2392,60 @@ public static class GCodeGenerator
                 double segLen = cum[seg + 1] - cum[seg];
                 double t      = segLen > 1e-12 ? (pos - cum[seg]) / segLen : 0.0;
                 var a = dp[seg]; var b = dp[seg + 1];
-                result.Add(new VCarveCircle(
+                figRes.Add(new VCarveCircle(
                     a.X + t * (b.X - a.X),
                     a.Y + t * (b.Y - a.Y),
                     a.R + t * (b.R - a.R),
                     fi));
             }
 
+            // 4. Spitzentoleranz: Umkehrpunkte kollabieren
+            // Wenn die Pfadrichtung umkehrt (Skalarprodukt < 0), werden alle
+            // folgenden Punkte innerhalb von simplifyMm auf den tiefsten (grössten R) reduziert.
+            if (simplifyMm > 0 && figRes.Count >= 3)
+            {
+                double simpSq = simplifyMm * simplifyMm;
+                var simp = new List<VCarveCircle>(figRes.Count);
+                int k = 0;
+                while (k < figRes.Count)
+                {
+                    simp.Add(figRes[k]);
+                    if (simp.Count >= 2 && k + 1 < figRes.Count)
+                    {
+                        var p0 = simp[^2];
+                        var p1 = simp[^1];
+                        var p2 = figRes[k + 1];
+                        double d1x = p1.X - p0.X, d1y = p1.Y - p0.Y;
+                        double d2x = p2.X - p1.X, d2y = p2.Y - p1.Y;
+                        double dot    = d1x * d2x + d1y * d2y;
+                        double len1sq = d1x * d1x + d1y * d1y;
+                        double len2sq = d2x * d2x + d2y * d2y;
+                        if (dot < 0 && len1sq > 1e-12 && len2sq > 1e-12)
+                        {
+                            // Richtungsumkehr: tiefsten Punkt in der Toleranzzone behalten
+                            var best = p1;
+                            int m = k + 1;
+                            while (m < figRes.Count)
+                            {
+                                double dx = figRes[m].X - p1.X, dy = figRes[m].Y - p1.Y;
+                                if (dx * dx + dy * dy > simpSq) break;
+                                if (figRes[m].R > best.R) best = figRes[m];
+                                m++;
+                            }
+                            if (m > k + 1)
+                            {
+                                simp[^1] = best;
+                                k = m;
+                                continue;
+                            }
+                        }
+                    }
+                    k++;
+                }
+                figRes = simp;
+            }
+
+            result.AddRange(figRes);
             i = j;
         }
         return result;
@@ -2407,7 +2455,8 @@ public static class GCodeGenerator
     {
         double step    = Math.Clamp(p.FontSizeMm / 200.0, 0.025, 0.1);
         var circles = ResampleVCarveCircles(
-                          ComputeVCarveCircles(p, workW, workH, step));
+                          ComputeVCarveCircles(p, workW, workH, step),
+                          simplifyMm: p.VereinfachungMm);
         if (circles.Count == 0) return string.Empty;
 
         double halfRad = p.SchneidenWinkel * 0.5 * Math.PI / 180.0;

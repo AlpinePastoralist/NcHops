@@ -487,6 +487,7 @@ public partial class MainWindow : Window
             Set(EigSchneidenWinkel, p.SchneidenWinkel.ToString(inv));
             Set(EigVorschub,        p.Vorschub.ToString(inv));
             Set(EigDrehzahl,        p.Drehzahl.ToString(inv));
+            Set(EigVereinfachung,   p.VereinfachungMm.ToString(inv));
             EigAusrLinks.IsChecked  = p.Ausrichtung == "Links"  || string.IsNullOrEmpty(p.Ausrichtung);
             EigAusrMitte.IsChecked  = p.Ausrichtung == "Mitte";
             EigAusrRechts.IsChecked = p.Ausrichtung == "Rechts";
@@ -519,6 +520,7 @@ public partial class MainWindow : Window
         if (!double.TryParse(Norm(EigSchneidenWinkel.Text), sty, inv, out var sw) || sw <= 0 || sw >= 180) return;
         if (!double.TryParse(Norm(EigVorschub.Text),        sty, inv, out var vf)) return;
         if (!double.TryParse(Norm(EigDrehzahl.Text),        sty, inv, out var dr)) return;
+        if (!double.TryParse(Norm(EigVereinfachung.Text),   sty, inv, out var ve) || ve < 0) ve = p.VereinfachungMm;
 
         double halfRad = sw / 2.0 * Math.PI / 180.0;
         double effW    = 2.0 * zt * Math.Tan(halfRad);
@@ -540,11 +542,12 @@ public partial class MainWindow : Window
             FontSizeMm      = fs,
             TextBreite      = tw,
             TextHoehe       = th,
-            ZTiefe          = zt,
-            SchneidenWinkel = sw,
-            Vorschub        = vf,
-            Drehzahl        = dr,
-            Ausrichtung     = ausrichtung
+            ZTiefe           = zt,
+            SchneidenWinkel  = sw,
+            Vorschub         = vf,
+            Drehzahl         = dr,
+            Ausrichtung      = ausrichtung,
+            VereinfachungMm  = ve
         };
 
         TbEigInfo.Text = $"Pos: X={np.XRel} Y={np.YRel}  Bezug: {np.Bezugspunkt}" +
@@ -582,20 +585,22 @@ public partial class MainWindow : Window
 
             string fontFamily = (EigFont.SelectedItem as string) ?? EigFont.Text.Trim();
             if (string.IsNullOrWhiteSpace(fontFamily)) fontFamily = gp.FontFamily;
-            double fs = double.TryParse(Norm(EigFontSize.Text),   sty, inv, out var v1) && v1 > 0 ? v1 : gp.FontSizeMm;
-            double tw = double.TryParse(Norm(EigTextBreite.Text),  sty, inv, out var v2)           ? v2 : gp.TextBreite;
-            double th = double.TryParse(Norm(EigTextHoehe.Text),   sty, inv, out var v3)           ? v3 : gp.TextHoehe;
+            double fs = double.TryParse(Norm(EigFontSize.Text),      sty, inv, out var v1) && v1 > 0 ? v1 : gp.FontSizeMm;
+            double tw = double.TryParse(Norm(EigTextBreite.Text),     sty, inv, out var v2)           ? v2 : gp.TextBreite;
+            double th = double.TryParse(Norm(EigTextHoehe.Text),      sty, inv, out var v3)           ? v3 : gp.TextHoehe;
+            double ve = double.TryParse(Norm(EigVereinfachung.Text),  sty, inv, out var v4) && v4 >= 0 ? v4 : gp.VereinfachungMm;
             string ausr = EigAusrRechts.IsChecked == true ? "Rechts"
                         : EigAusrMitte.IsChecked  == true ? "Mitte" : "Links";
 
             _previewGravParams = gp with
             {
-                Text        = EigText.Text,
-                FontFamily  = fontFamily,
-                FontSizeMm  = fs,
-                TextBreite  = tw,
-                TextHoehe   = th,
-                Ausrichtung = ausr,
+                Text            = EigText.Text,
+                FontFamily      = fontFamily,
+                FontSizeMm      = fs,
+                TextBreite      = tw,
+                TextHoehe       = th,
+                Ausrichtung     = ausr,
+                VereinfachungMm = ve,
             };
         }
         UpdateAll();
@@ -2768,7 +2773,8 @@ public partial class MainWindow : Window
             {
                 double step = Math.Clamp(gp.FontSizeMm / 200.0, 0.025, 0.1);
                 circles = GCodeGenerator.ResampleVCarveCircles(
-                              GCodeGenerator.ComputeVCarveCircles(gp, wx, wy, step));
+                              GCodeGenerator.ComputeVCarveCircles(gp, wx, wy, step),
+                              simplifyMm: gp.VereinfachungMm);
                 _vCarveCache[gp] = circles;
             }
             allVCarveCenters.AddRange(circles);

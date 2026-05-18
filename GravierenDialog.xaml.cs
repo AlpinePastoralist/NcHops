@@ -19,9 +19,10 @@ public record GraviereParams(
     double Drehzahl,
     string Bezugspunkt,
     string Ausrichtung    = "Links",    // "Links" | "Mitte" | "Rechts"
-    bool   IsVCarve       = false,      // true = V-Carve (Medialachse), false = Umriss
-    bool   IsTasche       = false,      // true = Tasche pro Buchstabe
-    bool   IsVCarveRaster = false);     // true = V-Carve (Raster-Distanzfeld)
+    bool   IsVCarve        = false,     // true = V-Carve (Medialachse), false = Umriss
+    bool   IsTasche        = false,     // true = Tasche pro Buchstabe
+    bool   IsVCarveRaster  = false,     // true = V-Carve (Raster-Distanzfeld)
+    double VereinfachungMm = 1.0);      // Spitzentoleranz: Umkehrpunkte kollabieren (0 = aus)
 
 public partial class GravierenDialog : Window
 {
