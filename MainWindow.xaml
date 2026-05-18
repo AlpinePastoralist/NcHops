@@ -131,6 +131,37 @@
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
         </Style>
 
+        <!-- ── Werkzeugpalette-Buttons ───────────────────────────── -->
+        <Style x:Key="ToolPalBtn" TargetType="Button">
+            <Setter Property="Width"           Value="34"/>
+            <Setter Property="Height"          Value="34"/>
+            <Setter Property="Padding"         Value="0"/>
+            <Setter Property="Margin"          Value="0,2"/>
+            <Setter Property="Background"      Value="Transparent"/>
+            <Setter Property="Foreground"      Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                CornerRadius="4" Padding="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#44FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#66FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── Separatoren & Array ────────────────────────────────── -->
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <x:Array x:Key="BezugListe" Type="{x:Type sys:String}">
@@ -302,6 +333,20 @@
 
             <!-- Ansicht ─────────────────────────────────────── -->
             <MenuItem Header="Ansicht">
+                <MenuItem Header="Ansicht 100 %" Click="OnZoom100"
+                          InputGestureText="Strg+0">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="①" FontSize="12"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Originalmaßstab 1:1" Click="OnZoom1to1"
+                          InputGestureText="Strg+1">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Consolas" Text="1:1" FontSize="9"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
                 <MenuItem Header="Raster einblenden" x:Name="MnuRaster"
                           IsCheckable="True" Click="OnRasterEinblenden">
                     <MenuItem.Icon>
@@ -328,6 +373,13 @@
                           IsCheckable="True" Click="OnFraesbreiteAnzeigen">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}" Text="⬛" FontSize="10"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="Berechnungen visualisieren" x:Name="MnuVCarveVisualisieren"
+                          IsCheckable="True" Click="OnVCarveVisualisierenChanged">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="◎" FontSize="13"/>
                     </MenuItem.Icon>
                 </MenuItem>
             </MenuItem>
@@ -507,6 +559,32 @@
                             Panel.ZIndex="1"/>
                     <!-- Simulations-Werkzeugkopf -->
                     <Canvas x:Name="SimToolCanvas" IsHitTestVisible="False" Panel.ZIndex="5"/>
+                    <!-- Werkzeugpalette (links, schwebend) -->
+                    <Border HorizontalAlignment="Left" VerticalAlignment="Center"
+                            Margin="8,0" Padding="4,6"
+                            Background="#CC2A3545" CornerRadius="6"
+                            Panel.ZIndex="8">
+                        <StackPanel>
+                            <Button x:Name="BtnToolHand"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnToolHand"
+                                    ToolTip="Hand (H) – Bild verschieben">
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE81A;"
+                                           FontSize="17" Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <Button x:Name="BtnToolZoom"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnToolZoom"
+                                    ToolTip="Zoom (Z) – Klick=rein  Rechtsklick=raus">
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE71E;"
+                                           FontSize="17" Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                        </StackPanel>
+                    </Border>
                     <!-- Zoom-Anzeige -->
                     <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
                             Margin="0,0,6,6" Padding="5,2"
@@ -674,8 +752,12 @@
                                          TextWrapping="Wrap"
                                          VerticalScrollBarVisibility="Auto"
                                          VerticalContentAlignment="Top"
-                                         Margin="0,0,0,10"
-                                         TextChanged="OnEigTextChanged"/>
+                                         Margin="0,0,0,6"
+                                         TextChanged="OnEigTextDirty"/>
+                                <Button x:Name="BtnGCodeBerechnen"
+                                        Content="G-Code berechnen"
+                                        Margin="0,0,0,10"
+                                        Click="OnGCodeBerechnen"/>
 
                                 <TextBlock Text="Schriftart:" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                 <ComboBox x:Name="EigFont" IsEditable="True"

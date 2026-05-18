@@ -1958,7 +1958,11 @@ public static class GCodeGenerator
 
         const double cornerStepRad = 5.0 * Math.PI / 180.0;
 
-        for (int fi = 0; fi < figs.Count; fi++)
+        // Jede Figur (Buchstabe) ist unabhängig → parallel verarbeiten.
+        // fillGeo ist Frozen → thread-sicher; segsArr/gridCells sind read-only.
+        var resultsPerFig = new List<VCarveCircle>[figs.Count];
+
+        System.Threading.Tasks.Parallel.For(0, figs.Count, fi =>
         {
             var pts       = figPts[fi];
             int nPts      = pts.Length;
@@ -1966,6 +1970,7 @@ public static class GCodeGenerator
             var edgeTsy   = figEdgeTsy[fi];
             var segBounds = figSegBounds[fi];
             int so        = figSegStart[fi];
+            var localResult = new List<VCarveCircle>();
 
             // Bogenlängen
             var arcLen = new double[nPts + 1];
@@ -1976,14 +1981,12 @@ public static class GCodeGenerator
                 arcLen[k + 1] = arcLen[k] + Math.Sqrt(dx * dx + dy * dy);
             }
             double totalArc = arcLen[nPts];
-            if (totalArc < stepW) continue;
+            if (totalArc < stepW) { resultsPerFig[fi] = localResult; return; }
 
-            // Ecken-Karte: Bogenlänge am Eckpunkt → Vertex-Index k
+            // Ecken-Karte
             var cornerAtArc = new Dictionary<double, int>();
             for (int k = 0; k < nPts; k++)
             {
-                // Nur an echten Segment-Grenzen suchen — Kurven-Approximations-Zwischenpunkte
-                // haben segBounds[k]=false und sind niemals echte Ecken.
                 if (!segBounds[k]) continue;
                 int kP = (k - 1 + nPts) % nPts;
                 if (edgeTsx[kP] * edgeTsx[k] + edgeTsy[kP] * edgeTsy[k] > 0.990) continue;
@@ -1992,22 +1995,20 @@ public static class GCodeGenerator
                 if (sP.inx * sP.inx + sP.iny * sP.iny < 1e-18) continue;
                 if (sC.inx * sC.inx + sC.iny * sC.iny < 1e-18) continue;
                 double bX = sP.inx + sC.inx, bY = sP.iny + sC.iny;
-                if (bX * bX + bY * bY < 1e-18) continue; // 180°-Ecke
+                if (bX * bX + bY * bY < 1e-18) continue;
                 cornerAtArc[arcLen[k]] = k;
             }
 
-            // Abtastpositionen: stepW-Raster + exakte Eckpositionen
+            // Abtastpositionen
             var sampleSet = new SortedSet<double>();
-            for (double pos = 0; pos < totalArc; pos += stepW)
-                sampleSet.Add(pos);
-            foreach (var ap in cornerAtArc.Keys)
-                sampleSet.Add(ap);
+            for (double pos = 0; pos < totalArc; pos += stepW) sampleSet.Add(pos);
+            foreach (var ap in cornerAtArc.Keys) sampleSet.Add(ap);
 
-            // Interpolator: (px,py,tx,ty) an Bogenposition arcPos
+            // Interpolator
             (double px, double py, double tx, double ty) PolyInterp(double arcPos)
             {
                 int lo = 0, hi = nPts - 1;
-                while (lo < hi) { int mid = (lo + hi + 1) / 2; if (arcLen[mid] <= arcPos) lo = mid; else hi = mid - 1; }
+                while (lo < hi) { int mid2 = (lo + hi + 1) / 2; if (arcLen[mid2] <= arcPos) lo = mid2; else hi = mid2 - 1; }
                 double ax  = pts[lo].x, ay = pts[lo].y;
                 double bx2 = pts[(lo + 1) % nPts].x, by2 = pts[(lo + 1) % nPts].y;
                 double eL  = arcLen[lo + 1] - arcLen[lo];
@@ -2019,12 +2020,12 @@ public static class GCodeGenerator
                         len > 1e-12 ? ddy / len : 0.0);
             }
 
-            // Größten einbeschriebenen Kreis ab (ox,oy) in Richtung (nx,ny) — FigIdx = fi
-            // minRmm: Mindest-Radius in mm (0 = auch Spitzenkreise erlaubt)
+            // Größten einbeschriebenen Kreis ab (ox,oy) in Richtung (nx,ny)
+            // 14 Iterationen reichen für < 0.001 mm Genauigkeit bei maxRw ≤ 16 mm
             VCarveCircle? TryPt(double ox, double oy, double nx, double ny, double minRmm = 0.02)
             {
                 double rL = 0.0, rH = maxRw;
-                for (int it = 0; it < 18; it++)
+                for (int it = 0; it < 14; it++)
                 {
                     double rm  = (rL + rH) * 0.5;
                     double ecx = ox + nx * rm, ecy = oy + ny * rm;
@@ -2054,15 +2055,11 @@ public static class GCodeGenerator
 
             foreach (double arcPos in sampleSet)
             {
-                // ── Ist diese Position eine Ecke? ─────────────────────────
-                // Bei Ecken: KEIN regulärer Konturkreis (der nutzt die auslaufende
-                // Kantennormale = Ende des Sweeps, was einen falschen Sprung ans Ende
-                // erzeugen würde). Der Sweep deckt a1→a2 selbst ab.
                 bool isCorner = cornerAtArc.TryGetValue(arcPos, out int ck);
 
                 if (!isCorner)
                 {
-                    // ── Regulärer Konturkreis ─────────────────────────────
+                    // ── Regulärer Konturkreis ──────────────────────────────
                     var (px, py, tx, ty) = PolyInterp(arcPos);
                     double lnx = -ty, lny = tx;
                     bool leftIn  = fillGeo.FillContains(new System.Windows.Point(px + lnx*probe, py + lny*probe));
@@ -2074,7 +2071,7 @@ public static class GCodeGenerator
                     if (cnx != 0 || cny != 0)
                     {
                         double rLo = 0.0, rHi = maxRw;
-                        for (int iter = 0; iter < 18; iter++)
+                        for (int iter = 0; iter < 14; iter++)
                         {
                             double mid  = (rLo + rHi) * 0.5;
                             double cx   = px + cnx * mid, cy = py + cny * mid;
@@ -2096,7 +2093,7 @@ public static class GCodeGenerator
                         {
                             double wpfCx = px + cnx * rLo, wpfCy = py + cny * rLo;
                             if (fillGeo.FillContains(new System.Windows.Point(wpfCx, wpfCy)))
-                                result.Add(new VCarveCircle(
+                                localResult.Add(new VCarveCircle(
                                     ctx.Ox + wpfCx * scale,
                                     ctx.Oy + ctx.YOffset + (multiH - wpfCy) * scale,
                                     rLo * scale, fi));
@@ -2105,13 +2102,13 @@ public static class GCodeGenerator
                     continue;
                 }
 
-                // ── Ecken-Kreise (Sweep, kein Spitzenpunkt) ───────────────
-
+                // ── Ecken-Kreise (nur konkave Ecken) ──────────────────────
                 int  ckP  = (ck - 1 + nPts) % nPts;
                 var  csP  = segsArr[so + ckP];
                 var  csC  = segsArr[so + ck];
                 double evx = pts[ck].x, evy = pts[ck].y;
                 bool isConcave = csP.tsx * csC.tsy - csP.tsy * csC.tsx < 0;
+                if (!isConcave) continue;
 
                 {
                     double a1 = Math.Atan2(csP.iny, csP.inx);
@@ -2124,11 +2121,17 @@ public static class GCodeGenerator
                     {
                         double a = a1 + da * s / ns;
                         var c = TryPt(evx, evy, Math.Cos(a), Math.Sin(a), minRmm: 0);
-                        if (c != null) result.Add(c);
+                        if (c != null) localResult.Add(c);
                     }
                 }
             }
-        }
+
+            resultsPerFig[fi] = localResult;
+        });
+
+        // Ergebnisse in Figur-Reihenfolge zusammenführen (FigIdx-Sortierung bleibt erhalten)
+        foreach (var r in resultsPerFig)
+            if (r != null) result.AddRange(r);
 
         return result;
     }
@@ -2337,10 +2340,74 @@ public static class GCodeGenerator
     // sortiert). Innerhalb einer Figur wird KEIN Rückzug erzeugt – der Fräser
     // durchfährt Innenecken kontinuierlich mit variabler Tiefe.
 
+    /// <summary>
+    /// Dedupliziert Kreise (Mittelpunkte näher als <paramref name="dedupMm"/>) und tastet
+    /// den Medialachsen-Pfad pro Figur mit gleichmässigem Abstand <paramref name="spacingMm"/>
+    /// neu ab. X, Y und R werden linear interpoliert → glatte Z-Tiefenübergänge im G-Code.
+    /// </summary>
+    internal static List<VCarveCircle> ResampleVCarveCircles(
+        List<VCarveCircle> raw, double dedupMm = 0.05, double spacingMm = 0.2)
+    {
+        if (raw.Count == 0) return raw;
+        double dedupSq = dedupMm * dedupMm;
+        var result = new List<VCarveCircle>(raw.Count);
+
+        int i = 0;
+        while (i < raw.Count)
+        {
+            int fi = raw[i].FigIdx;
+            int j  = i;
+            while (j < raw.Count && raw[j].FigIdx == fi) j++;
+
+            // 1. Duplikate entfernen
+            var dp = new List<VCarveCircle> { raw[i] };
+            for (int k = i + 1; k < j; k++)
+            {
+                var prev = dp[^1];
+                double dx = raw[k].X - prev.X, dy = raw[k].Y - prev.Y;
+                if (dx * dx + dy * dy >= dedupSq)
+                    dp.Add(raw[k]);
+            }
+
+            if (dp.Count == 1) { result.Add(dp[0]); i = j; continue; }
+
+            // 2. Kumulative Bogenlänge
+            var cum = new double[dp.Count];
+            for (int k = 1; k < dp.Count; k++)
+            {
+                double dx = dp[k].X - dp[k - 1].X, dy = dp[k].Y - dp[k - 1].Y;
+                cum[k] = cum[k - 1] + Math.Sqrt(dx * dx + dy * dy);
+            }
+            double total = cum[^1];
+            if (total < 1e-9) { result.Add(dp[0]); i = j; continue; }
+
+            // 3. Gleichmässige Neuabtastung
+            int nSamples = Math.Max(2, (int)Math.Round(total / spacingMm) + 1);
+            int seg = 0;
+            for (int s = 0; s < nSamples; s++)
+            {
+                double pos = s * total / (nSamples - 1);
+                while (seg < dp.Count - 2 && cum[seg + 1] <= pos) seg++;
+                double segLen = cum[seg + 1] - cum[seg];
+                double t      = segLen > 1e-12 ? (pos - cum[seg]) / segLen : 0.0;
+                var a = dp[seg]; var b = dp[seg + 1];
+                result.Add(new VCarveCircle(
+                    a.X + t * (b.X - a.X),
+                    a.Y + t * (b.Y - a.Y),
+                    a.R + t * (b.R - a.R),
+                    fi));
+            }
+
+            i = j;
+        }
+        return result;
+    }
+
     public static string VCarve(GraviereParams p, double workW, double workH)
     {
-        double step    = Math.Clamp(p.FontSizeMm / 120.0, 0.05, 0.5);
-        var circles = ComputeVCarveCircles(p, workW, workH, step);
+        double step    = Math.Clamp(p.FontSizeMm / 200.0, 0.025, 0.1);
+        var circles = ResampleVCarveCircles(
+                          ComputeVCarveCircles(p, workW, workH, step));
         if (circles.Count == 0) return string.Empty;
 
         double halfRad = p.SchneidenWinkel * 0.5 * Math.PI / 180.0;

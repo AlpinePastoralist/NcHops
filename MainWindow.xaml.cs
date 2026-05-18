@@ -27,6 +27,7 @@ public partial class MainWindow : Window
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly DispatcherTimer _refreshTimer;
+    private readonly DispatcherTimer _zoomTimer;       // Debounce: UpdateAll nach Zoom-Geste
     private Rect _topRect;
     private Rect _bottomRect;
 
@@ -37,6 +38,13 @@ public partial class MainWindow : Window
     private bool   _isPanning = false;
     private Point  _panStart;   // Startpunkt im Parent-Koordinatensystem
     private Point  _panOrigin;  // _panX/_panY beim Drag-Start
+
+    // ── Aktives Werkzeug ─────────────────────────────────────────
+    private enum CanvasTool { Select, Hand, Zoom }
+    private CanvasTool _activeTool    = CanvasTool.Select;
+    private bool       _isZoomDragging = false;
+    private Point      _zoomDragStart;
+    private System.Windows.Shapes.Rectangle? _zoomRubberBand;
 
     // ── G-Code Zeilenmarkierung ───────────────────────────────────
     private int _highlightGCodeLine = -1;   // Caret-Zeile
@@ -66,8 +74,8 @@ public partial class MainWindow : Window
     private List<SimSeg> _simSegs = [];
     private CancellationTokenSource? _regenCts;
     private bool _rasterEnabled;
-    private double _rasterX = 50.0;
-    private double _rasterY = 50.0;
+    private double _rasterX = 10.0;
+    private double _rasterY = 10.0;
     private readonly ObservableCollection<HistoryEntry> _history = [];
     private readonly List<HistoryEntry> _historyClipboard = [];
     private bool _suppressHistoryRegen;
@@ -88,11 +96,14 @@ public partial class MainWindow : Window
     private readonly Dictionary<GraviereParams, List<GCodeGenerator.VCarveCircle>>
         _vCarveCache = new();
     public List<GCodeGenerator.VCarveCircle> VCarveCenters { get; private set; } = [];
+    private GraviereParams? _previewGravParams;
     private static readonly string WerkzeugDatei = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "NCHops", "werkzeuge.json");
 
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+    [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr hMonitor, int dpiType, out uint dpiX, out uint dpiY);
 
 #if false // ── Pfad Fräsen (deaktiviert) ─────────────────────────
     private readonly ObservableCollection<PfadPunkt> _pfadPunkte = [];
@@ -197,12 +208,17 @@ public partial class MainWindow : Window
 
         _eigTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(400),
             DispatcherPriority.Background, (_, _) =>
-            { _eigTimer.Stop(); ApplyEigenschaften(); }, Dispatcher);
+            { _eigTimer.Stop(); UpdatePreviewFromFields(); }, Dispatcher);
         _eigTimer.Stop();
 
         _simTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16),
             DispatcherPriority.Render, OnSimTick, Dispatcher);
         _simTimer.Stop();
+
+        _zoomTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(120),
+            DispatcherPriority.Background, (_, _) =>
+            { _zoomTimer.Stop(); UpdateAll(); }, Dispatcher);
+        _zoomTimer.Stop();
 
         HistoryList.ItemsSource = _history;
         _history.CollectionChanged += (_, _) => { if (!_suppressHistoryRegen) RegenerateGCodeFromHistory(); };
@@ -417,8 +433,21 @@ public partial class MainWindow : Window
                      : isVCarveRaster ? "V-Carve Raster"
                      : isVCarve       ? "V-Carve"
                      : "Gravieren";
-        _history.Add(new HistoryEntry(label,
-            $"\"{p.Text.Replace('\n', ' ')}\" {p.FontFamily} {p.FontSizeMm} mm", p));
+        // G-Code noch nicht berechnen – erst nach "G-Code berechnen"
+        _suppressHistoryRegen = true;
+        try { _history.Add(new HistoryEntry(label,
+            $"\"{p.Text.Replace('\n', ' ')}\" {p.FontFamily} {p.FontSizeMm} mm", p)); }
+        finally { _suppressHistoryRegen = false; }
+
+        // Eintrag selektieren → UpdateEigenschaften() füllt Felder + ResetGCodeButton()
+        HistoryList.SelectedItem  = _history[^1];
+        TabEigenschaften.IsSelected = true;
+
+        // Preview einschalten, Button als ausstehend markieren
+        _previewGravParams = p;
+        BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
+        BtnGCodeBerechnen.Content    = "● G-Code berechnen";
+        UpdateAll();
     }
 
     // ── Eigenschaften-Tab ─────────────────────────────────────────
@@ -426,6 +455,7 @@ public partial class MainWindow : Window
 
     private void UpdateEigenschaften()
     {
+        ResetGCodeButton(); // Ausstehende Änderungen des vorherigen Eintrags verwerfen
         var entry = HistoryList.SelectedItem as HistoryEntry;
         if (entry?.Params is GraviereParams p)
         {
@@ -535,14 +565,62 @@ public partial class MainWindow : Window
         HistoryList.SelectedIndex = idx;
     }
 
-    // Texteingabe → Debounce (400 ms), damit VCarve-Berechnung nicht jeden Tastendruck blockiert
-    private void OnEigTextChanged(object sender, TextChangedEventArgs e)          => RestartEigTimer();
+    private void OnEigTextDirty(object sender, TextChangedEventArgs e) => UpdatePreviewFromFields();
+
+    private void UpdatePreviewFromFields()
+    {
+        if (_eigSuppressUpdate) return;
+        BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
+        BtnGCodeBerechnen.Content    = "● G-Code berechnen";
+
+        var entry = HistoryList.SelectedItem as HistoryEntry;
+        if (entry?.Params is GraviereParams gp)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var sty = System.Globalization.NumberStyles.Float;
+            static string Norm(string s) => s.Replace(',', '.');
+
+            string fontFamily = (EigFont.SelectedItem as string) ?? EigFont.Text.Trim();
+            if (string.IsNullOrWhiteSpace(fontFamily)) fontFamily = gp.FontFamily;
+            double fs = double.TryParse(Norm(EigFontSize.Text),   sty, inv, out var v1) && v1 > 0 ? v1 : gp.FontSizeMm;
+            double tw = double.TryParse(Norm(EigTextBreite.Text),  sty, inv, out var v2)           ? v2 : gp.TextBreite;
+            double th = double.TryParse(Norm(EigTextHoehe.Text),   sty, inv, out var v3)           ? v3 : gp.TextHoehe;
+            string ausr = EigAusrRechts.IsChecked == true ? "Rechts"
+                        : EigAusrMitte.IsChecked  == true ? "Mitte" : "Links";
+
+            _previewGravParams = gp with
+            {
+                Text        = EigText.Text,
+                FontFamily  = fontFamily,
+                FontSizeMm  = fs,
+                TextBreite  = tw,
+                TextHoehe   = th,
+                Ausrichtung = ausr,
+            };
+        }
+        UpdateAll();
+    }
+
+    private void OnGCodeBerechnen(object sender, RoutedEventArgs e)
+    {
+        ResetGCodeButton();
+        ApplyEigenschaften();
+    }
+
+    private void ResetGCodeButton()
+    {
+        BtnGCodeBerechnen.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+        BtnGCodeBerechnen.Content = "G-Code berechnen";
+        _previewGravParams = null;
+    }
+
+    // Numerische Felder → Debounce → Preview (kein G-Code)
     private void OnEigSizeChanged(object sender, TextChangedEventArgs e)          => RestartEigTimer();
-    // Auswahl-Events → sofort (einmalige Aktion, kein Tipp-Blockieren)
-    private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)     => ApplyEigenschaften();
+    // Auswahl-Events → sofort Preview (kein G-Code)
+    private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)     => UpdatePreviewFromFields();
     private void OnEigFontKeyUp(object sender, KeyEventArgs e)                    => RestartEigTimer();
     private void RestartEigTimer() { _eigTimer.Stop(); _eigTimer.Start(); }
-    private void OnEigAusrichtungChanged(object sender, RoutedEventArgs e)        => ApplyEigenschaften();
+    private void OnEigAusrichtungChanged(object sender, RoutedEventArgs e)        => UpdatePreviewFromFields();
     private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateEigenschaften();
 
     // ── Verlauf: Doppelklick → Bearbeiten ───────────────────────
@@ -954,7 +1032,20 @@ public partial class MainWindow : Window
     }
 
 #endif // OnWindowKeyDown aus #if false herausgenommen
-    private void OnWindowKeyDown(object sender, KeyEventArgs e) { }
+    private void OnWindowKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.OriginalSource is System.Windows.Controls.TextBox
+            || e.OriginalSource is ICSharpCode.AvalonEdit.Editing.TextArea) return;
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        switch (e.Key)
+        {
+            case Key.H when !ctrl: SetActiveTool(_activeTool == CanvasTool.Hand ? CanvasTool.Select : CanvasTool.Hand); e.Handled = true; break;
+            case Key.Z when !ctrl: SetActiveTool(_activeTool == CanvasTool.Zoom ? CanvasTool.Select : CanvasTool.Zoom); e.Handled = true; break;
+            case Key.Escape:       SetActiveTool(CanvasTool.Select); e.Handled = true; break;
+            case Key.D0 or Key.NumPad0 when ctrl: ZoomTo100();    e.Handled = true; break;
+            case Key.D1 or Key.NumPad1 when ctrl: ZoomTo1to1();   e.Handled = true; break;
+        }
+    }
 #if false
 
     private void OnPfadAlleLöschen(object sender, RoutedEventArgs e)
@@ -1093,6 +1184,132 @@ public partial class MainWindow : Window
         ApplyCanvasTransform();
     }
 
+    // Ctrl+0: WPF-Zoom auf 100 % zurücksetzen (Ansicht wie beim Programmstart)
+    private void ZoomTo100()
+    {
+        ResetZoom();
+        UpdateAll();
+    }
+
+    // Ctrl+1: Originalmaßstab – 1 mm auf dem Bildschirm = 1 mm in Wirklichkeit
+    private void ZoomTo1to1()
+    {
+        if (_topRect.IsEmpty || WorkX <= 0) return;
+        // baseScale = WPF-DIPs pro mm bei zoom=1.0
+        double baseScale = _topRect.Width / WorkX;
+
+        // Physische Pixeldichte des Monitors (MDT_RAW_DPI = 2)
+        // Formel: zoom = physDpi / (25.4 mm/in × baseScale × m11)
+        //   m11  = WPF-DIPs → physische Pixel (entspricht dem Windows-Skalierungsfaktor)
+        //   physDpi = tatsächliche Pixel pro Zoll des Monitors
+        double physDpi = 96.0;
+        try
+        {
+            var helper  = new System.Windows.Interop.WindowInteropHelper(this);
+            var monitor = MonitorFromWindow(helper.Handle, 2 /* MONITOR_DEFAULTTONEAREST */);
+            if (GetDpiForMonitor(monitor, 2 /* MDT_RAW_DPI */, out uint dx, out _) == 0)
+                physDpi = dx;
+        }
+        catch { }
+
+        var src  = PresentationSource.FromVisual(this);
+        double m11 = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+        double newZoom = Math.Clamp(physDpi / (25.4 * baseScale * m11), 0.05, 200.0);
+
+        // Draufsicht-Werkstück mittig auf dem Canvas halten
+        double cx  = DrawCanvas.ActualWidth  / 2;
+        double cy  = DrawCanvas.ActualHeight / 2;
+        double wCx = _topRect.Left + _topRect.Width  / 2;
+        double wCy = _topRect.Top  + _topRect.Height / 2;
+        _zoom = newZoom;
+        _panX = cx - wCx * _zoom;
+        _panY = cy - wCy * _zoom;
+        ApplyCanvasTransform();
+        UpdateAll();
+    }
+
+    // ── Werkzeugpalette ──────────────────────────────────────────
+
+    private void SetActiveTool(CanvasTool tool)
+    {
+        _activeTool = tool;
+        var active   = new System.Windows.Media.SolidColorBrush(
+                           System.Windows.Media.Color.FromArgb(0xCC, 0xDD, 0xD0, 0xB0));
+        var inactive = System.Windows.Media.Brushes.Transparent;
+        BtnToolHand.Background = tool == CanvasTool.Hand ? active : inactive;
+        BtnToolZoom.Background = tool == CanvasTool.Zoom ? active : inactive;
+        DrawCanvas.Cursor = tool switch
+        {
+            CanvasTool.Hand => Cursors.Hand,
+            CanvasTool.Zoom => Cursors.Cross,
+            _               => Cursors.Arrow,
+        };
+    }
+
+    private void OnToolHand(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.Hand ? CanvasTool.Select : CanvasTool.Hand);
+
+    private void OnToolZoom(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.Zoom ? CanvasTool.Select : CanvasTool.Zoom);
+
+    private void OnZoom100(object sender, RoutedEventArgs e)   => ZoomTo100();
+    private void OnZoom1to1(object sender, RoutedEventArgs e)  => ZoomTo1to1();
+
+    private void UpdateZoomRubberBand(Point p1, Point p2)
+    {
+        if (_zoomRubberBand == null)
+        {
+            _zoomRubberBand = new System.Windows.Shapes.Rectangle
+            {
+                Stroke            = System.Windows.Media.Brushes.White,
+                StrokeThickness   = 1.5,
+                StrokeDashArray   = new System.Windows.Media.DoubleCollection { 5, 3 },
+                Fill              = new System.Windows.Media.SolidColorBrush(
+                                        System.Windows.Media.Color.FromArgb(30, 80, 140, 255)),
+                IsHitTestVisible  = false,
+            };
+        }
+        double x = Math.Min(p1.X, p2.X);
+        double y = Math.Min(p1.Y, p2.Y);
+        _zoomRubberBand.Width  = Math.Abs(p2.X - p1.X);
+        _zoomRubberBand.Height = Math.Abs(p2.Y - p1.Y);
+        System.Windows.Controls.Canvas.SetLeft(_zoomRubberBand, x);
+        System.Windows.Controls.Canvas.SetTop (_zoomRubberBand, y);
+        if (!SimToolCanvas.Children.Contains(_zoomRubberBand))
+            SimToolCanvas.Children.Add(_zoomRubberBand);
+    }
+
+    private void ClearZoomRubberBand()
+    {
+        if (_zoomRubberBand != null)
+            SimToolCanvas.Children.Remove(_zoomRubberBand);
+    }
+
+    private void ZoomToRect(Point parentP1, Point parentP2)
+    {
+        // Parent-Koordinaten → DrawCanvas-lokale Koordinaten (vor Transform)
+        double lx1 = (parentP1.X - _panX) / _zoom;
+        double ly1 = (parentP1.Y - _panY) / _zoom;
+        double lx2 = (parentP2.X - _panX) / _zoom;
+        double ly2 = (parentP2.Y - _panY) / _zoom;
+        double localW = Math.Abs(lx2 - lx1);
+        double localH = Math.Abs(ly2 - ly1);
+        if (localW < 1 || localH < 1) return;
+
+        double cw = DrawCanvas.ActualWidth;
+        double ch = DrawCanvas.ActualHeight;
+        double newZoom = Math.Clamp(Math.Min(cw / localW, ch / localH), 0.05, 200.0);
+
+        double centerX = (Math.Min(lx1, lx2) + localW / 2);
+        double centerY = (Math.Min(ly1, ly2) + localH / 2);
+        _zoom = newZoom;
+        _panX = cw / 2 - centerX * _zoom;
+        _panY = ch / 2 - centerY * _zoom;
+        ApplyCanvasTransform();
+        UpdateAll();
+    }
+
     private void OnCanvasMouseWheel(object sender, MouseWheelEventArgs e)
     {
         double factor  = e.Delta > 0 ? 1.18 : 1.0 / 1.18;
@@ -1105,8 +1322,10 @@ public partial class MainWindow : Window
         _panY += local.Y * (_zoom - newZoom);
         _zoom  = newZoom;
 
+        // Nur Transform setzen (GPU) — UpdateAll erst 120 ms nach letztem Rad-Ereignis
         ApplyCanvasTransform();
-        UpdateAll();
+        _zoomTimer.Stop();
+        _zoomTimer.Start();
         e.Handled = true;
     }
 
@@ -1114,8 +1333,46 @@ public partial class MainWindow : Window
 
     private void OnCanvasMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.Left && e.ClickCount == 2) { ResetZoom(); return; }
-        if (e.ChangedButton != MouseButton.Right) return;
+        // Zoom-Werkzeug
+        if (_activeTool == CanvasTool.Zoom)
+        {
+            // Rechtsklick / Alt+Links → sofort herauszoomen
+            if (e.ChangedButton == MouseButton.Right ||
+                (e.ChangedButton == MouseButton.Left && (Keyboard.Modifiers & ModifierKeys.Alt) != 0))
+            {
+                double newZoom = Math.Clamp(_zoom * 0.5, 0.05, 200.0);
+                var local = e.GetPosition(DrawCanvas);
+                _panX += local.X * (_zoom - newZoom);
+                _panY += local.Y * (_zoom - newZoom);
+                _zoom  = newZoom;
+                ApplyCanvasTransform();
+                UpdateAll();
+                e.Handled = true;
+                return;
+            }
+            // Linksklick → Drag-Tracking starten (Gummiband oder Klick-Zoom bei MouseUp)
+            if (e.ChangedButton == MouseButton.Left)
+            {
+                _zoomDragStart  = e.GetPosition((UIElement)DrawCanvas.Parent);
+                _isZoomDragging = false;
+                DrawCanvas.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // Doppelklick setzt Zoom zurück (nur ohne aktives Werkzeug)
+        if (_activeTool == CanvasTool.Select &&
+            e.ChangedButton == MouseButton.Left && e.ClickCount == 2)
+        {
+            ResetZoom();
+            return;
+        }
+
+        // Pan starten: Rechtsklick immer, Linksklick beim Hand-Werkzeug
+        bool startPan = e.ChangedButton == MouseButton.Right
+                        || (e.ChangedButton == MouseButton.Left && _activeTool == CanvasTool.Hand);
+        if (!startPan) return;
         _isPanning = true;
         _panStart  = e.GetPosition((UIElement)DrawCanvas.Parent);
         _panOrigin = new Point(_panX, _panY);
@@ -1128,10 +1385,40 @@ public partial class MainWindow : Window
     {
         if (e.ChangedButton == MouseButton.Left)
         {
+            // Zoom-Werkzeug: Drag beendet oder Klick
+            if (_activeTool == CanvasTool.Zoom && DrawCanvas.IsMouseCaptured)
+            {
+                DrawCanvas.ReleaseMouseCapture();
+                if (_isZoomDragging)
+                {
+                    ClearZoomRubberBand();
+                    ZoomToRect(_zoomDragStart, e.GetPosition((UIElement)DrawCanvas.Parent));
+                }
+                else
+                {
+                    // Kurzer Klick → 2× hineinzoomen auf Klickposition
+                    double newZoom = Math.Clamp(_zoom * 2.0, 0.05, 200.0);
+                    var local = e.GetPosition(DrawCanvas);
+                    _panX += local.X * (_zoom - newZoom);
+                    _panY += local.Y * (_zoom - newZoom);
+                    _zoom  = newZoom;
+                    ApplyCanvasTransform();
+                    UpdateAll();
+                }
+                _isZoomDragging = false;
+                e.Handled = true;
+                return;
+            }
+
+            if (_isPanning && _activeTool == CanvasTool.Hand)
+            {
+                _isPanning = false;
+                DrawCanvas.ReleaseMouseCapture();
+                DrawCanvas.Cursor = Cursors.Hand;
+                return;
+            }
             // Linksklick auf leere Fläche → Auswahl aufheben
-            var pos = e.GetPosition(DrawCanvas);
-            bool isClick = e.ClickCount == 1;
-            if (isClick && _selectedGCodeLine >= 0 && !_isPanning && e.OriginalSource == DrawCanvas)
+            if (e.ClickCount == 1 && _selectedGCodeLine >= 0 && !_isPanning && e.OriginalSource == DrawCanvas)
             {
                 SetSelectedGCodeLine(-1);
                 UpdateAll();
@@ -1141,24 +1428,53 @@ public partial class MainWindow : Window
         if (e.ChangedButton != MouseButton.Right || !_isPanning) return;
         _isPanning = false;
         DrawCanvas.ReleaseMouseCapture();
-        DrawCanvas.Cursor = Cursors.Arrow;
+        DrawCanvas.Cursor = _activeTool switch
+        {
+            CanvasTool.Hand => Cursors.Hand,
+            CanvasTool.Zoom => Cursors.Cross,
+            _               => Cursors.Arrow,
+        };
     }
 
     private void OnCanvasMouseMove(object sender, MouseEventArgs e)
     {
+        // Zoom-Werkzeug: Gummiband-Rechteck aufziehen
+        if (_activeTool == CanvasTool.Zoom && DrawCanvas.IsMouseCaptured && !_isPanning)
+        {
+            var pos   = e.GetPosition((UIElement)DrawCanvas.Parent);
+            var delta = pos - _zoomDragStart;
+            if (!_isZoomDragging && (Math.Abs(delta.X) > 4 || Math.Abs(delta.Y) > 4))
+                _isZoomDragging = true;
+            if (_isZoomDragging)
+                UpdateZoomRubberBand(_zoomDragStart, pos);
+            return;
+        }
+
         if (!_isPanning) return;
-        var pos = e.GetPosition((UIElement)DrawCanvas.Parent);
-        _panX = _panOrigin.X + (pos.X - _panStart.X);
-        _panY = _panOrigin.Y + (pos.Y - _panStart.Y);
+        var panPos = e.GetPosition((UIElement)DrawCanvas.Parent);
+        _panX = _panOrigin.X + (panPos.X - _panStart.X);
+        _panY = _panOrigin.Y + (panPos.Y - _panStart.Y);
         ApplyCanvasTransform();
     }
 
     private void OnCanvasMouseLeave(object sender, MouseEventArgs e)
     {
+        if (_isZoomDragging)
+        {
+            _isZoomDragging = false;
+            ClearZoomRubberBand();
+            DrawCanvas.ReleaseMouseCapture();
+            return;
+        }
         if (!_isPanning) return;
         _isPanning = false;
         DrawCanvas.ReleaseMouseCapture();
-        DrawCanvas.Cursor = Cursors.Arrow;
+        DrawCanvas.Cursor = _activeTool switch
+        {
+            CanvasTool.Hand => Cursors.Hand,
+            CanvasTool.Zoom => Cursors.Cross,
+            _               => Cursors.Arrow,
+        };
     }
 
     private void OnInfo(object sender, RoutedEventArgs e)
@@ -2397,7 +2713,10 @@ public partial class MainWindow : Window
         foreach (var entry in _history)
         {
             if (entry.Params is not GraviereParams gp || (!gp.IsTasche && !gp.IsVCarve && !gp.IsVCarveRaster)) continue;
-            var tctx = GCodeGenerator.BuildTextGeo(gp, wx, wy);
+            // Preview: aktuellen Eingabetext live anzeigen ohne G-Code neu zu berechnen
+            var displayGp = (entry == HistoryList.SelectedItem && _previewGravParams != null)
+                            ? _previewGravParams : gp;
+            var tctx = GCodeGenerator.BuildTextGeo(displayGp, wx, wy);
             if (tctx.Flat.Bounds.IsEmpty) continue;
 
             double ts = tctx.Scale, tmH = tctx.MultiH;
@@ -2430,24 +2749,26 @@ public partial class MainWindow : Window
             DrawCanvas.Children.Add(new System.Windows.Shapes.Path
             {
                 Data            = outGeo,
-                Stroke          = new SolidColorBrush(Color.FromArgb(160, 120, 120, 120)),
+                Stroke          = new SolidColorBrush(Color.FromArgb(200, 80, 80, 80)),
                 StrokeThickness = 1.0 / _zoom,
                 IsHitTestVisible = false
             });
         }
 
-        // ── V-Carve: einbeschriebene Kreise (blau) ───────────────────
+        // ── V-Carve: einbeschriebene Kreise (blau, nur bei aktivierter Visualisierung) ──
+        bool showVCarve = MnuVCarveVisualisieren.IsChecked == true;
         var allVCarveCenters = new List<GCodeGenerator.VCarveCircle>();
         foreach (var entry in _history)
         {
             if (entry.Params is not GraviereParams gp || !gp.IsVCarve) continue;
+            if (!showVCarve) continue;
 
             // Cache: nur einmal pro Parameterset berechnen
             if (!_vCarveCache.TryGetValue(gp, out var circles))
             {
-                // Auflösung skaliert mit Schriftgrösse: 5% der Höhe, min 0.05 mm, max 0.5 mm
-                double step = Math.Clamp(gp.FontSizeMm / 120.0, 0.05, 0.5);
-                circles = GCodeGenerator.ComputeVCarveCircles(gp, wx, wy, step);
+                double step = Math.Clamp(gp.FontSizeMm / 200.0, 0.025, 0.1);
+                circles = GCodeGenerator.ResampleVCarveCircles(
+                              GCodeGenerator.ComputeVCarveCircles(gp, wx, wy, step));
                 _vCarveCache[gp] = circles;
             }
             allVCarveCenters.AddRange(circles);
@@ -2461,9 +2782,8 @@ public partial class MainWindow : Window
                 foreach (var c in circles)
                 {
                     double rPx = c.R * scale;
-                    if (rPx < 0.01) continue; // R=0-Punkte überspringen (geometrisch degeneriert)
+                    if (rPx < 0.01) continue;
                     var ctr = MmToPx(c.X, c.Y);
-                    // Kreis = zwei Halbkreis-Arcs (WPF-StreamGeometry-Einschränkung)
                     var left  = new System.Windows.Point(ctr.X - rPx, ctr.Y);
                     var right = new System.Windows.Point(ctr.X + rPx, ctr.Y);
                     var sz    = new System.Windows.Size(rPx, rPx);
@@ -2475,14 +2795,14 @@ public partial class MainWindow : Window
             circleGeo.Freeze();
             DrawCanvas.Children.Add(new System.Windows.Shapes.Path
             {
-                Data            = circleGeo,
-                Stroke          = new SolidColorBrush(Color.FromRgb(0, 80, 210)),
-                StrokeThickness = 0.8 / _zoom,
-                Fill            = System.Windows.Media.Brushes.Transparent,
+                Data             = circleGeo,
+                Stroke           = new SolidColorBrush(Color.FromRgb(0, 80, 210)),
+                StrokeThickness  = 0.8 / _zoom,
+                Fill             = System.Windows.Media.Brushes.Transparent,
                 IsHitTestVisible = false
             });
         }
-        VCarveCenters = allVCarveCenters; // absolute CNC-Koordinaten der Kreismittelpunkte
+        VCarveCenters = allVCarveCenters;
 
         // ── Gravieren-Textfelder (grau gepunktet) ─────────────────
         foreach (var entry in _history)
@@ -2795,6 +3115,13 @@ public partial class MainWindow : Window
     private void OnFraesbreiteAnzeigen(object sender, RoutedEventArgs e)
     {
         _showFraesbreite = MnuFraesbreite.IsChecked;
+        UpdateAll();
+    }
+
+    private void OnVCarveVisualisierenChanged(object sender, RoutedEventArgs e)
+    {
+        // Cache leeren → neue Schrittweite wird beim ersten Einschalten sofort wirksam
+        _vCarveCache.Clear();
         UpdateAll();
     }
 
