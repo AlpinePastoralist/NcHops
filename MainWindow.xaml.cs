@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -16,6 +16,9 @@ using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
 using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Rendering;
+using SkiaSharp;
+using SkiaSharp.Views.Desktop;
+using SkiaSharp.Views.WPF;
 
 namespace NCHops;
 
@@ -27,7 +30,6 @@ public partial class MainWindow : Window
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly DispatcherTimer _refreshTimer;
-    private readonly DispatcherTimer _zoomTimer;       // Debounce: UpdateAll nach Zoom-Geste
     private Rect _topRect;
     private Rect _bottomRect;
 
@@ -35,6 +37,7 @@ public partial class MainWindow : Window
     private double _zoom      = 1.0;
     private double _panX      = 0.0;
     private double _panY      = 0.0;
+    private double _dpiScale  = 1.0;  // physische Pixel / logische Pixel (wird in OnDrawSkia aktualisiert)
     private bool   _isPanning = false;
     private Point  _panStart;   // Startpunkt im Parent-Koordinatensystem
     private Point  _panOrigin;  // _panX/_panY beim Drag-Start
@@ -73,7 +76,8 @@ public partial class MainWindow : Window
 
     private List<SimSeg> _simSegs = [];
     private CancellationTokenSource? _regenCts;
-    private bool _rasterEnabled;
+    private bool _needsAutoFit = true;
+    private bool _rasterEnabled = true;
     private double _rasterX = 10.0;
     private double _rasterY = 10.0;
     private readonly ObservableCollection<HistoryEntry> _history = [];
@@ -179,21 +183,33 @@ public partial class MainWindow : Window
                                 .ToList();
             EigFont.ItemsSource = fontNames;
 
-            DrawCanvas.MouseDown  += OnCanvasMouseDown;
-            DrawCanvas.MouseMove  += OnCanvasMouseMove;
-            DrawCanvas.MouseUp    += OnCanvasMouseUp;
-            DrawCanvas.MouseLeave += OnCanvasMouseLeave;
-            DrawCanvas.MouseWheel += OnCanvasMouseWheel;
+            DrawSkia.PaintSurface += OnDrawSkia;
+            CanvasGrid.MouseDown  += OnCanvasMouseDown;
+            CanvasGrid.MouseMove  += OnCanvasMouseMove;
+            CanvasGrid.MouseUp    += OnCanvasMouseUp;
+            CanvasGrid.MouseLeave += OnCanvasMouseLeave;
+            CanvasGrid.MouseWheel += OnCanvasMouseWheel;
             // Zoom-Label anklickbar → Reset
             if (TxtZoomLevel is not null)
             {
                 var border = (Border)TxtZoomLevel.Parent;
                 border.IsHitTestVisible = true;
                 border.Cursor           = Cursors.Hand;
-                border.ToolTip          = "Klick: Zoom zurücksetzen\nDoppelklick auf Canvas: Zoom zurücksetzen";
-                border.MouseLeftButtonDown += (_, _) => ResetZoom();
+                border.ToolTip          = "Klick: 100 % zentriert";
+                border.MouseLeftButtonDown += (_, _) =>
+                {
+                    if (_topRect.IsEmpty) return;
+                    double cw3 = DrawSkia.ActualWidth, ch3 = DrawSkia.ActualHeight;
+                    ApplyCenterZoom(cw3, ch3, DefaultZoom(cw3, ch3));
+                    ApplyCanvasTransform();
+                    UpdateAll();
+                };
             }
             UpdateAll();
+
+            // Sicherheits-Repaint: falls DrawSkia.ActualWidth beim ersten UpdateAll() noch 0 war,
+            // triggert dieser Aufruf OnDrawSkia erneut, wo der Autofit mit garantiert gültiger Größe läuft.
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () => DrawSkia?.InvalidateVisual());
         };
 
         _refreshTimer = new DispatcherTimer(
@@ -214,11 +230,6 @@ public partial class MainWindow : Window
         _simTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16),
             DispatcherPriority.Render, OnSimTick, Dispatcher);
         _simTimer.Stop();
-
-        _zoomTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(120),
-            DispatcherPriority.Background, (_, _) =>
-            { _zoomTimer.Stop(); UpdateAll(); }, Dispatcher);
-        _zoomTimer.Stop();
 
         HistoryList.ItemsSource = _history;
         _history.CollectionChanged += (_, _) => { if (!_suppressHistoryRegen) RegenerateGCodeFromHistory(); };
@@ -1104,7 +1115,7 @@ public partial class MainWindow : Window
 
         // Cursor um genau den Pixel-Betrag des Schritts verschieben
         // → bleibt relativ zur Klickposition, kein Voreilung
-        var clickPos = e.GetPosition(DrawCanvas);
+        var clickPos = e.GetPosition(HitCanvas);
         double stepPx = s * _pfadScale;
         (double cdx, double cdy) = dir switch
         {
@@ -1113,7 +1124,7 @@ public partial class MainWindow : Window
             "L" => (-stepPx, 0.0),
             _   => (stepPx,  0.0)
         };
-        var screen = DrawCanvas.PointToScreen(new Point(clickPos.X + cdx, clickPos.Y + cdy));
+        var screen = HitCanvas.PointToScreen(new Point(clickPos.X + cdx, clickPos.Y + cdy));
         SetCursorPos((int)screen.X, (int)screen.Y);
 
         PfadLvPunkte.Items.Refresh();
@@ -1175,10 +1186,13 @@ public partial class MainWindow : Window
 
     private void ApplyCanvasTransform()
     {
+        // HitCanvas bekommt dieselbe Transform wie früher DrawCanvas,
+        // damit transparente Klickflächen korrekt positioniert bleiben.
         var grp = new TransformGroup();
         grp.Children.Add(new ScaleTransform(_zoom, _zoom));
         grp.Children.Add(new TranslateTransform(_panX, _panY));
-        DrawCanvas.RenderTransform = grp;
+        HitCanvas.RenderTransform = grp;
+        DrawSkia.InvalidateVisual();
         if (TxtZoomLevel is not null)
             TxtZoomLevel.Text = $"{_zoom * 100:F0} %";
     }
@@ -1189,14 +1203,24 @@ public partial class MainWindow : Window
         ApplyCanvasTransform();
     }
 
-    // Ctrl+0: WPF-Zoom auf 100 % zurücksetzen (Ansicht wie beim Programmstart)
+    // Ctrl+0: Zoom auf 100 % zurücksetzen
     private void ZoomTo100()
     {
         ResetZoom();
         UpdateAll();
     }
 
-    // Ctrl+1: Originalmaßstab – 1 mm auf dem Bildschirm = 1 mm in Wirklichkeit
+    // Ctrl+Fit: Werkstück einpassen und zentrieren
+    private void ZoomToFit()
+    {
+        double cw = DrawSkia.ActualWidth, ch = DrawSkia.ActualHeight;
+        if (cw <= 0 || ch <= 0 || _topRect.IsEmpty) return;
+        ApplyZoomToFit(cw, ch);
+        ApplyCanvasTransform();
+        UpdateAll();
+    }
+
+    // Originalmaßstab – 1 mm auf dem Bildschirm = 1 mm in Wirklichkeit
     private void ZoomTo1to1()
     {
         if (_topRect.IsEmpty || WorkX <= 0) return;
@@ -1222,11 +1246,11 @@ public partial class MainWindow : Window
 
         double newZoom = Math.Clamp(physDpi / (25.4 * baseScale * m11), 0.05, 200.0);
 
-        // Draufsicht-Werkstück mittig auf dem Canvas halten
-        double cx  = DrawCanvas.ActualWidth  / 2;
-        double cy  = DrawCanvas.ActualHeight / 2;
-        double wCx = _topRect.Left + _topRect.Width  / 2;
-        double wCy = _topRect.Top  + _topRect.Height / 2;
+        // Aktuellen Mittelpunkt des sichtbaren Bereichs als Ankerpunkt beibehalten
+        double cx  = DrawSkia.ActualWidth  / 2;
+        double cy  = DrawSkia.ActualHeight / 2;
+        double wCx = (cx - _panX) / _zoom;
+        double wCy = (cy - _panY) / _zoom;
         _zoom = newZoom;
         _panX = cx - wCx * _zoom;
         _panY = cy - wCy * _zoom;
@@ -1244,7 +1268,7 @@ public partial class MainWindow : Window
         var inactive = System.Windows.Media.Brushes.Transparent;
         BtnToolHand.Background = tool == CanvasTool.Hand ? active : inactive;
         BtnToolZoom.Background = tool == CanvasTool.Zoom ? active : inactive;
-        DrawCanvas.Cursor = tool switch
+        CanvasGrid.Cursor = tool switch
         {
             CanvasTool.Hand => Cursors.Hand,
             CanvasTool.Zoom => Cursors.Cross,
@@ -1302,8 +1326,8 @@ public partial class MainWindow : Window
         double localH = Math.Abs(ly2 - ly1);
         if (localW < 1 || localH < 1) return;
 
-        double cw = DrawCanvas.ActualWidth;
-        double ch = DrawCanvas.ActualHeight;
+        double cw = DrawSkia.ActualWidth;
+        double ch = DrawSkia.ActualHeight;
         double newZoom = Math.Clamp(Math.Min(cw / localW, ch / localH), 0.05, 200.0);
 
         double centerX = (Math.Min(lx1, lx2) + localW / 2);
@@ -1320,17 +1344,15 @@ public partial class MainWindow : Window
         double factor  = e.Delta > 0 ? 1.18 : 1.0 / 1.18;
         double newZoom = Math.Clamp(_zoom * factor, 0.05, 200.0);
 
-        // Zoom auf Mauszeiger ausrichten:
-        // screen = local * zoom + pan  →  pan_new = pan + local * (zoom - newZoom)
-        var local = e.GetPosition(DrawCanvas); // lokale Canvas-Koordinaten (vor Transform)
-        _panX += local.X * (_zoom - newZoom);
-        _panY += local.Y * (_zoom - newZoom);
+        // Mauszeiger-Position in DrawSkia-Layoutkoordinaten (kein RenderTransform → echte Screen-Pixel)
+        var pt     = e.GetPosition(DrawSkia);
+        double wx  = (pt.X - _panX) / _zoom;
+        double wy  = (pt.Y - _panY) / _zoom;
         _zoom  = newZoom;
+        _panX  = pt.X - wx * _zoom;
+        _panY  = pt.Y - wy * _zoom;
 
-        // Nur Transform setzen (GPU) — UpdateAll erst 120 ms nach letztem Rad-Ereignis
         ApplyCanvasTransform();
-        _zoomTimer.Stop();
-        _zoomTimer.Start();
         e.Handled = true;
     }
 
@@ -1346,11 +1368,11 @@ public partial class MainWindow : Window
                 (e.ChangedButton == MouseButton.Left && (Keyboard.Modifiers & ModifierKeys.Alt) != 0))
             {
                 double newZoom = Math.Clamp(_zoom * 0.5, 0.05, 200.0);
-                var local = e.GetPosition(DrawCanvas);
-                _panX += local.X * (_zoom - newZoom);
-                _panY += local.Y * (_zoom - newZoom);
+                var screenPt = e.GetPosition(CanvasGrid);
+                double wx = (screenPt.X - _panX) / _zoom, wy = (screenPt.Y - _panY) / _zoom;
+                _panX += wx * (_zoom - newZoom);
+                _panY += wy * (_zoom - newZoom);
                 _zoom  = newZoom;
-                ApplyCanvasTransform();
                 UpdateAll();
                 e.Handled = true;
                 return;
@@ -1358,19 +1380,25 @@ public partial class MainWindow : Window
             // Linksklick → Drag-Tracking starten (Gummiband oder Klick-Zoom bei MouseUp)
             if (e.ChangedButton == MouseButton.Left)
             {
-                _zoomDragStart  = e.GetPosition((UIElement)DrawCanvas.Parent);
+                _zoomDragStart  = e.GetPosition(CanvasGrid);
                 _isZoomDragging = false;
-                DrawCanvas.CaptureMouse();
+                CanvasGrid.CaptureMouse();
                 e.Handled = true;
                 return;
             }
         }
 
-        // Doppelklick setzt Zoom zurück (nur ohne aktives Werkzeug)
+        // Doppelklick: Zoom 100 % mit zentriertem Werkstück
         if (_activeTool == CanvasTool.Select &&
             e.ChangedButton == MouseButton.Left && e.ClickCount == 2)
         {
-            ResetZoom();
+            if (!_topRect.IsEmpty)
+            {
+                double cw2 = DrawSkia.ActualWidth, ch2 = DrawSkia.ActualHeight;
+                ApplyCenterZoom(cw2, ch2, DefaultZoom(cw2, ch2));
+                ApplyCanvasTransform();
+                UpdateAll();
+            }
             return;
         }
 
@@ -1379,10 +1407,10 @@ public partial class MainWindow : Window
                         || (e.ChangedButton == MouseButton.Left && _activeTool == CanvasTool.Hand);
         if (!startPan) return;
         _isPanning = true;
-        _panStart  = e.GetPosition((UIElement)DrawCanvas.Parent);
+        _panStart  = e.GetPosition(CanvasGrid);
         _panOrigin = new Point(_panX, _panY);
-        DrawCanvas.CaptureMouse();
-        DrawCanvas.Cursor = Cursors.SizeAll;
+        CanvasGrid.CaptureMouse();
+        CanvasGrid.Cursor = Cursors.SizeAll;
         e.Handled = true;
     }
 
@@ -1391,23 +1419,23 @@ public partial class MainWindow : Window
         if (e.ChangedButton == MouseButton.Left)
         {
             // Zoom-Werkzeug: Drag beendet oder Klick
-            if (_activeTool == CanvasTool.Zoom && DrawCanvas.IsMouseCaptured)
+            if (_activeTool == CanvasTool.Zoom && CanvasGrid.IsMouseCaptured)
             {
-                DrawCanvas.ReleaseMouseCapture();
+                CanvasGrid.ReleaseMouseCapture();
                 if (_isZoomDragging)
                 {
                     ClearZoomRubberBand();
-                    ZoomToRect(_zoomDragStart, e.GetPosition((UIElement)DrawCanvas.Parent));
+                    ZoomToRect(_zoomDragStart, e.GetPosition(CanvasGrid));
                 }
                 else
                 {
                     // Kurzer Klick → 2× hineinzoomen auf Klickposition
                     double newZoom = Math.Clamp(_zoom * 2.0, 0.05, 200.0);
-                    var local = e.GetPosition(DrawCanvas);
-                    _panX += local.X * (_zoom - newZoom);
-                    _panY += local.Y * (_zoom - newZoom);
+                    var screenPt = e.GetPosition(CanvasGrid);
+                    double wx = (screenPt.X - _panX) / _zoom, wy = (screenPt.Y - _panY) / _zoom;
+                    _panX += wx * (_zoom - newZoom);
+                    _panY += wy * (_zoom - newZoom);
                     _zoom  = newZoom;
-                    ApplyCanvasTransform();
                     UpdateAll();
                 }
                 _isZoomDragging = false;
@@ -1418,12 +1446,12 @@ public partial class MainWindow : Window
             if (_isPanning && _activeTool == CanvasTool.Hand)
             {
                 _isPanning = false;
-                DrawCanvas.ReleaseMouseCapture();
-                DrawCanvas.Cursor = Cursors.Hand;
+                CanvasGrid.ReleaseMouseCapture();
+                CanvasGrid.Cursor = Cursors.Hand;
                 return;
             }
             // Linksklick auf leere Fläche → Auswahl aufheben
-            if (e.ClickCount == 1 && _selectedGCodeLine >= 0 && !_isPanning && e.OriginalSource == DrawCanvas)
+            if (e.ClickCount == 1 && _selectedGCodeLine >= 0 && !_isPanning && e.OriginalSource == CanvasGrid)
             {
                 SetSelectedGCodeLine(-1);
                 UpdateAll();
@@ -1432,8 +1460,8 @@ public partial class MainWindow : Window
         }
         if (e.ChangedButton != MouseButton.Right || !_isPanning) return;
         _isPanning = false;
-        DrawCanvas.ReleaseMouseCapture();
-        DrawCanvas.Cursor = _activeTool switch
+        CanvasGrid.ReleaseMouseCapture();
+        CanvasGrid.Cursor = _activeTool switch
         {
             CanvasTool.Hand => Cursors.Hand,
             CanvasTool.Zoom => Cursors.Cross,
@@ -1444,9 +1472,9 @@ public partial class MainWindow : Window
     private void OnCanvasMouseMove(object sender, MouseEventArgs e)
     {
         // Zoom-Werkzeug: Gummiband-Rechteck aufziehen
-        if (_activeTool == CanvasTool.Zoom && DrawCanvas.IsMouseCaptured && !_isPanning)
+        if (_activeTool == CanvasTool.Zoom && CanvasGrid.IsMouseCaptured && !_isPanning)
         {
-            var pos   = e.GetPosition((UIElement)DrawCanvas.Parent);
+            var pos   = e.GetPosition(CanvasGrid);
             var delta = pos - _zoomDragStart;
             if (!_isZoomDragging && (Math.Abs(delta.X) > 4 || Math.Abs(delta.Y) > 4))
                 _isZoomDragging = true;
@@ -1456,7 +1484,7 @@ public partial class MainWindow : Window
         }
 
         if (!_isPanning) return;
-        var panPos = e.GetPosition((UIElement)DrawCanvas.Parent);
+        var panPos = e.GetPosition(CanvasGrid);
         _panX = _panOrigin.X + (panPos.X - _panStart.X);
         _panY = _panOrigin.Y + (panPos.Y - _panStart.Y);
         ApplyCanvasTransform();
@@ -1468,13 +1496,13 @@ public partial class MainWindow : Window
         {
             _isZoomDragging = false;
             ClearZoomRubberBand();
-            DrawCanvas.ReleaseMouseCapture();
+            CanvasGrid.ReleaseMouseCapture();
             return;
         }
         if (!_isPanning) return;
         _isPanning = false;
-        DrawCanvas.ReleaseMouseCapture();
-        DrawCanvas.Cursor = _activeTool switch
+        CanvasGrid.ReleaseMouseCapture();
+        CanvasGrid.Cursor = _activeTool switch
         {
             CanvasTool.Hand => Cursors.Hand,
             CanvasTool.Zoom => Cursors.Cross,
@@ -1577,6 +1605,7 @@ public partial class MainWindow : Window
             _parsedGCodeText = null;
             _gcodeBoxDirty   = true;
             _simPathDirty    = true;
+            _needsAutoFit    = true;
 
             // TextBox nur aktualisieren wenn G-Code Tab aktiv ist
             if (IsGCodeTabActive())
@@ -1748,105 +1777,13 @@ public partial class MainWindow : Window
         UpdateAll();
     }
 
-    private void DrawGCodeHighlight()
-    {
-        // Alte "hl"-Elemente aufräumen
-        for (int i = DrawCanvas.Children.Count - 1; i >= 0; i--)
-            if (DrawCanvas.Children[i] is FrameworkElement fe && fe.Tag is "hl")
-                DrawCanvas.Children.RemoveAt(i);
-
-        // Zoom-invarianter Locator-Ring für selektierte Form
-        if (_selectedGCodeLine >= 1 && _topRect.Width > 0)
-            DrawSelectionLocator();
-    }
-
-    // Konvertierung G-Code-mm → Canvas-Pixel (gleiche Formel wie lokales MmToPx in DrawGCodeTopView)
+    // Konvertierung G-Code-mm → Canvas-Pixel
     private Point TopMmToPx(double x, double y)
     {
         double wx = WorkX, wy = WorkY;
         if (wx <= 0 || wy <= 0) return default;
         double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
         return new(_topRect.Left + x * scale, _topRect.Bottom - y * scale);
-    }
-
-    private void DrawSelectionLocator()
-    {
-        // Tatsächliche Bildschirmgrösse = Canvas-Pixel × _zoom (RenderTransform skaliert den Canvas)
-        const double VisibleThreshold = 6.0;   // Bildschirm-Pixel
-
-        Point? pt = null;
-        bool   showRing = false;
-
-        var hole = _cachedDrillPoints.FirstOrDefault(h => h.LineNumber == _selectedGCodeLine);
-        if (hole != null)
-        {
-            // Bohrpunkte sind immer als 10-px-Kreis gerendert → immer sichtbar, kein Ring nötig
-            pt = TopMmToPx(hole.X, hole.Y);
-            showRing = false;
-        }
-        else
-        {
-            int idx  = _cachedTopMoves.FindIndex(m => m.LineNumber == _selectedGCodeLine);
-            var move = idx >= 0 ? _cachedTopMoves[idx] : null;
-            if (move != null)
-            {
-                if (move.Type is MoveType.ArcCW or MoveType.ArcCCW)
-                {
-                    double wx = WorkX, wy = WorkY;
-                    double scale = (wx > 0 && wy > 0)
-                        ? Math.Min(_topRect.Width / wx, _topRect.Height / wy) : 1;
-                    double arScreenPx = Math.Sqrt(move.I * move.I + move.J * move.J) * scale * _zoom;
-                    showRing = arScreenPx < VisibleThreshold;
-                    pt = TopMmToPx((move.X + move.Xe) / 2.0, (move.Y + move.Ye) / 2.0);
-                }
-                else
-                {
-                    // Startpunkt = Endpunkt des vorherigen Moves
-                    Point startPt = idx > 0
-                        ? TopMmToPx(_cachedTopMoves[idx - 1].X, _cachedTopMoves[idx - 1].Y)
-                        : TopMmToPx(0, 0);
-                    Point endPt = TopMmToPx(move.X, move.Y);
-                    double lenScreenPx = Math.Sqrt(
-                        Math.Pow(endPt.X - startPt.X, 2) +
-                        Math.Pow(endPt.Y - startPt.Y, 2)) * _zoom;
-                    showRing = lenScreenPx < VisibleThreshold;
-                    pt = endPt;
-                }
-            }
-        }
-
-        if (!showRing || pt == null) return;
-        double px = pt.Value.X, py = pt.Value.Y;
-
-        // Ring und Ticks in fester Screengrösse (zoom-invariant)
-        const double R    = 20;   // Ring-Radius in Pixel
-        const double tick = 7;    // Tick-Länge ausserhalb des Rings
-        const double gap  = 4;    // Lücke zwischen Ring und Tick
-        var gold = new SolidColorBrush(Color.FromRgb(255, 215, 0));
-
-        var ring = new Ellipse
-        {
-            Width=R*2, Height=R*2,
-            Stroke=gold, StrokeThickness=1.8,
-            Fill=Brushes.Transparent,
-            Tag="hl", IsHitTestVisible=false
-        };
-        Canvas.SetLeft(ring, px - R); Canvas.SetTop(ring, py - R);
-        DrawCanvas.Children.Add(ring);
-
-        void Tick(double x1, double y1, double x2, double y2) =>
-            DrawCanvas.Children.Add(new Line
-            {
-                X1=x1, Y1=y1, X2=x2, Y2=y2,
-                Stroke=gold, StrokeThickness=1.5,
-                StrokeStartLineCap=PenLineCap.Round, StrokeEndLineCap=PenLineCap.Round,
-                Tag="hl", IsHitTestVisible=false
-            });
-
-        Tick(px - R - gap - tick, py,  px - R - gap, py);
-        Tick(px + R + gap,        py,  px + R + gap + tick, py);
-        Tick(px, py - R - gap - tick,  px, py - R - gap);
-        Tick(px, py + R + gap,         px, py + R + gap + tick);
     }
 
     // ── Klick auf Werkstück-Form ──────────────────────────────────
@@ -2004,47 +1941,199 @@ public partial class MainWindow : Window
 
     private void UpdateAll()
     {
-        if (DrawCanvas == null) return;
+        if (DrawSkia == null) return;
         EnsureParsed();
-        DrawCanvas.Children.Clear();
+
+        ComputeWorkpieceRects();
+
+        // Autofit wird ausschließlich in OnDrawSkia ausgeführt (dort ist DrawSkia.ActualWidth garantiert > 0).
+
+        HitCanvas.Children.Clear();
+        if (!_topRect.IsEmpty)
+        {
+            BuildTopViewHits();
+            BuildSideViewHits();
+        }
+
         WatermarkCanvas.Children.Clear();
-        DrawIconWatermark(new Rect(0, 0, WatermarkCanvas.ActualWidth, WatermarkCanvas.ActualHeight));
-        DrawWorkpieces();
-        DrawGCodeTopView();
-        DrawGCodeSideView();
-        if (_rasterEnabled)
-            DrawRaster();
-#if false
-        if (CbPfadAnzeigen?.IsChecked == true)
-            DrawPfadFräsen();
-#endif
-        DrawGCodeHighlight();   // Hover/Caret-Markierung (über allem)
+
+        ApplyCanvasTransform();
     }
 
-    private void DrawWorkpieces()
+    // Bounding-Rect beider Ansichten zusammen (für Zentrierung und Fit)
+    private Rect CombinedRect =>
+        _topRect.IsEmpty    ? Rect.Empty :
+        _bottomRect.IsEmpty ? _topRect   : Rect.Union(_topRect, _bottomRect);
+
+    private void ApplyCenterZoom(double cw, double ch, double zoom)
     {
-        double cw = DrawCanvas.ActualWidth;
-        double ch = DrawCanvas.ActualHeight;
+        var r = CombinedRect;
+        if (r.IsEmpty || r.Width <= 0 || r.Height <= 0) return;
+        _zoom = zoom;
+        _panX = cw / 2 - (r.Left + r.Width  / 2) * _zoom;
+        _panY = ch / 2 - (r.Top  + r.Height / 2) * _zoom;
+    }
+
+    // 100 % wenn das Werkstück passt, sonst kleinstmöglicher Zoom damit alles sichtbar bleibt
+    private double DefaultZoom(double cw, double ch)
+    {
+        var r = CombinedRect;
+        if (r.IsEmpty || r.Width <= 0 || r.Height <= 0) return 1.0;
+        double margin  = Math.Max(30, Math.Min(cw, ch) * 0.15);
+        double fitZoom = Math.Min((cw - 2 * margin) / r.Width,
+                                  (ch - 2 * margin) / r.Height);
+        return Math.Min(1.0, fitZoom);
+    }
+
+    private void ApplyZoomToFit(double cw, double ch)
+    {
+        var r = CombinedRect;
+        if (r.IsEmpty || r.Width <= 0 || r.Height <= 0) return;
+        double margin  = Math.Max(30, Math.Min(cw, ch) * 0.15);
+        double newZoom = Math.Clamp(
+            Math.Min((cw - 2 * margin) / r.Width,
+                     (ch - 2 * margin) / r.Height),
+            0.05, 200.0);
+        ApplyCenterZoom(cw, ch, newZoom);
+    }
+
+    // ── SkiaSharp Haupt-Render-Methode ────────────────────────────
+    private void OnDrawSkia(object? sender, SKPaintSurfaceEventArgs e)
+    {
+        var canvas = e.Surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+
+        // e.Info gibt physische Pixel; ActualWidth/Height geben logische WPF-DIPs.
+        _dpiScale = e.Info.Width > 0 && DrawSkia.ActualWidth > 0
+            ? e.Info.Width / DrawSkia.ActualWidth : 1.0;
+        double dpiScale = _dpiScale;
+
+        // Alle Zoom/Pan-Berechnungen in logischen Pixeln (cw/ch = WPF-DIPs).
+        double cw = DrawSkia.ActualWidth;
+        double ch = DrawSkia.ActualHeight;
         if (cw <= 0 || ch <= 0) return;
 
+        EnsureParsed();
+        ComputeWorkpieceRects();
+
+        if (_needsAutoFit && _topRect.Width > 0 && _topRect.Height > 0)
+        {
+            _needsAutoFit = false;
+            ApplyCenterZoom(cw, ch, DefaultZoom(cw, ch));
+            ApplyCanvasTransform();
+        }
+
+        // Matrix in physischen Pixeln: logische Werte × DPI-Faktor
+        canvas.SetMatrix(SKMatrix.CreateScaleTranslation(
+            (float)(_zoom * dpiScale), (float)(_zoom * dpiScale),
+            (float)(_panX * dpiScale), (float)(_panY * dpiScale)));
+
+        // Werkstücke + G-Code + Raster zeichnen
+        DrawWorkpiecesSk(canvas);
+        DrawGCodeTopViewSk(canvas);
+        DrawGCodeSideViewSk(canvas);
+        if (_rasterEnabled) DrawRasterSk(canvas, cw, ch);
+
+        // Selektions-Locator: zoom-invariant, in Screen-Koordinaten
+        if (_selectedGCodeLine >= 1 && !_topRect.IsEmpty)
+            DrawSelectionLocatorSk(canvas);
+
+    }
+
+    // ── Werkstück-Layout berechnen (stabile mm-Weltkoordinaten) ──────
+    private void ComputeWorkpieceRects()
+    {
         double wx = WorkX, wy = WorkY, wz = WorkZ;
-        if (wx <= 0 || wy <= 0 || wz <= 0) return;
+        if (wx <= 0 || wy <= 0 || wz <= 0) { _topRect = _bottomRect = Rect.Empty; return; }
+        // Fester 20-mm-Abstand zwischen Draufsicht und Seitenansicht.
+        // _topRect / _bottomRect sind in mm und ändern sich nicht mehr mit der Canvas-Größe.
+        _topRect    = new Rect(0, 0,       wx, wy);
+        _bottomRect = new Rect(0, wy + 50, wx, wz);
+    }
 
-        double minGap = 40;
-        double scale  = Math.Min((cw * 0.82) / wx, (ch * 0.82) / (wy + wz));
-        scale = Math.Min(scale, 1.0);
-        double w  = wx * scale;
-        double h1 = wy * scale;
-        double h2 = wz * scale;
+    // ── Werkstücke zeichnen (SkiaSharp) ───────────────────────────
+    private void DrawWorkpiecesSk(SKCanvas canvas)
+    {
+        if (_topRect.IsEmpty) return;
+        DrawWoodRectSk(canvas, _topRect);
+        DrawWoodRectSk(canvas, _bottomRect);
+    }
 
-        double x0  = (cw - w) / 2;
-        double gap = Math.Max((ch - h1 - h2) / 3, minGap * 0.5);
+    private static void DrawWoodRectSk(SKCanvas canvas, Rect r)
+    {
+        var bmp = GetWoodBitmap();
+        var dst = new SKRect((float)r.Left, (float)r.Top, (float)r.Right, (float)r.Bottom);
+        using var paint = new SKPaint { IsAntialias = false, FilterQuality = SKFilterQuality.Medium };
+        canvas.DrawBitmap(bmp, dst, paint);
+        using var border = new SKPaint
+        {
+            Color = new SKColor(0xE0, 0xD4, 0xB8),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 0.1f,
+        };
+        canvas.DrawRect(dst, border);
+    }
 
-        _topRect    = new Rect(x0, gap,              w, h1);
-        _bottomRect = new Rect(x0, gap * 2 + h1,     w, h2);
+    private static SKBitmap? _woodBitmap;
+    private static SKBitmap GetWoodBitmap()
+    {
+        if (_woodBitmap != null) return _woodBitmap;
+        var imgPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "maple.png");
+        if (System.IO.File.Exists(imgPath))
+            _woodBitmap = SKBitmap.Decode(imgPath);
+        _woodBitmap ??= CreateMapleTextureSk(512, 512);
+        return _woodBitmap;
+    }
 
-        DrawCanvas.Children.Add(MakeWoodRect(_topRect));
-        DrawCanvas.Children.Add(MakeWoodRect(_bottomRect));
+    private static SKBitmap CreateMapleTextureSk(int w, int h)
+    {
+        var rng    = new Random(13);
+        var pixels = new byte[w * h * 4];
+        const int gw = 64, gh = 64;
+        var grid1 = new double[gw * gh];
+        var grid2 = new double[gw * gh];
+        var grid3 = new double[gw * gh];
+        for (int i = 0; i < gw * gh; i++)
+        { grid1[i] = rng.NextDouble(); grid2[i] = rng.NextDouble(); grid3[i] = rng.NextDouble(); }
+
+        double Bilinear(double[] g, double gx, double gy)
+        {
+            gx = ((gx % gw) + gw) % gw; gy = ((gy % gh) + gh) % gh;
+            int x0 = (int)gx, y0 = (int)gy, x1 = (x0 + 1) % gw, y1 = (y0 + 1) % gh;
+            double fx = gx - x0, fy = gy - y0;
+            return g[y0 * gw + x0] * (1 - fx) * (1 - fy) + g[y0 * gw + x1] * fx * (1 - fy)
+                 + g[y1 * gw + x0] * (1 - fx) * fy       + g[y1 * gw + x1] * fx * fy;
+        }
+        double Fractal(double[] g, double gx, double gy)
+        {
+            double v = 0, amp = 0.5, freq = 1, sum = 0;
+            for (int o = 0; o < 4; o++)
+            { v += Bilinear(g, gx * freq, gy * freq) * amp; sum += amp; amp *= 0.55; freq *= 2.1; }
+            return v / sum;
+        }
+        const double twoPi = 2 * Math.PI;
+        for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+        {
+            double gx = x * gw / (double)w, gy = y * gh / (double)h;
+            double warpY = (Fractal(grid1, gx, gy) - 0.5) * 55.0;
+            double warpX = (Fractal(grid2, gx + 10, gy + 10) - 0.5) * 8.0;
+            double ring = Math.Sin((y + warpY) * twoPi / 70.0 + (x + warpX) * 0.003)
+                        + 0.25 * Math.Sin((y + warpY) * twoPi / 22.0 + (x + warpX) * 0.006);
+            double t = Math.Clamp(Math.Pow((Math.Sin(ring * 1.8) + 1.0) / 2.0, 2.2), 0.0, 1.0);
+            double tt = Math.Clamp(t + (Fractal(grid3, gx * 0.7, gy * 0.7) - 0.5) * 0.12, 0.0, 1.0);
+            int pi = (y * w + x) * 4;
+            pixels[pi]     = (byte)(223 - tt * 143);
+            pixels[pi + 1] = (byte)(240 - tt * 64);
+            pixels[pi + 2] = (byte)(246 - tt * 30);
+            pixels[pi + 3] = 255;
+        }
+        var bmp = new SKBitmap(w, h, SKColorType.Bgra8888, SKAlphaType.Opaque);
+        var ptr = bmp.GetPixels();
+        if (ptr != IntPtr.Zero)
+            Marshal.Copy(pixels, 0, ptr, pixels.Length);
+        bmp.NotifyPixelsChanged();
+        return bmp;
     }
 
     private void DrawIconWatermark(Rect target)
@@ -2165,792 +2254,476 @@ public partial class MainWindow : Window
         WatermarkCanvas.Children.Add(wm);
     }
 
-    private void AddWood3DBlock(Rect r, Point vp, double depthFactor)
-    {
-        var tl = new Point(r.Left,  r.Top);
-        var tr = new Point(r.Right, r.Top);
-        var br = new Point(r.Right, r.Bottom);
-        var bl = new Point(r.Left,  r.Bottom);
+    // ── G-Code Draufsicht: visuell (SkiaSharp) + Hit-Shapes (HitCanvas) ─────────────
 
-        // Perspektivische Projektion: Punkte laufen auf Fluchtpunkt zu
-        Point ToVP(Point p) => new(
-            p.X + (vp.X - p.X) * depthFactor,
-            p.Y + (vp.Y - p.Y) * depthFactor);
-
-        var tlo = ToVP(tl);
-        var tro = ToVP(tr);
-        var bro = ToVP(br);
-        var blo = ToVP(bl);
-
-        var border = new SolidColorBrush(Color.FromRgb(0xD4, 0xC8, 0xA8));
-
-        void AddFace(PointCollection pts, byte shadowAlpha)
-        {
-            DrawCanvas.Children.Add(new Polygon { Points = pts, Fill = GetWoodBrush() });
-            DrawCanvas.Children.Add(new Polygon
-            {
-                Points           = pts,
-                Fill             = new SolidColorBrush(Color.FromArgb(shadowAlpha, 0, 0, 0)),
-                Stroke           = border,
-                StrokeThickness  = 0.1,
-                IsHitTestVisible = false,
-            });
-        }
-
-        // Obere Fläche (VP liegt oberhalb → sichtbar)
-        if (vp.Y < r.Top)
-            AddFace(new PointCollection { tl, tr, tro, tlo }, 70);
-
-        // Rechte Seitenfläche (VP liegt rechts → sichtbar)
-        if (vp.X > r.Right)
-            AddFace(new PointCollection { tr, tro, bro, br }, 130);
-
-        // Vorderfläche – volle Textur
-        DrawCanvas.Children.Add(MakeWoodRect(r));
-    }
-
-    private static ImageBrush? _woodBrush;
-    private static ImageBrush GetWoodBrush()
-    {
-        if (_woodBrush is null)
-        {
-            var imgPath = System.IO.Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory, "maple.png");
-            var bmp = System.IO.File.Exists(imgPath)
-                ? new System.Windows.Media.Imaging.BitmapImage(new Uri(imgPath))
-                : (System.Windows.Media.Imaging.BitmapSource)CreateMapleTexture(512, 512);
-            _woodBrush = new ImageBrush(bmp)
-            {
-                Stretch       = Stretch.UniformToFill,
-                TileMode      = TileMode.Tile,
-                ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
-                Viewport      = new Rect(0, 0, 1, 1),
-            };
-        }
-        return _woodBrush;
-    }
-
-    private static System.Windows.Media.Imaging.BitmapSource CreateMapleTexture(int w, int h)
-    {
-        var rng    = new Random(13);
-        var pixels = new byte[w * h * 4];
-
-        // Mehrere unabhängige Rausch-Gitter für fraktales Warp
-        const int gw = 64, gh = 64;
-        var grid1 = new double[gw * gh];
-        var grid2 = new double[gw * gh];
-        var grid3 = new double[gw * gh];
-        for (int i = 0; i < gw * gh; i++)
-        {
-            grid1[i] = rng.NextDouble();
-            grid2[i] = rng.NextDouble();
-            grid3[i] = rng.NextDouble();
-        }
-
-        double Bilinear(double[] g, double gx, double gy)
-        {
-            gx = ((gx % gw) + gw) % gw;
-            gy = ((gy % gh) + gh) % gh;
-            int x0 = (int)gx, y0 = (int)gy;
-            int x1 = (x0 + 1) % gw, y1 = (y0 + 1) % gh;
-            double fx = gx - x0, fy = gy - y0;
-            return g[y0 * gw + x0] * (1 - fx) * (1 - fy)
-                 + g[y0 * gw + x1] * fx        * (1 - fy)
-                 + g[y1 * gw + x0] * (1 - fx)  * fy
-                 + g[y1 * gw + x1] * fx         * fy;
-        }
-
-        // Fraktales Rauschen: 4 Oktaven aufaddiert
-        double Fractal(double[] g, double gx, double gy)
-        {
-            double v = 0, amp = 0.5, freq = 1, sum = 0;
-            for (int o = 0; o < 4; o++)
-            {
-                v   += Bilinear(g, gx * freq, gy * freq) * amp;
-                sum += amp;
-                amp  *= 0.55;
-                freq *= 2.1;
-            }
-            return v / sum;
-        }
-
-        const double twoPi = 2 * Math.PI;
-
-        for (int y = 0; y < h; y++)
-        {
-            for (int x = 0; x < w; x++)
-            {
-                double gx = x * gw / (double)w;
-                double gy = y * gh / (double)h;
-
-                // Fraktales Warp in y-Richtung (organische Jahresring-Biegung)
-                double warpY = (Fractal(grid1, gx, gy) - 0.5) * 55.0;
-                // Leichtes Warp in x für minimale Neigung der Maserung
-                double warpX = (Fractal(grid2, gx + 10, gy + 10) - 0.5) * 8.0;
-
-                double yW = y + warpY;
-                double xW = x + warpX;
-
-                // Jahresringe: Hauptperiode + Feinstruktur
-                double ring = Math.Sin(yW * twoPi / 70.0 + xW * 0.003)
-                            + 0.25 * Math.Sin(yW * twoPi / 22.0 + xW * 0.006);
-
-                // Schmale dunkle Linien, breite helle Flächen (typisch Ahorn)
-                double t = (Math.Sin(ring * 1.8) + 1.0) / 2.0;
-                t = Math.Pow(t, 2.2);
-                t = Math.Clamp(t, 0.0, 1.0);
-
-                // Oberflächenvariation (Maserglanz, Poren)
-                double surface = (Fractal(grid3, gx * 0.7, gy * 0.7) - 0.5) * 0.12;
-
-                double tt = Math.Clamp(t + surface, 0.0, 1.0);
-
-                // Ahorn-Palette: sehr hell #F6F0DF → warmes Honigbraun #C8A050
-                byte r = (byte)(246 - tt * 30);
-                byte g = (byte)(240 - tt * 64);
-                byte b = (byte)(223 - tt * 143);
-
-                int pi = (y * w + x) * 4;
-                pixels[pi]     = b;
-                pixels[pi + 1] = g;
-                pixels[pi + 2] = r;
-                pixels[pi + 3] = 255;
-            }
-        }
-
-        var bmp = new System.Windows.Media.Imaging.WriteableBitmap(w, h, 96, 96,
-            System.Windows.Media.PixelFormats.Bgra32, null);
-        bmp.WritePixels(new Int32Rect(0, 0, w, h), pixels, w * 4, 0);
-        bmp.Freeze();
-        return bmp;
-    }
-
-    private static UIElement MakeWoodRect(Rect r)
-    {
-        var rect = new Rectangle
-        {
-            Width           = r.Width,
-            Height          = r.Height,
-            Fill            = GetWoodBrush(),
-            Stroke          = new SolidColorBrush(Color.FromRgb(0xE0, 0xD4, 0xB8)),
-            StrokeThickness = 0.1,
-        };
-        Canvas.SetLeft(rect, r.Left);
-        Canvas.SetTop(rect,  r.Top);
-        return rect;
-    }
-
-    /// <summary>
-    /// Prozedurale Holztextur via Fraktalem Rauschen + Jahresring-Sinus.
-    /// </summary>
-
-    // ── Draufsicht G-Code ────────────────────────────────────────
-
-    private void DrawGCodeTopView()
+    private void DrawGCodeTopViewSk(SKCanvas canvas)
     {
         var moves = _cachedTopMoves;
         if (_topRect.IsEmpty) return;
-
         double wx = WorkX, wy = WorkY;
         if (wx <= 0 || wy <= 0) return;
 
         double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
-        Point MmToPx(double x, double y) =>
-            new(_topRect.Left + x * scale, _topRect.Bottom - y * scale);
+        (float px, float py) MmToPx(double x, double y) => (
+            (float)(_topRect.Left + x * scale),
+            (float)(_topRect.Bottom - y * scale));
+
+        void AddArc(SKPath p, float endX, float endY, float r, bool lg, bool cw) =>
+            p.ArcTo(r, r, 0, lg ? SKPathArcSize.Large : SKPathArcSize.Small,
+                cw ? SKPathDirection.Clockwise : SKPathDirection.CounterClockwise, endX, endY);
 
         if (moves.Count > 0)
         {
+            int activeLine = _mouseHoverLine >= 1 ? _mouseHoverLine : _highlightGCodeLine;
+            float lt = (float)(1.5 / _zoom);  // zoom-invariante Linienstärke
 
-        var rapidDash = new System.Windows.Media.DoubleCollection { 5, 3 };
-        rapidDash.Freeze();
-
-        // Aktive Hover/Caret-Zeile (Maus hat Vorrang vor Cursor)
-        int activeLine = _mouseHoverLine >= 1 ? _mouseHoverLine : _highlightGCodeLine;
-
-        // ── Pass 1: Alle normalen Moves ──
-        // Simulations-Modus: Schnittbreite als Strichstärke (nach Werkzeugdurchmesser / -winkel / Tiefe)
-        // Normal-Modus:      feste 2 px Linienstärke
-
-        // Rapid-Moves immer als dünne gestrichelte Linie (beide Modi)
-        var rapidGeo = new StreamGeometry();
-        using (var rap = rapidGeo.Open())
-        {
-            Point? last = null;
-            foreach (var m in moves)
+            // ── Rapid-Moves: gestrichelte graue Linie ──
+            using (var rPath = new SKPath())
             {
-                bool skip = m.LineNumber == _selectedGCodeLine || m.LineNumber == activeLine ||
-                            (_selectionSource == 1 && _selectedGCodeLine >= 1 && m.LineNumber > 0 && m.Type != MoveType.Rapid && Math.Abs(m.LineNumber - _selectedGCodeLine) <= 3);
-                var cur = m.Type == MoveType.Rapid ? MmToPx(m.X, m.Y)
-                        : (m.Type is MoveType.ArcCW or MoveType.ArcCCW ? MmToPx(m.Xe, m.Ye)
-                        : MmToPx(m.X, m.Y));
-                if (m.Type == MoveType.Rapid && last.HasValue && !skip)
+                float lx = 0, ly = 0; bool had = false;
+                foreach (var m in moves)
                 {
-                    rap.BeginFigure(last.Value, false, false);
-                    rap.LineTo(cur, true, false);
+                    bool skip = m.LineNumber == _selectedGCodeLine || m.LineNumber == activeLine;
+                    (float cx, float cy) = m.Type is MoveType.ArcCW or MoveType.ArcCCW
+                        ? MmToPx(m.Xe, m.Ye) : MmToPx(m.X, m.Y);
+                    if (m.Type == MoveType.Rapid && had && !skip)
+                    { rPath.MoveTo(lx, ly); rPath.LineTo(cx, cy); }
+                    lx = cx; ly = cy; had = true;
                 }
-                last = cur;
-            }
-        }
-        rapidGeo.Freeze();
-        double lineThick = 1.5 / _zoom;
-        DrawCanvas.Children.Add(new System.Windows.Shapes.Path { Data=rapidGeo, Stroke=new SolidColorBrush(Color.FromRgb(160,160,160)), StrokeThickness=lineThick, StrokeDashArray=rapidDash, IsHitTestVisible=false });
-
-        if (_showFraesbreite)
-        {
-            double borderThick = 2.0 / _zoom;
-            var borderBrush = new SolidColorBrush(Color.FromArgb(130, 50, 50, 50));
-            borderBrush.Freeze();
-            var fillBrush = new SolidColorBrush(Color.FromArgb(35, 150, 150, 150));
-            fillBrush.Freeze();
-            Point? last2 = null;
-
-            foreach (var m in moves)
-            {
-                bool skip = m.LineNumber == _selectedGCodeLine || m.LineNumber == activeLine ||
-                            (_selectionSource == 1 && _selectedGCodeLine >= 1 && m.LineNumber > 0 && m.Type != MoveType.Rapid && Math.Abs(m.LineNumber - _selectedGCodeLine) <= 3);
-                var endPt = m.Type is MoveType.ArcCW or MoveType.ArcCCW ? MmToPx(m.Xe, m.Ye) : MmToPx(m.X, m.Y);
-                if (m.Type == MoveType.Rapid) { last2 = endPt; continue; }
-                if (skip || m.ToolWidthMm <= 0) { last2 = endPt; continue; }
-
-                var startPt = last2 ?? MmToPx(m.X, m.Y);
-                double toolPx = Math.Max(lineThick * 3, m.ToolWidthMm * scale);
-
-                var geo = new StreamGeometry();
-                var ctx = geo.Open();
-                ctx.BeginFigure(startPt, false, false);
-                if (m.Type == MoveType.Line)
-                {
-                    ctx.LineTo(endPt, true, false);
-                }
-                else
-                {
-                    double ccx = m.X + m.I, ccy = m.Y + m.J;
-                    double ar = Math.Sqrt((m.X - ccx) * (m.X - ccx) + (m.Y - ccy) * (m.Y - ccy));
-                    if (ar > 0)
-                    {
-                        bool cw = m.Type == MoveType.ArcCW;
-                        var sweep = cw ? SweepDirection.Clockwise : SweepDirection.Counterclockwise;
-                        double arPx = ar * scale;
-                        var sp3 = MmToPx(m.X, m.Y);
-                        var ep3 = MmToPx(m.Xe, m.Ye);
-                        bool full = Math.Abs(m.Xe - m.X) < 1e-6 && Math.Abs(m.Ye - m.Y) < 1e-6;
-                        if (full)
-                        {
-                            double sA = Math.Atan2(m.Y - ccy, m.X - ccx);
-                            var midPx = MmToPx(ccx + ar * Math.Cos(sA + Math.PI), ccy + ar * Math.Sin(sA + Math.PI));
-                            ctx.ArcTo(midPx, new System.Windows.Size(arPx, arPx), 0, false, sweep, true, false);
-                            ctx.ArcTo(sp3,   new System.Windows.Size(arPx, arPx), 0, false, sweep, true, false);
-                        }
-                        else
-                        {
-                            double sA = Math.Atan2(m.Y - ccy, m.X - ccx), eA = Math.Atan2(m.Ye - ccy, m.Xe - ccx);
-                            if (cw && eA > sA) eA -= 2 * Math.PI;
-                            if (!cw && eA < sA) eA += 2 * Math.PI;
-                            ctx.ArcTo(ep3, new System.Windows.Size(arPx, arPx), 0, Math.Abs(eA - sA) > Math.PI, sweep, true, false);
-                        }
-                    }
-                }
-                ((IDisposable)ctx).Dispose();
-                geo.Freeze();
-
-                // Border zuerst (breiter), dann Fill darüber — so ist der Fill jeder Bahn sichtbar
-                DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-                {
-                    Data = geo, Stroke = borderBrush, StrokeThickness = toolPx + borderThick,
-                    StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
-                    StrokeLineJoin = PenLineJoin.Round, IsHitTestVisible = false
-                });
-                DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-                {
-                    Data = geo, Stroke = fillBrush, StrokeThickness = toolPx,
-                    StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
-                    StrokeLineJoin = PenLineJoin.Round, IsHitTestVisible = false
-                });
-
-                last2 = endPt;
+                using var rp = new SKPaint { Color = new SKColor(160, 160, 160), Style = SKPaintStyle.Stroke,
+                    StrokeWidth = lt, IsAntialias = true,
+                    PathEffect = SKPathEffect.CreateDash(new[] { 5 * lt, 3 * lt }, 0) };
+                canvas.DrawPath(rPath, rp);
             }
 
-            // Rote Mittellinie on top (wie Normal-Modus)
-            var cutGeoSim = new StreamGeometry();
-            using (var cut = cutGeoSim.Open())
+            // ── Schnittlinien ──
+            if (_showFraesbreite)
             {
-                Point? lastS = null;
+                float borderThick = (float)(2.0 / _zoom);
+                using var borderBrush = new SKPaint { Color = new SKColor(50, 50, 50, 130), Style = SKPaintStyle.Stroke,
+                    StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round, IsAntialias = true };
+                using var fillBrush = new SKPaint { Color = new SKColor(150, 150, 150, 35), Style = SKPaintStyle.Stroke,
+                    StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round, IsAntialias = true };
+                float lx2 = 0, ly2 = 0; bool had2 = false;
+
                 foreach (var m in moves)
                 {
                     bool skip = m.LineNumber == _selectedGCodeLine || m.LineNumber == activeLine ||
-                            (_selectionSource == 1 && _selectedGCodeLine >= 1 && m.LineNumber > 0 && m.Type != MoveType.Rapid && Math.Abs(m.LineNumber - _selectedGCodeLine) <= 3);
-                    if (m.Type is MoveType.Rapid or MoveType.Line)
-                    {
-                        var cur = MmToPx(m.X, m.Y);
-                        if (m.Type == MoveType.Line && lastS.HasValue && !skip)
-                        { cut.BeginFigure(lastS.Value, false, false); cut.LineTo(cur, true, false); }
-                        lastS = cur;
-                    }
+                                (_selectionSource==1 && _selectedGCodeLine>=1 && m.LineNumber>0 &&
+                                 m.Type!=MoveType.Rapid && Math.Abs(m.LineNumber-_selectedGCodeLine)<=3);
+                    (float ex, float ey) = m.Type is MoveType.ArcCW or MoveType.ArcCCW
+                        ? MmToPx(m.Xe, m.Ye) : MmToPx(m.X, m.Y);
+                    if (m.Type == MoveType.Rapid) { had2=true; lx2=ex; ly2=ey; continue; }
+                    if (skip || m.ToolWidthMm <= 0) { had2=true; lx2=ex; ly2=ey; continue; }
+
+                    float sX = had2 ? lx2 : (float)(_topRect.Left + m.X*scale);
+                    float sY = had2 ? ly2 : (float)(_topRect.Bottom - m.Y*scale);
+                    float toolPx = Math.Max(lt * 3, (float)(m.ToolWidthMm * scale));
+                    borderBrush.StrokeWidth = toolPx + borderThick;
+                    fillBrush.StrokeWidth   = toolPx;
+
+                    using var seg = new SKPath();
+                    seg.MoveTo(sX, sY);
+                    if (m.Type == MoveType.Line)
+                    { seg.LineTo(ex, ey); }
                     else
                     {
-                        double ccx=m.X+m.I, ccy=m.Y+m.J, ar=Math.Sqrt((m.X-ccx)*(m.X-ccx)+(m.Y-ccy)*(m.Y-ccy));
-                        if (ar > 0 && !skip)
+                        double ccx=m.X+m.I, ccy=m.Y+m.J, ar=Math.Sqrt(m.I*m.I+m.J*m.J);
+                        if (ar > 0)
                         {
                             bool cw = m.Type == MoveType.ArcCW;
-                            var sweep = cw ? SweepDirection.Clockwise : SweepDirection.Counterclockwise;
-                            double arPx = ar*scale;
-                            var sp = MmToPx(m.X, m.Y); var ep = MmToPx(m.Xe, m.Ye);
+                            float arPx = (float)(ar * scale);
                             bool full = Math.Abs(m.Xe-m.X)<1e-6 && Math.Abs(m.Ye-m.Y)<1e-6;
                             if (full)
                             {
                                 double sA=Math.Atan2(m.Y-ccy,m.X-ccx);
-                                var mp=MmToPx(ccx+ar*Math.Cos(sA+Math.PI),ccy+ar*Math.Sin(sA+Math.PI));
-                                cut.BeginFigure(sp,false,false); cut.ArcTo(mp,new System.Windows.Size(arPx,arPx),0,false,sweep,true,false);
-                                cut.ArcTo(sp,new System.Windows.Size(arPx,arPx),0,false,sweep,true,false);
+                                var (mpx,mpy)=MmToPx(ccx+ar*Math.Cos(sA+Math.PI),ccy+ar*Math.Sin(sA+Math.PI));
+                                AddArc(seg, mpx, mpy, arPx, false, cw);
+                                AddArc(seg, sX, sY, arPx, false, cw);
                             }
                             else
                             {
                                 double sA=Math.Atan2(m.Y-ccy,m.X-ccx),eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);
                                 if(cw&&eA>sA)eA-=2*Math.PI; if(!cw&&eA<sA)eA+=2*Math.PI;
-                                cut.BeginFigure(sp,false,false); cut.ArcTo(ep,new System.Windows.Size(arPx,arPx),0,Math.Abs(eA-sA)>Math.PI,sweep,true,false);
+                                AddArc(seg, ex, ey, arPx, Math.Abs(eA-sA)>Math.PI, cw);
                             }
                         }
-                        lastS = MmToPx(m.Xe, m.Ye);
                     }
+                    canvas.DrawPath(seg, borderBrush);
+                    canvas.DrawPath(seg, fillBrush);
+                    had2=true; lx2=ex; ly2=ey;
                 }
-            }
-            cutGeoSim.Freeze();
-            DrawCanvas.Children.Add(new System.Windows.Shapes.Path { Data=cutGeoSim, Stroke=new SolidColorBrush(Color.FromRgb(200,30,30)), StrokeThickness=lineThick, IsHitTestVisible=false });
-        }
-        else
-        {
-            var cutGeo = new StreamGeometry();
-            using (var cut = cutGeo.Open())
-            {
-                Point? last = null;
+                // Rote Mittellinie on top
+                using var midPath = new SKPath();
+                float lxm=0, lym=0; bool hadm=false;
                 foreach (var m in moves)
                 {
-                    bool skip = m.LineNumber == _selectedGCodeLine || m.LineNumber == activeLine ||
-                            (_selectionSource == 1 && _selectedGCodeLine >= 1 && m.LineNumber > 0 && m.Type != MoveType.Rapid && Math.Abs(m.LineNumber - _selectedGCodeLine) <= 3);
+                    bool skip = m.LineNumber==_selectedGCodeLine || m.LineNumber==activeLine ||
+                                (_selectionSource==1&&_selectedGCodeLine>=1&&m.LineNumber>0&&
+                                 m.Type!=MoveType.Rapid&&Math.Abs(m.LineNumber-_selectedGCodeLine)<=3);
                     if (m.Type is MoveType.Rapid or MoveType.Line)
                     {
-                        var cur = MmToPx(m.X, m.Y);
-                        if (m.Type == MoveType.Line && last.HasValue && !skip)
-                        {
-                            cut.BeginFigure(last.Value, false, false);
-                            cut.LineTo(cur, true, false);
-                        }
-                        last = cur;
+                        var (cx,cy)=MmToPx(m.X,m.Y);
+                        if (m.Type==MoveType.Line && hadm && !skip) { midPath.MoveTo(lxm,lym); midPath.LineTo(cx,cy); }
+                        lxm=cx; lym=cy; hadm=true;
                     }
                     else
                     {
-                        double ccx = m.X+m.I, ccy = m.Y+m.J;
-                        double ar  = Math.Sqrt((m.X-ccx)*(m.X-ccx)+(m.Y-ccy)*(m.Y-ccy));
-                        if (ar > 0 && !skip)
+                        double ccx=m.X+m.I,ccy=m.Y+m.J,ar=Math.Sqrt(m.I*m.I+m.J*m.J);
+                        if (ar>0 && !skip)
                         {
-                            bool cw   = m.Type == MoveType.ArcCW;
-                            var sweep = cw ? SweepDirection.Clockwise : SweepDirection.Counterclockwise;
-                            double arPx   = ar * scale;
-                            var startPx   = MmToPx(m.X,  m.Y);
-                            var endPx     = MmToPx(m.Xe, m.Ye);
-                            bool full = Math.Abs(m.Xe-m.X)<1e-6 && Math.Abs(m.Ye-m.Y)<1e-6;
-                            if (full)
-                            {
-                                double sA = Math.Atan2(m.Y-ccy, m.X-ccx);
-                                var midPx = MmToPx(ccx + ar*Math.Cos(sA+Math.PI), ccy + ar*Math.Sin(sA+Math.PI));
-                                cut.BeginFigure(startPx, false, false);
-                                cut.ArcTo(midPx,   new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
-                                cut.ArcTo(startPx, new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
-                            }
-                            else
-                            {
-                                double sA=Math.Atan2(m.Y-ccy,m.X-ccx), eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);
-                                if (cw&&eA>sA) eA-=2*Math.PI; if (!cw&&eA<sA) eA+=2*Math.PI;
-                                bool large = Math.Abs(eA-sA) > Math.PI;
-                                cut.BeginFigure(startPx, false, false);
-                                cut.ArcTo(endPx, new System.Windows.Size(arPx,arPx), 0, large, sweep, true, false);
-                            }
+                            bool cw=m.Type==MoveType.ArcCW; float arPx=(float)(ar*scale);
+                            var (spx,spy)=MmToPx(m.X,m.Y); var (epx,epy)=MmToPx(m.Xe,m.Ye);
+                            bool full=Math.Abs(m.Xe-m.X)<1e-6&&Math.Abs(m.Ye-m.Y)<1e-6;
+                            midPath.MoveTo(spx,spy);
+                            if(full){double sA=Math.Atan2(m.Y-ccy,m.X-ccx);var(mx,my)=MmToPx(ccx+ar*Math.Cos(sA+Math.PI),ccy+ar*Math.Sin(sA+Math.PI));AddArc(midPath,mx,my,arPx,false,cw);AddArc(midPath,spx,spy,arPx,false,cw);}
+                            else{double sA=Math.Atan2(m.Y-ccy,m.X-ccx),eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);if(cw&&eA>sA)eA-=2*Math.PI;if(!cw&&eA<sA)eA+=2*Math.PI;AddArc(midPath,epx,epy,arPx,Math.Abs(eA-sA)>Math.PI,cw);}
                         }
-                        last = MmToPx(m.Xe, m.Ye);
+                        lxm=(float)(_topRect.Left+m.Xe*scale); lym=(float)(_topRect.Bottom-m.Ye*scale); hadm=true;
                     }
                 }
-            }
-            cutGeo.Freeze();
-            DrawCanvas.Children.Add(new System.Windows.Shapes.Path { Data=cutGeo, Stroke=new SolidColorBrush(Color.FromRgb(200,30,30)), StrokeThickness=lineThick, IsHitTestVisible=false });
-        }
-
-        // ── Pass 2: Aktiver und selektierter Move farbig als Einzel-Pfad ──
-        void DrawColoredMove(Move m, double fromX, double fromY, Brush stroke, double thick, bool dashed)
-        {
-            System.Windows.Shapes.Path? el = null;
-            if (m.Type is MoveType.Rapid or MoveType.Line)
-            {
-                var geo = new StreamGeometry();
-                using (var ctx = geo.Open()) { ctx.BeginFigure(MmToPx(fromX,fromY),false,false); ctx.LineTo(MmToPx(m.X,m.Y),true,false); }
-                geo.Freeze();
-                el = new System.Windows.Shapes.Path { Data=geo, Stroke=stroke, StrokeThickness=thick, StrokeDashArray=dashed?rapidDash:null };
+                using var midPaint = new SKPaint { Color = new SKColor(200,30,30), Style=SKPaintStyle.Stroke, StrokeWidth=lt, IsAntialias=true };
+                canvas.DrawPath(midPath, midPaint);
             }
             else
             {
-                double ccx=m.X+m.I, ccy=m.Y+m.J, ar=Math.Sqrt((m.X-ccx)*(m.X-ccx)+(m.Y-ccy)*(m.Y-ccy));
-                if (ar>0)
+                // Einfache rote Schnittlinie
+                using var cutPath = new SKPath();
+                float lx3=0, ly3=0; bool had3=false;
+                foreach (var m in moves)
                 {
-                    bool cw = m.Type == MoveType.ArcCW;
-                    var sweep = cw ? SweepDirection.Clockwise : SweepDirection.Counterclockwise;
-                    double arPx = ar * scale;
-                    var startPx = MmToPx(m.X, m.Y);
-                    var endPx   = MmToPx(m.Xe, m.Ye);
-                    bool full = Math.Abs(m.Xe-m.X)<1e-6&&Math.Abs(m.Ye-m.Y)<1e-6;
-                    // StreamGeometry statt PathGeometry → identisches Rendering wie Pass 1
-                    var geo2 = new StreamGeometry();
-                    using (var ctx2 = geo2.Open())
+                    bool skip = m.LineNumber==_selectedGCodeLine || m.LineNumber==activeLine ||
+                                (_selectionSource==1&&_selectedGCodeLine>=1&&m.LineNumber>0&&
+                                 m.Type!=MoveType.Rapid&&Math.Abs(m.LineNumber-_selectedGCodeLine)<=3);
+                    if (m.Type is MoveType.Rapid or MoveType.Line)
                     {
-                        if (full)
+                        var (cx,cy)=MmToPx(m.X,m.Y);
+                        if (m.Type==MoveType.Line && had3 && !skip) { cutPath.MoveTo(lx3,ly3); cutPath.LineTo(cx,cy); }
+                        lx3=cx; ly3=cy; had3=true;
+                    }
+                    else
+                    {
+                        double ccx=m.X+m.I,ccy=m.Y+m.J,ar=Math.Sqrt(m.I*m.I+m.J*m.J);
+                        if (ar>0 && !skip)
                         {
-                            double sA = Math.Atan2(m.Y-ccy, m.X-ccx);
-                            var midPx = MmToPx(ccx + ar*Math.Cos(sA+Math.PI), ccy + ar*Math.Sin(sA+Math.PI));
-                            ctx2.BeginFigure(startPx, false, false);
-                            ctx2.ArcTo(midPx,   new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
-                            ctx2.ArcTo(startPx, new System.Windows.Size(arPx,arPx), 0, false, sweep, true, false);
+                            bool cw=m.Type==MoveType.ArcCW; float arPx=(float)(ar*scale);
+                            var (spx,spy)=MmToPx(m.X,m.Y); var (epx,epy)=MmToPx(m.Xe,m.Ye);
+                            bool full=Math.Abs(m.Xe-m.X)<1e-6&&Math.Abs(m.Ye-m.Y)<1e-6;
+                            cutPath.MoveTo(spx,spy);
+                            if(full){double sA=Math.Atan2(m.Y-ccy,m.X-ccx);var(mx,my)=MmToPx(ccx+ar*Math.Cos(sA+Math.PI),ccy+ar*Math.Sin(sA+Math.PI));AddArc(cutPath,mx,my,arPx,false,cw);AddArc(cutPath,spx,spy,arPx,false,cw);}
+                            else{double sA=Math.Atan2(m.Y-ccy,m.X-ccx),eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);if(cw&&eA>sA)eA-=2*Math.PI;if(!cw&&eA<sA)eA+=2*Math.PI;AddArc(cutPath,epx,epy,arPx,Math.Abs(eA-sA)>Math.PI,cw);}
                         }
-                        else
-                        {
-                            double sA=Math.Atan2(m.Y-ccy,m.X-ccx), eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);
-                            if (cw&&eA>sA) eA-=2*Math.PI; if (!cw&&eA<sA) eA+=2*Math.PI;
-                            bool large = Math.Abs(eA-sA) > Math.PI;
-                            ctx2.BeginFigure(startPx, false, false);
-                            ctx2.ArcTo(endPx, new System.Windows.Size(arPx,arPx), 0, large, sweep, true, false);
+                        lx3=(float)(_topRect.Left+m.Xe*scale); ly3=(float)(_topRect.Bottom-m.Ye*scale); had3=true;
+                    }
+                }
+                using var cutPaint = new SKPaint { Color=new SKColor(200,30,30), Style=SKPaintStyle.Stroke, StrokeWidth=lt, IsAntialias=true };
+                canvas.DrawPath(cutPath, cutPaint);
+            }
+
+            // ── Selektierter / aktiver Move hervorheben ──
+            float lxh=0, lyh=0;
+            foreach (var m in moves)
+            {
+                float fromX=lxh, fromY=lyh;
+                bool sel    = m.LineNumber == _selectedGCodeLine;
+                bool active = !sel && m.LineNumber == activeLine;
+                bool nearby = !sel && !active && _selectionSource==1 && _selectedGCodeLine>=1 && m.LineNumber>0 &&
+                              Math.Abs(m.LineNumber-_selectedGCodeLine)<=3 && m.Type!=MoveType.Rapid;
+                if (sel || active || nearby)
+                {
+                    var hlColor = sel    ? new SKColor(255,215,0)
+                                : active ? new SKColor(255,235,80)
+                                         : new SKColor(255,215,0,140);
+                    float hlW = sel ? (float)(2.5/_zoom) : (float)(2.0/_zoom);
+                    using var hlPaint = new SKPaint { Color=hlColor, Style=SKPaintStyle.Stroke, StrokeWidth=hlW, IsAntialias=true };
+                    using var hlPath = new SKPath();
+                    if (m.Type is MoveType.Rapid or MoveType.Line)
+                    { var (tx,ty)=MmToPx(m.X,m.Y); hlPath.MoveTo(fromX,fromY); hlPath.LineTo(tx,ty); }
+                    else
+                    {
+                        double ccx=m.X+m.I,ccy=m.Y+m.J,ar=Math.Sqrt(m.I*m.I+m.J*m.J);
+                        if (ar>0) {
+                            bool cw=m.Type==MoveType.ArcCW; float arPx=(float)(ar*scale);
+                            var (spx,spy)=MmToPx(m.X,m.Y); var (epx,epy)=MmToPx(m.Xe,m.Ye);
+                            bool full=Math.Abs(m.Xe-m.X)<1e-6&&Math.Abs(m.Ye-m.Y)<1e-6;
+                            hlPath.MoveTo(spx,spy);
+                            if(full){double sA=Math.Atan2(m.Y-ccy,m.X-ccx);var(mx,my)=MmToPx(ccx+ar*Math.Cos(sA+Math.PI),ccy+ar*Math.Sin(sA+Math.PI));AddArc(hlPath,mx,my,arPx,false,cw);AddArc(hlPath,spx,spy,arPx,false,cw);}
+                            else{double sA=Math.Atan2(m.Y-ccy,m.X-ccx),eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);if(cw&&eA>sA)eA-=2*Math.PI;if(!cw&&eA<sA)eA+=2*Math.PI;AddArc(hlPath,epx,epy,arPx,Math.Abs(eA-sA)>Math.PI,cw);}
                         }
                     }
-                    geo2.Freeze();
-                    el = new System.Windows.Shapes.Path { Data=geo2, Stroke=stroke, StrokeThickness=thick };
+                    canvas.DrawPath(hlPath, hlPaint);
                 }
+                (lxh, lyh) = m.Type is MoveType.ArcCW or MoveType.ArcCCW
+                    ? ((float)(_topRect.Left+m.Xe*scale), (float)(_topRect.Bottom-m.Ye*scale))
+                    : ((float)(_topRect.Left+m.X*scale),  (float)(_topRect.Bottom-m.Y*scale));
             }
-            if (el!=null) DrawCanvas.Children.Add(el);
+
+            // ── Bohrpunkte (visuell) ──
+            foreach (var hole in _cachedDrillPoints)
+            {
+                bool selHole = hole.LineNumber == _selectedGCodeLine;
+                var (hx, hy) = MmToPx(hole.X, hole.Y);
+                float dotR = (float)(3.0 / _zoom);
+                using var dotFill = new SKPaint { Color = selHole ? new SKColor(255,215,0) : new SKColor(0,140,255), IsAntialias=true };
+                using var dotBord = new SKPaint { Color=SKColors.White, Style=SKPaintStyle.Stroke, StrokeWidth=(float)(1.0/_zoom), IsAntialias=true };
+                canvas.DrawCircle(hx, hy, dotR, dotFill);
+                canvas.DrawCircle(hx, hy, dotR, dotBord);
+            }
+        } // end if (moves.Count > 0)
+
+        // ── Gravieren: Buchstaben-Konturen grau ──
+        foreach (var entry in _history)
+        {
+            if (entry.Params is not GraviereParams gp || (!gp.IsTasche && !gp.IsVCarve && !gp.IsVCarveRaster)) continue;
+            var displayGp = (entry == HistoryList.SelectedItem && _previewGravParams != null) ? _previewGravParams : gp;
+            var tctx = GCodeGenerator.BuildTextGeo(displayGp, wx, wy);
+            if (tctx.Flat.Bounds.IsEmpty) continue;
+
+            double ts = tctx.Scale, tmH = tctx.MultiH;
+            (float, float) ToPxT(double fx, double fy)
+            {
+                var (px, py) = MmToPx(tctx.Ox + fx * ts, tctx.Oy + tctx.YOffset + (tmH - fy) * ts);
+                return (px, py);
+            }
+
+            using var contPath = new SKPath();
+            foreach (var fig in tctx.Flat.Figures)
+            {
+                if (!fig.IsClosed) continue;
+                var (sx, sy) = ToPxT(fig.StartPoint.X, fig.StartPoint.Y);
+                contPath.MoveTo(sx, sy);
+                foreach (var seg in fig.Segments)
+                {
+                    if (seg is System.Windows.Media.PolyLineSegment pls)
+                        foreach (var pt in pls.Points) { var (ptx,pty)=ToPxT(pt.X,pt.Y); contPath.LineTo(ptx,pty); }
+                    else if (seg is System.Windows.Media.LineSegment ls)
+                    { var (ptx,pty)=ToPxT(ls.Point.X,ls.Point.Y); contPath.LineTo(ptx,pty); }
+                }
+                contPath.LineTo(sx, sy);
+            }
+            using var contPaint = new SKPaint { Color=new SKColor(80,80,80,200), Style=SKPaintStyle.Stroke, StrokeWidth=(float)(1.0/_zoom), IsAntialias=true };
+            canvas.DrawPath(contPath, contPaint);
         }
 
-        // ── Pass 3: Transparente Klickflächen über alle Moves ──
-        // Klick-Breite = 14 Bildschirmpixel unabhängig vom Zoom
+        // ── V-Carve Kreise (blau, optional) ──
+        bool showVC = MnuVCarveVisualisieren.IsChecked == true;
+        var allVCC = new List<GCodeGenerator.VCarveCircle>();
+        foreach (var entry in _history)
+        {
+            if (entry.Params is not GraviereParams gp || !gp.IsVCarve) continue;
+            if (!_vCarveCache.TryGetValue(gp, out var circles))
+            {
+                double step = Math.Clamp(gp.FontSizeMm / 200.0, 0.025, 0.1);
+                circles = GCodeGenerator.ResampleVCarveCircles(
+                    GCodeGenerator.ComputeVCarveCircles(gp, wx, wy, step), gp.VereinfachungMm);
+                _vCarveCache[gp] = circles;
+            }
+            allVCC.AddRange(circles);
+            if (!showVC || circles.Count == 0) continue;
+
+            using var vcPath = new SKPath();
+            foreach (var c in circles)
+            {
+                float rPx = (float)(c.R * scale);
+                if (rPx < 0.01f) continue;
+                var (cx, cy) = MmToPx(c.X, c.Y);
+                vcPath.MoveTo(cx + rPx, cy);
+                AddArc(vcPath, cx - rPx, cy, rPx, false, true);
+                AddArc(vcPath, cx + rPx, cy, rPx, false, true);
+            }
+            using var vcPaint = new SKPaint { Color=new SKColor(0,80,210), Style=SKPaintStyle.Stroke, StrokeWidth=(float)(0.8/_zoom), IsAntialias=true };
+            canvas.DrawPath(vcPath, vcPaint);
+        }
+        VCarveCenters = allVCC;
+
+        // ── Gravieren-Textfelder (grau gepunktet) ──
+        foreach (var entry in _history)
+        {
+            if (entry.Params is not GraviereParams gp) continue;
+            double fh = gp.TextHoehe > 0 ? gp.TextHoehe : gp.FontSizeMm;
+            if (gp.TextBreite <= 0 || fh <= 0) continue;
+            var (ox2, oy2) = GCodeGenerator.ConvertBezugspunkt(gp.Bezugspunkt, gp.XRel, gp.YRel, WorkX, WorkY);
+            var (tlx, tly) = MmToPx(ox2, oy2 + fh);
+            var (brx, bry) = MmToPx(ox2 + gp.TextBreite, oy2);
+            float pw = brx - tlx, ph = bry - tly;
+            if (pw < 1 || ph < 1) continue;
+            float dw = 4f / (float)_zoom;
+            using var rectPaint = new SKPaint { Color=SKColors.Gray, Style=SKPaintStyle.Stroke, StrokeWidth=(float)(1.0/_zoom),
+                PathEffect = SKPathEffect.CreateDash(new[] { dw, dw * 0.75f }, 0) };
+            canvas.DrawRect(tlx, tly, pw, ph, rectPaint);
+        }
+    }
+
+    // ── Hit-Shapes für Draufsicht (werden in HitCanvas eingefügt) ──
+    private void BuildTopViewHits()
+    {
+        var moves = _cachedTopMoves;
+        if (_topRect.IsEmpty) return;
+        double wx = WorkX, wy = WorkY;
+        if (wx <= 0 || wy <= 0) return;
+
+        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+        Point MmToPxW(double x, double y) =>
+            new(_topRect.Left + x * scale, _topRect.Bottom - y * scale);
+
         double hitThick = Math.Max(2.0, 14.0 / _zoom);
         double lx = 0, ly = 0;
+
         foreach (var m in moves)
         {
             double fromX = lx, fromY = ly;
-            bool sel    = m.LineNumber == _selectedGCodeLine;
-            bool active = !sel && m.LineNumber == activeLine;
-            bool nearby = !sel && !active && _selectionSource == 1 && _selectedGCodeLine >= 1 && m.LineNumber > 0 &&
-                          Math.Abs(m.LineNumber - _selectedGCodeLine) <= 3 && m.Type != MoveType.Rapid;
-
-            if (sel)
-                DrawColoredMove(m, fromX, fromY, new SolidColorBrush(Color.FromRgb(255, 215,  0)), 2.0 / _zoom, m.Type==MoveType.Rapid);
-            else if (active)
-                DrawColoredMove(m, fromX, fromY, new SolidColorBrush(Color.FromRgb(255, 235, 80)), 2.0 / _zoom, m.Type==MoveType.Rapid);
-            else if (nearby)
-                DrawColoredMove(m, fromX, fromY, new SolidColorBrush(Color.FromArgb(140, 255, 215, 0)), 1.5 / _zoom, false);
-
-            // Klickfläche
             System.Windows.Shapes.Path? hitEl = null;
+
             if (m.Type is MoveType.Rapid or MoveType.Line)
             {
                 var geo = new StreamGeometry();
-                using (var ctx = geo.Open()) { ctx.BeginFigure(MmToPx(fromX,fromY),false,false); ctx.LineTo(MmToPx(m.X,m.Y),true,false); }
+                using (var ctx = geo.Open())
+                { ctx.BeginFigure(MmToPxW(fromX, fromY), false, false); ctx.LineTo(MmToPxW(m.X, m.Y), true, false); }
                 geo.Freeze();
                 hitEl = new System.Windows.Shapes.Path { Data=geo, Stroke=Brushes.Transparent, StrokeThickness=hitThick, Cursor=Cursors.Hand, Tag=m.LineNumber };
                 lx=m.X; ly=m.Y;
             }
             else
             {
-                double ccx=m.X+m.I, ccy=m.Y+m.J, ar=Math.Sqrt((m.X-ccx)*(m.X-ccx)+(m.Y-ccy)*(m.Y-ccy));
-                if (ar>0)
+                double ccx=m.X+m.I, ccy=m.Y+m.J, ar=Math.Sqrt(m.I*m.I+m.J*m.J);
+                if (ar > 0)
                 {
                     bool cw = m.Type == MoveType.ArcCW;
                     var sweep = cw ? SweepDirection.Counterclockwise : SweepDirection.Clockwise;
                     double arPx = ar * scale;
-                    var startPx = MmToPx(m.X, m.Y);
-                    var endPx   = MmToPx(m.Xe, m.Ye);
-                    bool full = Math.Abs(m.Xe-m.X)<1e-6&&Math.Abs(m.Ye-m.Y)<1e-6;
+                    var spx = MmToPxW(m.X, m.Y); var epx = MmToPxW(m.Xe, m.Ye);
+                    bool full = Math.Abs(m.Xe-m.X)<1e-6 && Math.Abs(m.Ye-m.Y)<1e-6;
                     var pg = new PathGeometry();
+                    var fig = new PathFigure { StartPoint=spx, IsFilled=false };
                     if (full)
                     {
-                        double sA = Math.Atan2(m.Y-ccy, m.X-ccx);
-                        var midPx = MmToPx(ccx + ar*Math.Cos(sA+Math.PI), ccy + ar*Math.Sin(sA+Math.PI));
-                        var fig = new PathFigure { StartPoint=startPx, IsFilled=false };
-                        fig.Segments.Add(new ArcSegment(midPx,   new System.Windows.Size(arPx,arPx), 0, false, sweep, true));
-                        fig.Segments.Add(new ArcSegment(startPx, new System.Windows.Size(arPx,arPx), 0, false, sweep, true));
-                        pg.Figures.Add(fig);
+                        double sA=Math.Atan2(m.Y-ccy,m.X-ccx);
+                        var mp=MmToPxW(ccx+ar*Math.Cos(sA+Math.PI),ccy+ar*Math.Sin(sA+Math.PI));
+                        fig.Segments.Add(new ArcSegment(mp,  new System.Windows.Size(arPx,arPx), 0, false, sweep, true));
+                        fig.Segments.Add(new ArcSegment(spx, new System.Windows.Size(arPx,arPx), 0, false, sweep, true));
                     }
                     else
                     {
                         double sA=Math.Atan2(m.Y-ccy,m.X-ccx), eA=Math.Atan2(m.Ye-ccy,m.Xe-ccx);
-                        if (cw&&eA>sA) eA-=2*Math.PI; if (!cw&&eA<sA) eA+=2*Math.PI;
-                        bool large = Math.Abs(eA-sA) > Math.PI;
-                        var fig = new PathFigure { StartPoint=startPx, IsFilled=false };
-                        fig.Segments.Add(new ArcSegment(endPx, new System.Windows.Size(arPx,arPx), 0, large, sweep, true));
-                        pg.Figures.Add(fig);
+                        if(cw&&eA>sA)eA-=2*Math.PI; if(!cw&&eA<sA)eA+=2*Math.PI;
+                        fig.Segments.Add(new ArcSegment(epx, new System.Windows.Size(arPx,arPx), 0, Math.Abs(eA-sA)>Math.PI, sweep, true));
                     }
+                    pg.Figures.Add(fig);
                     hitEl = new System.Windows.Shapes.Path { Data=pg, Stroke=Brushes.Transparent, StrokeThickness=hitThick, Cursor=Cursors.Hand, Tag=m.LineNumber };
                 }
                 lx=m.Xe; ly=m.Ye;
             }
-            if (hitEl!=null) { hitEl.MouseLeftButtonDown+=OnTopViewFormClick; DrawCanvas.Children.Add(hitEl); }
+            if (hitEl != null) { hitEl.MouseLeftButtonDown += OnTopViewFormClick; HitCanvas.Children.Add(hitEl); }
         }
 
+        // Bohrpunkte
         foreach (var hole in _cachedDrillPoints)
         {
-            var center = MmToPx(hole.X, hole.Y);
-            bool selHole = hole.LineNumber == _selectedGCodeLine;
-            // Bohrpunkt: zoom-invariant (6px Bildschirmgrösse)
-            double dotR = 3.0 / _zoom;
-            var circle = new Ellipse
-            {
-                Width           = dotR * 2, Height = dotR * 2,
-                Fill            = selHole ? new SolidColorBrush(Color.FromRgb(255,215,0))
-                                          : new SolidColorBrush(Color.FromRgb(0,140,255)),
-                Stroke          = Brushes.White,
-                StrokeThickness = 1.0 / _zoom,
-                Cursor          = Cursors.Hand,
-                Tag             = hole.LineNumber
-            };
+            var ctr = MmToPxW(hole.X, hole.Y);
+            double dotR = 5.0;
+            var circle = new Ellipse { Width=dotR*2, Height=dotR*2, Fill=Brushes.Transparent, Cursor=Cursors.Hand, Tag=hole.LineNumber };
             circle.MouseLeftButtonDown += OnTopViewFormClick;
-            Canvas.SetLeft(circle, center.X - dotR);
-            Canvas.SetTop (circle, center.Y - dotR);
-            DrawCanvas.Children.Add(circle);
-        }
-
-        } // end if (moves.Count > 0)
-
-        // ── Gravieren: Buchstaben-Konturen grau anzeigen (Tasche + V-Carve) ─
-        foreach (var entry in _history)
-        {
-            if (entry.Params is not GraviereParams gp || (!gp.IsTasche && !gp.IsVCarve && !gp.IsVCarveRaster)) continue;
-            // Preview: aktuellen Eingabetext live anzeigen ohne G-Code neu zu berechnen
-            var displayGp = (entry == HistoryList.SelectedItem && _previewGravParams != null)
-                            ? _previewGravParams : gp;
-            var tctx = GCodeGenerator.BuildTextGeo(displayGp, wx, wy);
-            if (tctx.Flat.Bounds.IsEmpty) continue;
-
-            double ts = tctx.Scale, tmH = tctx.MultiH;
-            Point ToPx(double fx, double fy) =>
-                MmToPx(tctx.Ox + fx * ts, tctx.Oy + tctx.YOffset + (tmH - fy) * ts);
-
-            var outGeo = new StreamGeometry();
-            using (var og = outGeo.Open())
-            {
-                foreach (var fig in tctx.Flat.Figures)
-                {
-                    if (!fig.IsClosed) continue;
-                    var sp = ToPx(fig.StartPoint.X, fig.StartPoint.Y);
-                    og.BeginFigure(sp, false, false);
-                    foreach (var seg in fig.Segments)
-                    {
-                        var segPts = seg switch
-                        {
-                            System.Windows.Media.PolyLineSegment pls =>
-                                pls.Points.Select(q => ToPx(q.X, q.Y)).ToList(),
-                            System.Windows.Media.LineSegment ls =>
-                                new List<System.Windows.Point> { ToPx(ls.Point.X, ls.Point.Y) },
-                            _ => new List<System.Windows.Point>()
-                        };
-                        if (segPts.Count > 0) og.PolyLineTo(segPts, true, false);
-                    }
-                    og.LineTo(sp, true, false);
-                }
-            }
-            DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-            {
-                Data            = outGeo,
-                Stroke          = new SolidColorBrush(Color.FromArgb(200, 80, 80, 80)),
-                StrokeThickness = 1.0 / _zoom,
-                IsHitTestVisible = false
-            });
-        }
-
-        // ── V-Carve: einbeschriebene Kreise (blau, nur bei aktivierter Visualisierung) ──
-        bool showVCarve = MnuVCarveVisualisieren.IsChecked == true;
-        var allVCarveCenters = new List<GCodeGenerator.VCarveCircle>();
-        foreach (var entry in _history)
-        {
-            if (entry.Params is not GraviereParams gp || !gp.IsVCarve) continue;
-            if (!showVCarve) continue;
-
-            // Cache: nur einmal pro Parameterset berechnen
-            if (!_vCarveCache.TryGetValue(gp, out var circles))
-            {
-                double step = Math.Clamp(gp.FontSizeMm / 200.0, 0.025, 0.1);
-                circles = GCodeGenerator.ResampleVCarveCircles(
-                              GCodeGenerator.ComputeVCarveCircles(gp, wx, wy, step),
-                              simplifyMm: gp.VereinfachungMm);
-                _vCarveCache[gp] = circles;
-            }
-            allVCarveCenters.AddRange(circles);
-
-            if (circles.Count == 0) continue;
-
-            // Alle Kreise als eine einzige StreamGeometry (performant)
-            var circleGeo = new StreamGeometry();
-            using (var sg = circleGeo.Open())
-            {
-                foreach (var c in circles)
-                {
-                    double rPx = c.R * scale;
-                    if (rPx < 0.01) continue;
-                    var ctr = MmToPx(c.X, c.Y);
-                    var left  = new System.Windows.Point(ctr.X - rPx, ctr.Y);
-                    var right = new System.Windows.Point(ctr.X + rPx, ctr.Y);
-                    var sz    = new System.Windows.Size(rPx, rPx);
-                    sg.BeginFigure(right, true, true);
-                    sg.ArcTo(left,  sz, 0, false, System.Windows.Media.SweepDirection.Clockwise, true, false);
-                    sg.ArcTo(right, sz, 0, false, System.Windows.Media.SweepDirection.Clockwise, true, false);
-                }
-            }
-            circleGeo.Freeze();
-            DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-            {
-                Data             = circleGeo,
-                Stroke           = new SolidColorBrush(Color.FromRgb(0, 80, 210)),
-                StrokeThickness  = 0.8 / _zoom,
-                Fill             = System.Windows.Media.Brushes.Transparent,
-                IsHitTestVisible = false
-            });
-        }
-        VCarveCenters = allVCarveCenters;
-
-        // ── Gravieren-Textfelder (grau gepunktet) ─────────────────
-        foreach (var entry in _history)
-        {
-            if (entry.Params is not GraviereParams gp) continue;
-            double fh = gp.TextHoehe > 0 ? gp.TextHoehe : gp.FontSizeMm;
-            if (gp.TextBreite <= 0 || fh <= 0) continue;
-
-            var (ox, oy) = GCodeGenerator.ConvertBezugspunkt(
-                gp.Bezugspunkt, gp.XRel, gp.YRel, WorkX, WorkY);
-
-            var tl = MmToPx(ox,                 oy + fh);
-            var br = MmToPx(ox + gp.TextBreite, oy);
-            double pw = br.X - tl.X;
-            double ph = br.Y - tl.Y;
-            if (pw < 1 || ph < 1) continue;
-
-            var rect = new System.Windows.Shapes.Rectangle
-            {
-                Width           = pw,
-                Height          = ph,
-                Stroke          = Brushes.Gray,
-                StrokeThickness = 1.0,
-                StrokeDashArray = new DoubleCollection([4, 3]),
-                Fill            = Brushes.Transparent
-            };
-            Canvas.SetLeft(rect, tl.X);
-            Canvas.SetTop(rect,  tl.Y);
-            DrawCanvas.Children.Add(rect);
+            Canvas.SetLeft(circle, ctr.X - dotR); Canvas.SetTop(circle, ctr.Y - dotR);
+            HitCanvas.Children.Add(circle);
         }
     }
 
-    // ── Seitenansicht G-Code ─────────────────────────────────────
-
-    private void DrawGCodeSideView()
+    // ── G-Code Seitenansicht: visuell (SkiaSharp) ────────────────────────────────
+    private void DrawGCodeSideViewSk(SKCanvas canvas)
     {
         var moves = _cachedSideMoves;
         if (moves.Count == 0 || _bottomRect.IsEmpty) return;
-
         double wx = WorkX, wz = WorkZ;
         if (wx <= 0 || wz <= 0) return;
 
         double scale = Math.Min(_bottomRect.Width / wx, _bottomRect.Height / wz);
-        Point MmToPx(double x, double z) =>
-            new(_bottomRect.Left + x * scale, _bottomRect.Top + (-z) * scale);
+        (float px, float py) MmToPx(double x, double z) => (
+            (float)(_bottomRect.Left + x * scale),
+            (float)(_bottomRect.Top  + (-z) * scale));
 
-        double thick = 1.5 / _zoom;
-
-        // ── Sichtbare Linien ──────────────────────────────────────
-        var cutGeo   = new StreamGeometry();
-        var rapidGeo = new StreamGeometry();
-
-        using (var cut   = cutGeo.Open())
-        using (var rapid = rapidGeo.Open())
-        {
-            Point? last = null;
-            foreach (var m in moves)
-            {
-                var cur = MmToPx(m.X, m.Z);
-                if (last.HasValue)
-                {
-                    var ctx = m.Cmd == "G0" ? rapid : cut;
-                    ctx.BeginFigure(last.Value, false, false);
-                    ctx.LineTo(cur, true, false);
-                }
-                last = cur;
-            }
-        }
-
-        cutGeo.Freeze();
-        rapidGeo.Freeze();
-
-        var rapidDash = new System.Windows.Media.DoubleCollection { 5, 3 };
-        rapidDash.Freeze();
-        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-        {
-            Data = rapidGeo, Stroke = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
-            StrokeThickness = thick, StrokeDashArray = rapidDash,
-            IsHitTestVisible = false
-        });
-
+        float thick = (float)(1.5 / _zoom);
         int activeLine = _mouseHoverLine >= 1 ? _mouseHoverLine : _highlightGCodeLine;
 
-        // Erst rote Schnittlinien, dann gelbe Hervorhebungen darüber
-        DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-        {
-            Data = cutGeo, Stroke = new SolidColorBrush(Color.FromRgb(200, 30, 30)),
-            StrokeThickness = thick, IsHitTestVisible = false
-        });
-
-        // Selektierter / aktiver Move hervorheben (on top of red)
-        Point? prevPt = null;
+        // Rapid + Cut getrennt aufbauen
+        using var cutPath  = new SKPath();
+        using var rapPath  = new SKPath();
+        System.Windows.Point? prevPtW = null;
         foreach (var m in moves)
         {
-            var cur = MmToPx(m.X, m.Z);
-            if (prevPt.HasValue && m.LineNumber > 0)
+            var (cx, cy) = MmToPx(m.X, m.Z);
+            if (prevPtW.HasValue)
+            {
+                var path = m.Cmd == "G0" ? rapPath : cutPath;
+                path.MoveTo((float)prevPtW.Value.X, (float)prevPtW.Value.Y);
+                path.LineTo(cx, cy);
+            }
+            prevPtW = new System.Windows.Point(cx, cy);
+        }
+
+        using var rapPaint = new SKPaint { Color=new SKColor(160,160,160), Style=SKPaintStyle.Stroke, StrokeWidth=thick, IsAntialias=true,
+            PathEffect=SKPathEffect.CreateDash(new[]{ 5*thick, 3*thick }, 0) };
+        using var cutPaint = new SKPaint { Color=new SKColor(200,30,30), Style=SKPaintStyle.Stroke, StrokeWidth=thick, IsAntialias=true };
+        canvas.DrawPath(rapPath, rapPaint);
+        canvas.DrawPath(cutPath, cutPaint);
+
+        // Selektierter / aktiver Move hervorheben
+        prevPtW = null;
+        foreach (var m in moves)
+        {
+            var (cx, cy) = MmToPx(m.X, m.Z);
+            if (prevPtW.HasValue && m.LineNumber > 0)
             {
                 bool sel    = m.LineNumber == _selectedGCodeLine;
                 bool active = !sel && m.LineNumber == activeLine;
-                bool nearby = !sel && !active && _selectionSource == 0 && _selectedGCodeLine >= 1 && m.LineNumber > 0 &&
-                              Math.Abs(m.LineNumber - _selectedGCodeLine) <= 3 && m.Cmd != "G0";
+                bool nearby = !sel && !active && _selectionSource==0 && _selectedGCodeLine>=1 &&
+                              Math.Abs(m.LineNumber-_selectedGCodeLine)<=3 && m.Cmd!="G0";
                 if (sel || active || nearby)
                 {
-                    var hl = new StreamGeometry();
-                    using (var c = hl.Open()) { c.BeginFigure(prevPt.Value, false, false); c.LineTo(cur, true, false); }
-                    hl.Freeze();
-                    var hlColor = sel    ? Color.FromRgb(255, 215,   0)
-                                : active ? Color.FromRgb(255, 235,  80)
-                                         : Color.FromArgb(200, 255, 215, 0);
-                    DrawCanvas.Children.Add(new System.Windows.Shapes.Path
-                    {
-                        Data            = hl,
-                        Stroke          = new SolidColorBrush(hlColor),
-                        StrokeThickness = sel ? 2.5 / _zoom : 2.0 / _zoom,
-                        IsHitTestVisible = false
-                    });
+                    var hlColor = sel    ? new SKColor(255,215,0)
+                                : active ? new SKColor(255,235,80)
+                                         : new SKColor(255,215,0,200);
+                    float hlW = sel ? (float)(2.5/_zoom) : (float)(2.0/_zoom);
+                    using var hlPaint = new SKPaint { Color=hlColor, Style=SKPaintStyle.Stroke, StrokeWidth=hlW, IsAntialias=true };
+                    using var hlPath  = new SKPath();
+                    hlPath.MoveTo((float)prevPtW.Value.X, (float)prevPtW.Value.Y);
+                    hlPath.LineTo(cx, cy);
+                    canvas.DrawPath(hlPath, hlPaint);
                 }
             }
-            prevPt = cur;
+            prevPtW = new System.Windows.Point(cx, cy);
         }
+    }
 
-        // ── Klickflächen ──────────────────────────────────────────
+    // ── Hit-Shapes für Seitenansicht ──────────────────────────────
+    private void BuildSideViewHits()
+    {
+        var moves = _cachedSideMoves;
+        if (moves.Count == 0 || _bottomRect.IsEmpty) return;
+        double wx = WorkX, wz = WorkZ;
+        if (wx <= 0 || wz <= 0) return;
+
+        double scale = Math.Min(_bottomRect.Width / wx, _bottomRect.Height / wz);
+        Point MmToPxW(double x, double z) =>
+            new(_bottomRect.Left + x * scale, _bottomRect.Top + (-z) * scale);
+
         double hitThick = Math.Max(2.0, 14.0 / _zoom);
-        prevPt = null;
+        System.Windows.Point? prevPt = null;
         foreach (var m in moves)
         {
-            var cur = MmToPx(m.X, m.Z);
+            var cur = MmToPxW(m.X, m.Z);
             if (prevPt.HasValue && m.LineNumber > 0 && m.Cmd != "G0")
             {
                 var geo = new StreamGeometry();
-                using (var c = geo.Open()) { c.BeginFigure(prevPt.Value, false, false); c.LineTo(cur, true, false); }
+                using (var c = geo.Open())
+                { c.BeginFigure(prevPt.Value, false, false); c.LineTo(cur, true, false); }
                 geo.Freeze();
                 var hitEl = new System.Windows.Shapes.Path
                 {
-                    Data            = geo,
-                    Stroke          = Brushes.Transparent,
-                    StrokeThickness = hitThick,
-                    Cursor          = Cursors.Hand,
-                    Tag             = m.LineNumber
+                    Data=geo, Stroke=Brushes.Transparent, StrokeThickness=hitThick,
+                    Cursor=Cursors.Hand, Tag=m.LineNumber
                 };
                 hitEl.MouseLeftButtonDown += OnSideViewFormClick;
-                DrawCanvas.Children.Add(hitEl);
+                HitCanvas.Children.Add(hitEl);
             }
             prevPt = cur;
         }
@@ -3269,52 +3042,115 @@ public partial class MainWindow : Window
         UpdateAll();
     }
 
-    private void DrawRaster()
+    private void DrawRasterSk(SKCanvas canvas, double cw, double ch)
     {
-        if (_topRect.IsEmpty) return;
-        double cw = DrawCanvas.ActualWidth;
-        double ch = DrawCanvas.ActualHeight;
-        double wx = WorkX, wy = WorkY;
-        if (wx <= 0 || wy <= 0) return;
+        double scale = (!_topRect.IsEmpty && WorkX > 0 && WorkY > 0)
+            ? Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY)
+            : 1.0;
 
-        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
         double stepX = _rasterX * scale;
         double stepY = _rasterY * scale;
-        if (stepX < 1 || stepY < 1) return;
+        if (stepX * _zoom < 2 || stepY * _zoom < 2) return;
 
-        // Ursprung (0,0) des Werkstück-Koordinatensystems in Canvas-Pixeln
-        double ox = _topRect.Left;
-        double oy = _topRect.Bottom;
+        double worldMinX = -_panX / _zoom;
+        double worldMaxX = (cw - _panX) / _zoom;
+        double worldMinY = -_panY / _zoom;
+        double worldMaxY = (ch - _panY) / _zoom;
 
-        var pen = new SolidColorBrush(Color.FromArgb(55, 30, 90, 200));
-        pen.Freeze();
+        using var paint = new SKPaint
+        {
+            Color       = new SKColor(30, 90, 200, 55),
+            StrokeWidth = (float)(1.0 / _zoom),
+            IsAntialias = false,
+            Style       = SKPaintStyle.Stroke,
+        };
 
-        // Vertikale Linien (X-Abstand), von Ursprung nach rechts und links
-        for (double px = ox; px <= cw; px += stepX)
-            DrawCanvas.Children.Add(MakeGridLine(px, 0, px, ch, pen));
-        for (double px = ox - stepX; px >= 0; px -= stepX)
-            DrawCanvas.Children.Add(MakeGridLine(px, 0, px, ch, pen));
+        // Rasterursprung am Werkstück (oder Weltorigon), erste sichtbare Linie per Floor
+        double ox = _topRect.IsEmpty ? 0 : _topRect.Left;
+        double oy = _topRect.IsEmpty ? 0 : _topRect.Bottom;
 
-        // Horizontale Linien (Y-Abstand), von Ursprung nach oben und unten
-        for (double py = oy; py >= 0; py -= stepY)
-            DrawCanvas.Children.Add(MakeGridLine(0, py, cw, py, pen));
-        for (double py = oy + stepY; py <= ch; py += stepY)
-            DrawCanvas.Children.Add(MakeGridLine(0, py, cw, py, pen));
+        double firstX = ox + Math.Floor((worldMinX - ox) / stepX) * stepX;
+        for (double px = firstX; px <= worldMaxX; px += stepX)
+            canvas.DrawLine((float)px, (float)worldMinY, (float)px, (float)worldMaxY, paint);
+
+        double firstY = oy + Math.Floor((worldMinY - oy) / stepY) * stepY;
+        for (double py = firstY; py <= worldMaxY; py += stepY)
+            canvas.DrawLine((float)worldMinX, (float)py, (float)worldMaxX, (float)py, paint);
     }
 
-    private Line MakeGridLine(double x1, double y1, double x2, double y2, Brush brush) =>
-        new() { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Stroke = brush, StrokeThickness = 0.5 / _zoom, IsHitTestVisible = false };
-
-    private static Line MakeLine(Point a, Point b, Brush brush, bool dashed)
+    private void DrawSelectionLocatorSk(SKCanvas canvas)
     {
-        var line = new Line
+        const float VisibleThreshold = 6f;
+        double wx = WorkX, wy = WorkY;
+        if (wx <= 0 || wy <= 0) return;
+        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+        (float, float) MmToPxW(double x, double y) => (
+            (float)(_topRect.Left + x * scale),
+            (float)(_topRect.Bottom - y * scale));
+
+        float? ptx = null, pty = null;
+        bool showRing = false;
+
+        var hole = _cachedDrillPoints.FirstOrDefault(h => h.LineNumber == _selectedGCodeLine);
+        if (hole != null)
         {
-            X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y,
-            Stroke = brush, StrokeThickness = 2
+            var (hx, hy) = MmToPxW(hole.X, hole.Y);
+            ptx = hx; pty = hy;
+        }
+        else
+        {
+            int idx = _cachedTopMoves.FindIndex(m => m.LineNumber == _selectedGCodeLine);
+            var move = idx >= 0 ? _cachedTopMoves[idx] : null;
+            if (move != null)
+            {
+                if (move.Type is MoveType.ArcCW or MoveType.ArcCCW)
+                {
+                    double arPx = Math.Sqrt(move.I * move.I + move.J * move.J) * scale * _zoom;
+                    showRing = arPx < VisibleThreshold;
+                    var (mx, my) = MmToPxW((move.X + move.Xe) / 2.0, (move.Y + move.Ye) / 2.0);
+                    ptx = mx; pty = my;
+                }
+                else
+                {
+                    var (sx0, sy0) = idx > 0
+                        ? MmToPxW(_cachedTopMoves[idx - 1].X, _cachedTopMoves[idx - 1].Y)
+                        : MmToPxW(0, 0);
+                    var (ex, ey) = MmToPxW(move.X, move.Y);
+                    double lenPx = Math.Sqrt(Math.Pow(ex - sx0, 2) + Math.Pow(ey - sy0, 2)) * _zoom;
+                    showRing = lenPx < VisibleThreshold;
+                    ptx = ex; pty = ey;
+                }
+            }
+        }
+
+        if (!showRing || ptx == null) return;
+
+        // Welt → logische Screen-Pixel → physische Screen-Pixel (für ResetMatrix-Kontext)
+        float sx = (float)((ptx.Value  * _zoom + _panX) * _dpiScale);
+        float sy = (float)((pty!.Value * _zoom + _panY) * _dpiScale);
+
+        int saveCount = canvas.Save();
+        canvas.ResetMatrix();
+
+        const float R    = 20f;
+        const float tick = 7f;
+        const float gap  = 4f;
+        using var paint = new SKPaint
+        {
+            Color       = new SKColor(255, 215, 0),
+            StrokeWidth = 1.8f,
+            IsAntialias = true,
+            Style       = SKPaintStyle.Stroke,
+            StrokeCap   = SKStrokeCap.Round,
         };
-        if (dashed)
-            line.StrokeDashArray = new System.Windows.Media.DoubleCollection { 5, 3 };
-        return line;
+        canvas.DrawCircle(sx, sy, R, paint);
+        paint.StrokeWidth = 1.5f;
+        canvas.DrawLine(sx - R - gap - tick, sy,  sx - R - gap,        sy,  paint);
+        canvas.DrawLine(sx + R + gap,        sy,  sx + R + gap + tick, sy,  paint);
+        canvas.DrawLine(sx, sy - R - gap - tick,  sx, sy - R - gap,        paint);
+        canvas.DrawLine(sx, sy + R + gap,         sx, sy + R + gap + tick, paint);
+
+        canvas.RestoreToCount(saveCount);
     }
 
     // ── G-Code Simulation ───────────────────────────────────────────────────

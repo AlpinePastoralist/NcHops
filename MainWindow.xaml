@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:local="clr-namespace:NCHops"
+        xmlns:skia="clr-namespace:SkiaSharp.Views.WPF;assembly=SkiaSharp.Views.WPF"
         xmlns:avalon="http://icsharpcode.net/sharpdevelop/avalonedit"
         Title="NC Studio" WindowState="Maximized"
         Width="1200" Height="700"
@@ -348,7 +349,7 @@
                 </MenuItem>
                 <Separator/>
                 <MenuItem Header="Raster einblenden" x:Name="MnuRaster"
-                          IsCheckable="True" Click="OnRasterEinblenden">
+                          IsCheckable="True" IsChecked="True" Click="OnRasterEinblenden">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}" Text="⊞" FontSize="13"/>
                     </MenuItem.Icon>
@@ -550,13 +551,18 @@
                 </Grid.RowDefinitions>
 
                 <!-- Zeichenbereich -->
-                <Grid Grid.Row="0" ClipToBounds="True">
+                <Grid x:Name="CanvasGrid" Grid.Row="0" ClipToBounds="True" Background="Transparent">
                     <!-- Wasserzeichen-Canvas: KEIN RenderTransform → zoom-invariant -->
                     <Canvas x:Name="WatermarkCanvas" IsHitTestVisible="False" Panel.ZIndex="0"/>
-                    <Canvas x:Name="DrawCanvas"
+                    <!-- SkiaSharp Zeichenfläche: alle visuellen Inhalte, kein Hit-Test -->
+                    <skia:SKElement x:Name="DrawSkia"
+                                    IsHitTestVisible="False"
+                                    Panel.ZIndex="1"/>
+                    <!-- Hit-Canvas: transparente Klickflächen + Mouse-Events, gleiche Transform wie DrawSkia -->
+                    <Canvas x:Name="HitCanvas"
                             Background="Transparent"
-                            SizeChanged="OnCanvasSizeChanged" ClipToBounds="True"
-                            Panel.ZIndex="1"/>
+                            SizeChanged="OnCanvasSizeChanged"
+                            Panel.ZIndex="2"/>
                     <!-- Simulations-Werkzeugkopf -->
                     <Canvas x:Name="SimToolCanvas" IsHitTestVisible="False" Panel.ZIndex="5"/>
                     <!-- Werkzeugpalette (links, schwebend) -->
