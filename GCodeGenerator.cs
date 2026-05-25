@@ -277,6 +277,108 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    public static string Nut(NutParams p, double workW, double workH)
+    {
+        double r    = p.FraeserD / 2.0;
+        double step = Math.Max(0.1, p.FraeserD * p.Faktor);
+
+        var (refX, refY) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+
+        // Offset auf untere-linke Nutecke umrechnen
+        var (bx, by) = p.Bezugspunkt switch
+        {
+            "Unten links"  => (0,              0),
+            "Unten Mitte"  => (-p.Länge / 2,   0),
+            "Unten rechts" => (-p.Länge,        0),
+            "Links Mitte"  => (0,              -p.Breite / 2),
+            "Mitte"        => (-p.Länge / 2,   -p.Breite / 2),
+            "Rechts Mitte" => (-p.Länge,       -p.Breite / 2),
+            "Oben links"   => (0,              -p.Breite),
+            "Oben Mitte"   => (-p.Länge / 2,   -p.Breite),
+            "Oben rechts"  => (-p.Länge,       -p.Breite),
+            _              => (0.0,             0.0)
+        };
+
+        double ax = refX + bx;
+        double ay = refY + by;
+
+        // Fräsermittelpunkt-Bereich – kein Aufmaß, direkt an der Endkontur
+        double ix0 = ax + r;
+        double iy0 = ay + r;
+        double ix1 = ax + p.Länge  - r;
+        double iy1 = ay + p.Breite - r;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("(Nut fräsen)");
+        sb.AppendLine($"(X={F(ax)} Y={F(ay)} L={F(p.Länge)} B={F(p.Breite)})");
+        sb.AppendLine($"(D={p.FraeserD}, Bezug={p.Bezugspunkt})");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
+
+        if (ix1 < ix0 - 1e-6 || iy1 < iy0 - 1e-6)
+        {
+            sb.AppendLine("(Nut zu schmal für Werkzeug)");
+            sb.AppendLine("M05");
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"M03 S{p.Drehzahl}");
+        sb.AppendLine(Sz());
+
+        double depth = -Math.Abs(p.ZTiefe);
+        double zStep = Math.Abs(p.ZZustellung);
+        double curZ  = 0;
+
+        void AppendEntry(double prevZ, double nextZ)
+        {
+            double dz    = Math.Abs(nextZ - prevZ);
+            double angle = p.Eintauchwinkel;
+            if (angle >= 90 || angle <= 0 || dz < 1e-6)
+            {
+                sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
+                return;
+            }
+            double rampLen = (dz / 2.0) / Math.Tan(angle * Math.PI / 180.0);
+            if (ix0 + rampLen > ix1)
+            {
+                sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
+                return;
+            }
+            double midZ = prevZ - dz / 2.0;
+            sb.AppendLine($"G01 X{F(ix0 + rampLen)} Z{F(midZ)} F{(int)p.VorschubFz}");
+            sb.AppendLine($"G01 X{F(ix0)} Z{F(nextZ)} F{(int)p.VorschubFz}");
+        }
+
+        while (curZ > depth)
+        {
+            double prevDepth = curZ;
+            curZ = Math.Max(depth, curZ - zStep);
+
+            sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
+            sb.AppendLine($"G00 Z{F(prevDepth)}");
+            AppendEntry(prevDepth, curZ);
+
+            double y = iy0;
+            bool rightward = true;
+            while (true)
+            {
+                sb.AppendLine(rightward
+                    ? $"G01 X{F(ix1)} F{(int)p.Vorschub}"
+                    : $"G01 X{F(ix0)} F{(int)p.Vorschub}");
+                if (y >= iy1 - 1e-6) break;
+                y = Math.Min(y + step, iy1);
+                sb.AppendLine($"G01 Y{F(y)} F{(int)p.Vorschub}");
+                rightward = !rightward;
+            }
+
+            if (curZ > depth)
+                sb.AppendLine(Sz());
+        }
+
+        sb.AppendLine(Sz());
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
     public static string Kreistasche(KreistascheParams p, double workW, double workH)
     {
         const double allowance = 1.0;
@@ -565,138 +667,86 @@ public static class GCodeGenerator
                 break;
         }
 
-        sb.AppendLine($"G00 X{F(approachX)} Y{F(approachY)}");
-        sb.AppendLine($"G01 Z{F(z)} F{(int)p.VorschubFz}");
-        sb.AppendLine($"{entryArcCmd} X{F(startX)} Y{F(startY)} I{F(arcI)} J{F(arcJ)} F{(int)p.VorschubFxy}");
+        // Kontur-Moves in eine Liste puffern, damit sie in jedem Z-Schritt wiederverwendet werden.
+        var contour = new List<string>();
+        string L(double x, double y) => $"G01 X{F(x)} Y{F(y)} F{(int)p.VorschubFxy}";
+        string A3(double x, double y, double i, double j) => $"G03 X{F(x)} Y{F(y)} I{F(i)} J{F(j)} F{(int)p.VorschubFxy}";
 
         if (r <= 0)
         {
             if (startSide == "oben")
             {
-                if (gegenlauf)
-                {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                }
-                else
-                {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                if (gegenlauf) { contour.Add(L(x0,y1)); contour.Add(L(x0,y0)); contour.Add(L(x1,y0)); contour.Add(L(x1,y1)); }
+                else           { contour.Add(L(x1,y1)); contour.Add(L(x1,y0)); contour.Add(L(x0,y0)); contour.Add(L(x0,y1)); }
+                contour.Add(L(startX, startY));
             }
             else if (startSide == "rechts")
             {
-                if (gegenlauf)
-                {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                }
-                else
-                {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                if (gegenlauf) { contour.Add(L(x1,y1)); contour.Add(L(x0,y1)); contour.Add(L(x0,y0)); contour.Add(L(x1,y0)); }
+                else           { contour.Add(L(x1,y0)); contour.Add(L(x0,y0)); contour.Add(L(x0,y1)); contour.Add(L(x1,y1)); }
+                contour.Add(L(startX, startY));
             }
             else if (startSide == "links")
             {
-                if (gegenlauf)
-                {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                }
-                else
-                {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                if (gegenlauf) { contour.Add(L(x0,y0)); contour.Add(L(x1,y0)); contour.Add(L(x1,y1)); contour.Add(L(x0,y1)); }
+                else           { contour.Add(L(x0,y1)); contour.Add(L(x1,y1)); contour.Add(L(x1,y0)); contour.Add(L(x0,y0)); }
+                contour.Add(L(startX, startY));
             }
             else
             {
-                if (gegenlauf)
-                {
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                }
-                else
-                {
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x0)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                    sb.AppendLine($"G01 X{F(x1)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                }
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                if (gegenlauf) { contour.Add(L(x1,y0)); contour.Add(L(x1,y1)); contour.Add(L(x0,y1)); contour.Add(L(x0,y0)); }
+                else           { contour.Add(L(x0,y0)); contour.Add(L(x0,y1)); contour.Add(L(x1,y1)); contour.Add(L(x1,y0)); }
+                contour.Add(L(startX, startY));
             }
         }
         else
         {
             if (startSide == "oben")
             {
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                contour.Add(L(x0+r,y1)); contour.Add(A3(x0,y1-r,0,-r)); contour.Add(L(x0,y0+r));
+                contour.Add(A3(x0+r,y0,r,0)); contour.Add(L(x1-r,y0)); contour.Add(A3(x1,y0+r,0,r));
+                contour.Add(L(x1,y1-r)); contour.Add(A3(x1-r,y1,-r,0)); contour.Add(L(startX,startY));
             }
             else if (startSide == "rechts")
             {
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                contour.Add(L(x1,y1-r)); contour.Add(A3(x1-r,y1,-r,0)); contour.Add(L(x0+r,y1));
+                contour.Add(A3(x0,y1-r,0,-r)); contour.Add(L(x0,y0+r)); contour.Add(A3(x0+r,y0,r,0));
+                contour.Add(L(x1-r,y0)); contour.Add(A3(x1,y0+r,0,r)); contour.Add(L(startX,startY));
             }
             else if (startSide == "links")
             {
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                contour.Add(L(x0,y0+r)); contour.Add(A3(x0+r,y0,r,0)); contour.Add(L(x1-r,y0));
+                contour.Add(A3(x1,y0+r,0,r)); contour.Add(L(x1,y1-r)); contour.Add(A3(x1-r,y1,-r,0));
+                contour.Add(L(x0+r,y1)); contour.Add(A3(x0,y1-r,0,-r)); contour.Add(L(startX,startY));
             }
             else
             {
-                sb.AppendLine($"G01 X{F(x1 - r)} Y{F(y0)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1)} Y{F(y0 + r)} I0 J{F(r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x1)} Y{F(y1 - r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x1 - r)} Y{F(y1)} I{F(-r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x0 + r)} Y{F(y1)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0)} Y{F(y1 - r)} I0 J{F(-r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(x0)} Y{F(y0 + r)} F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G03 X{F(x0 + r)} Y{F(y0)} I{F(r)} J0 F{(int)p.VorschubFxy}");
-                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} F{(int)p.VorschubFxy}");
+                contour.Add(L(x1-r,y0)); contour.Add(A3(x1,y0+r,0,r)); contour.Add(L(x1,y1-r));
+                contour.Add(A3(x1-r,y1,-r,0)); contour.Add(L(x0+r,y1)); contour.Add(A3(x0,y1-r,0,-r));
+                contour.Add(L(x0,y0+r)); contour.Add(A3(x0+r,y0,r,0)); contour.Add(L(startX,startY));
             }
         }
 
-        sb.AppendLine($"{exitArcCmd} X{F(exitX)} Y{F(exitY)} I{F(exitI)} J{F(exitJ)} F{(int)p.VorschubFxy}");
+        // Z-Tiefen bestimmen: bei Mehrfachzustellung schrittweise bis zur Endtiefe
+        var zLevels = new List<double>();
+        if (p.MehrfachZustellung && p.ZZustellung > 0 && z < 0)
+        {
+            double step = p.ZZustellung;
+            for (double cz = -step; cz > z; cz -= step)
+                zLevels.Add(Math.Round(cz, 4));
+        }
+        zLevels.Add(z);
+
+        sb.AppendLine($"G00 X{F(approachX)} Y{F(approachY)}");
+        for (int pass = 0; pass < zLevels.Count; pass++)
+        {
+            sb.AppendLine($"G01 Z{F(zLevels[pass])} F{(int)p.VorschubFz}");
+            sb.AppendLine($"{entryArcCmd} X{F(startX)} Y{F(startY)} I{F(arcI)} J{F(arcJ)} F{(int)p.VorschubFxy}");
+            foreach (var line in contour) sb.AppendLine(line);
+            sb.AppendLine($"{exitArcCmd} X{F(exitX)} Y{F(exitY)} I{F(exitI)} J{F(exitJ)} F{(int)p.VorschubFxy}");
+            if (pass < zLevels.Count - 1)
+                sb.AppendLine($"G00 X{F(approachX)} Y{F(approachY)}");
+        }
         sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();
@@ -832,47 +882,71 @@ public static class GCodeGenerator
         bool corr = sp.Radiuskorrektur != "Mittig";
         double sg = sp.Radiuskorrektur == "Links" ? 1.0 : -1.0;
 
-        var pts = new List<(double x, double y)>();
+        // Build absolute endpoint coords + arc midpoints (arcMids[i] = midpoint for segment i-1→i)
+        var pts     = new List<(double x, double y)>();
+        var arcMids = new List<(double mx, double my)?>();
         for (int i = 0; i < path.Count; i++)
         {
             var p = path[i];
+            (double x, double y) pt;
             if (p.Bezugspunkt == "Letzter Punkt" && pts.Count > 0)
-                pts.Add((pts[^1].x + p.XRel, pts[^1].y + p.YRel));
+                pt = (pts[^1].x + p.XRel, pts[^1].y + p.YRel);
             else
-                pts.Add(ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH));
+                pt = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+            pts.Add(pt);
+
+            if (i > 0 && p.Typ == PfadPunktTyp.Bogen)
+            {
+                arcMids.Add(ResolveBogenMid(pts[i - 1], pts[i], p, workW, workH));
+            }
+            else
+            {
+                arcMids.Add(null);
+            }
         }
+
+        bool hasBogen = arcMids.Skip(1).Any(m => m.HasValue);
 
         // Geschlossener Pfad: erster und letzter Punkt identisch (< 0.01 mm)
         bool closed = pts.Count >= 3 &&
             Math.Sqrt(Math.Pow(pts[0].x - pts[^1].x, 2) + Math.Pow(pts[0].y - pts[^1].y, 2)) < 0.01;
 
-        // Unique points (no duplicate endpoint for closed path)
-        var uniquePts = closed ? pts.Take(pts.Count - 1).ToList() : pts;
-
-        // Corner rounding: Startpunkt-R als globaler Fallback, Einzelpunkte können überschreiben
-        double globalR = sp.Verrundung;
-        var verrundungen = path.Select(p => p.Verrundung > 1e-10 ? p.Verrundung : globalR).ToList();
-        bool hasRounding = verrundungen.Any(v => v > 1e-10);
-
         List<PathMove> moves;
-        if (corr && r > 1e-10 && uniquePts.Count >= 2)
+        if (hasBogen)
         {
-            moves = closed
-                ? ComputeClosedOffsetMoves(uniquePts, r, sg, verrundungen)
-                : ComputeOffsetMoves(uniquePts, r, sg, verrundungen);
-        }
-        else if (hasRounding && uniquePts.Count >= 3)
-        {
-            // Mittig mit Verrundung: Offset = 0, Bögen direkt in Werkstückpfad
-            moves = closed
-                ? ComputeClosedOffsetMoves(uniquePts, 0, 1, verrundungen)
-                : ComputeOffsetMoves(uniquePts, 0, 1, verrundungen);
-            if (closed && moves.Count > 0) moves.Add(moves[0]);
+            moves = BuildBogenMoves(pts, arcMids, corr ? r : 0, corr ? sg : 0, closed);
+            if (closed && moves.Count > 0)
+                moves.Add(moves[0]);
         }
         else
         {
-            moves = uniquePts.Select(p => new PathMove(p.x, p.y)).ToList();
-            if (closed) moves.Add(moves[0]); // Pfad schliessen
+            // Unique points (no duplicate endpoint for closed path)
+            var uniquePts = closed ? pts.Take(pts.Count - 1).ToList() : pts;
+
+            // Corner rounding: Startpunkt-R als globaler Fallback, Einzelpunkte können überschreiben
+            double globalR = sp.Verrundung;
+            var verrundungen = path.Select(p => p.Verrundung > 1e-10 ? p.Verrundung : globalR).ToList();
+            bool hasRounding = verrundungen.Any(v => v > 1e-10);
+
+            if (corr && r > 1e-10 && uniquePts.Count >= 2)
+            {
+                moves = closed
+                    ? ComputeClosedOffsetMoves(uniquePts, r, sg, verrundungen)
+                    : ComputeOffsetMoves(uniquePts, r, sg, verrundungen);
+            }
+            else if (hasRounding && uniquePts.Count >= 3)
+            {
+                // Mittig mit Verrundung: Offset = 0, Bögen direkt in Werkstückpfad
+                moves = closed
+                    ? ComputeClosedOffsetMoves(uniquePts, 0, 1, verrundungen)
+                    : ComputeOffsetMoves(uniquePts, 0, 1, verrundungen);
+                if (closed && moves.Count > 0) moves.Add(moves[0]);
+            }
+            else
+            {
+                moves = uniquePts.Select(p => new PathMove(p.x, p.y)).ToList();
+                if (closed) moves.Add(moves[0]); // Pfad schliessen
+            }
         }
 
         var sb = new StringBuilder();
@@ -937,6 +1011,233 @@ public static class GCodeGenerator
 
     private record struct PathMove(double X, double Y, bool IsArc = false,
                                    double I = 0, double J = 0, bool CW = false);
+
+    // Kreismittelpunkt und Richtung aus drei Punkten berechnen
+    private static (double cx, double cy, double R, bool cw) ArcFrom3Points(
+        double x1, double y1, double xm, double ym, double x2, double y2)
+    {
+        // Senkrechte Halbierende von P1-Pm und Pm-P2 → Schnittpunkt = Mittelpunkt
+        double ax = (x1 + xm) / 2, ay = (y1 + ym) / 2;
+        double dax = ym - y1, day = x1 - xm;
+
+        double bx = (xm + x2) / 2, by = (ym + y2) / 2;
+        double dbx = y2 - ym, dby = xm - x2;
+
+        double det = dax * (-dby) + dbx * day;
+        if (Math.Abs(det) < 1e-12)
+            return (0, 0, double.PositiveInfinity, false);   // Punkte kollinear → Gerade
+
+        double t  = ((bx - ax) * (-dby) + dbx * (by - ay)) / det;
+        double cx = ax + t * dax;
+        double cy = ay + t * day;
+        double R  = Math.Sqrt((x1 - cx) * (x1 - cx) + (y1 - cy) * (y1 - cy));
+
+        // Kreuzprodukt (P1→Pm) × (P1→P2): negativ = im Uhrzeigersinn (G02)
+        double cross = (xm - x1) * (y2 - y1) - (ym - y1) * (x2 - x1);
+        return (cx, cy, R, cross < 0);
+    }
+
+    // Moves für Pfad mit Bogen-Segmenten, optional mit Werkzeug-Radiuskorrektur.
+    // r = Werkzeugradius, sg = +1 (Links) oder -1 (Rechts); r=0 → kein Offset.
+    // Konvexe Ecken erhalten einen Umfahrbogen (Radius r um den Eckpunkt).
+    // Bei geschlossenem Pfad wird auch die Naht als Ecke behandelt.
+    private static List<PathMove> BuildBogenMoves(
+        List<(double x, double y)> pts,
+        List<(double mx, double my)?> arcMids,
+        double r = 0, double sg = 0, bool closed = false)
+    {
+        int n = pts.Count;
+
+        if (!(r > 1e-10 && Math.Abs(sg) > 1e-10))
+        {
+            // Kein Offset: Originalverhalten
+            var moves0 = new List<PathMove> { new PathMove(pts[0].x, pts[0].y) };
+            for (int i = 1; i < n; i++)
+            {
+                var mid0 = arcMids[i];
+                if (mid0.HasValue)
+                {
+                    var (x1, y1) = pts[i - 1];
+                    var (mx, my) = mid0.Value;
+                    var (x2, y2) = pts[i];
+                    var (cx, cy, rr, cw) = ArcFrom3Points(x1, y1, mx, my, x2, y2);
+                    if (double.IsInfinity(rr))
+                        moves0.Add(new PathMove(x2, y2));
+                    else
+                        moves0.Add(new PathMove(x2, y2, IsArc: true, I: cx - x1, J: cy - y1, CW: cw));
+                }
+                else
+                {
+                    moves0.Add(new PathMove(pts[i].x, pts[i].y));
+                }
+            }
+            return moves0;
+        }
+
+        // --- Mit Radiuskorrektur ---
+        int m = n - 1; // Anzahl Segmente
+        var segArc  = new bool[m];
+        var segCxA  = new double[m];
+        var segCyA  = new double[m];
+        var segRNew = new double[m];
+        var segCW   = new bool[m];
+        var segDir  = new (double x, double y)[m];
+        var segNrm  = new (double x, double y)[m];
+        var segS    = new (double x, double y)[m]; // versetzter Startpunkt
+        var segE    = new (double x, double y)[m]; // versetzter Endpunkt
+
+        for (int s = 0; s < m; s++)
+        {
+            var p1 = pts[s]; var p2 = pts[s + 1];
+            var mid = arcMids[s + 1];
+            bool isArcSeg = false;
+            if (mid.HasValue)
+            {
+                var (cx, cy, R, cw) = ArcFrom3Points(p1.x, p1.y, mid.Value.mx, mid.Value.my, p2.x, p2.y);
+                if (!double.IsInfinity(R))
+                {
+                    // CW-Bogen: links = außen → R_new = R + sg*r; CCW: R_new = R - sg*r
+                    double rNew = Math.Max(0, R + (cw ? 1.0 : -1.0) * sg * r);
+                    segArc[s] = true; segCxA[s] = cx; segCyA[s] = cy; segRNew[s] = rNew; segCW[s] = cw;
+                    isArcSeg = true;
+                    double d1 = Math.Sqrt(Math.Pow(p1.x - cx, 2) + Math.Pow(p1.y - cy, 2));
+                    double d2 = Math.Sqrt(Math.Pow(p2.x - cx, 2) + Math.Pow(p2.y - cy, 2));
+                    segS[s] = d1 > 1e-12 ? (cx + (p1.x - cx) / d1 * rNew, cy + (p1.y - cy) / d1 * rNew) : p1;
+                    segE[s] = d2 > 1e-12 ? (cx + (p2.x - cx) / d2 * rNew, cy + (p2.y - cy) / d2 * rNew) : p2;
+                }
+            }
+            if (!isArcSeg)
+            {
+                ComputeDirNrm(p1, p2, sg, out segDir[s], out segNrm[s]);
+                segS[s] = (p1.x + segNrm[s].x * r, p1.y + segNrm[s].y * r);
+                segE[s] = (p2.x + segNrm[s].x * r, p2.y + segNrm[s].y * r);
+            }
+        }
+
+        // Tangentenrichtung am Segmentende/-anfang (für Eckenerkennung)
+        (double x, double y) SegEndTan(int s) =>
+            segArc[s] ? BogenArcTangentAt(segCxA[s], segCyA[s], segE[s].x, segE[s].y, segCW[s]) : segDir[s];
+        (double x, double y) SegStartTan(int s) =>
+            segArc[s] ? BogenArcTangentAt(segCxA[s], segCyA[s], segS[s].x, segS[s].y, segCW[s]) : segDir[s];
+
+        // effStart/effEnd: defaults sind segS/segE; bei konkaven Ecken → Schnittpunkt
+        var effStart  = new (double x, double y)[m];
+        var effEnd    = new (double x, double y)[m];
+        var vtxConvex = new bool[n];
+        for (int s = 0; s < m; s++) { effStart[s] = segS[s]; effEnd[s] = segE[s]; }
+
+        void ProcessVertex(int vIdx, int prevSeg, int nextSeg, (double x, double y) vtxPt)
+        {
+            var tanOut = SegEndTan(prevSeg);
+            var tanIn  = SegStartTan(nextSeg);
+            double cross = tanOut.x * tanIn.y - tanOut.y * tanIn.x;
+            bool isConvex = Math.Abs(cross) > 0.01 && (sg > 0 ? cross < 0 : cross > 0);
+            vtxConvex[vIdx] = isConvex;
+            if (!isConvex)
+            {
+                // Konkave Ecke oder Gerade: Schnittpunkt der versetzten Segmente
+                (double x, double y) conn;
+                if (!segArc[prevSeg] && !segArc[nextSeg])
+                    conn = LineIntersect(segS[prevSeg], segDir[prevSeg], segS[nextSeg], segDir[nextSeg]) ?? segE[prevSeg];
+                else if (!segArc[prevSeg])
+                    conn = BogenPickClosest(BogenLineCircleIntersect(segS[prevSeg], segDir[prevSeg], segCxA[nextSeg], segCyA[nextSeg], segRNew[nextSeg]), vtxPt, segE[prevSeg]);
+                else if (!segArc[nextSeg])
+                    conn = BogenPickClosest(BogenLineCircleIntersect(segS[nextSeg], segDir[nextSeg], segCxA[prevSeg], segCyA[prevSeg], segRNew[prevSeg]), vtxPt, segE[prevSeg]);
+                else
+                    conn = BogenPickClosest(BogenCircleCircleIntersect(segCxA[prevSeg], segCyA[prevSeg], segRNew[prevSeg], segCxA[nextSeg], segCyA[nextSeg], segRNew[nextSeg]), vtxPt, segE[prevSeg]);
+                effEnd[prevSeg]   = conn;
+                effStart[nextSeg] = conn;
+            }
+            // Konvexe Ecke: effEnd[prevSeg]=segE[prevSeg], effStart[nextSeg]=segS[nextSeg] (defaults ok)
+        }
+
+        // Interne Ecken verarbeiten
+        for (int i = 1; i < n - 1; i++)
+            ProcessVertex(i, i - 1, i, pts[i]);
+
+        // Naht bei geschlossenem Pfad als Ecke behandeln
+        if (closed && m >= 2)
+            ProcessVertex(0, m - 1, 0, pts[0]);
+
+        // Ergebnisliste aufbauen
+        var result = new List<PathMove>();
+        result.Add(new PathMove(effStart[0].x, effStart[0].y));
+
+        for (int s = 0; s < m; s++)
+        {
+            var sp = effStart[s];
+            var ep = effEnd[s];
+            if (segArc[s] && segRNew[s] > 1e-10)
+                result.Add(new PathMove(ep.x, ep.y, IsArc: true,
+                    I: segCxA[s] - sp.x, J: segCyA[s] - sp.y, CW: segCW[s]));
+            else
+                result.Add(new PathMove(ep.x, ep.y));
+
+            // Konvexer Umfahrbogen nach Segment s
+            int nextS = (s + 1) % m;
+            int vIdx  = (s == m - 1 && closed) ? 0 : s + 1;
+            if (vIdx < n && vtxConvex[vIdx])
+            {
+                var cornerPt = pts[vIdx];
+                result.Add(new PathMove(effStart[nextS].x, effStart[nextS].y, IsArc: true,
+                    I: cornerPt.x - ep.x, J: cornerPt.y - ep.y, CW: sg > 0));
+            }
+        }
+
+        return result;
+    }
+
+    private static (double x, double y) BogenPickClosest(
+        IEnumerable<(double x, double y)> cands, (double x, double y) hint, (double x, double y) fallback)
+    {
+        var best = fallback;
+        double bestD = double.MaxValue;
+        foreach (var c in cands)
+        {
+            double d = Math.Pow(c.x - hint.x, 2) + Math.Pow(c.y - hint.y, 2);
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        return best;
+    }
+
+    private static IEnumerable<(double x, double y)> BogenLineCircleIntersect(
+        (double x, double y) o, (double x, double y) d, double cx, double cy, double R)
+    {
+        double fx = o.x - cx, fy = o.y - cy;
+        double a = d.x * d.x + d.y * d.y;
+        if (a < 1e-20) yield break;
+        double b = 2 * (fx * d.x + fy * d.y);
+        double c = fx * fx + fy * fy - R * R;
+        double disc = b * b - 4 * a * c;
+        if (disc < 0) yield break;
+        double sq = Math.Sqrt(disc);
+        double t1 = (-b - sq) / (2 * a), t2 = (-b + sq) / (2 * a);
+        yield return (o.x + t1 * d.x, o.y + t1 * d.y);
+        if (Math.Abs(t2 - t1) > 1e-10)
+            yield return (o.x + t2 * d.x, o.y + t2 * d.y);
+    }
+
+    private static IEnumerable<(double x, double y)> BogenCircleCircleIntersect(
+        double cx1, double cy1, double r1, double cx2, double cy2, double r2)
+    {
+        double dx = cx2 - cx1, dy = cy2 - cy1, d = Math.Sqrt(dx * dx + dy * dy);
+        if (d < 1e-10 || d > r1 + r2 + 1e-6 || d < Math.Abs(r1 - r2) - 1e-6) yield break;
+        double a = (r1 * r1 - r2 * r2 + d * d) / (2 * d);
+        double h2 = r1 * r1 - a * a;
+        if (h2 < 0) yield break;
+        double h = Math.Sqrt(h2), mx = cx1 + a * dx / d, my = cy1 + a * dy / d;
+        yield return (mx + h * dy / d, my - h * dx / d);
+        if (h > 1e-10) yield return (mx - h * dy / d, my + h * dx / d);
+    }
+
+    // Tangente eines Kreisbogens am Punkt (px,py) mit Zentrum (cx,cy)
+    private static (double x, double y) BogenArcTangentAt(double cx, double cy, double px, double py, bool cw)
+    {
+        double dx = px - cx, dy = py - cy;
+        double R = Math.Sqrt(dx * dx + dy * dy);
+        if (R < 1e-12) return (1, 0);
+        return cw ? (dy / R, -dx / R) : (-dy / R, dx / R);
+    }
 
     // Ecken mit Radius runden (approximiert als Segmente, vor Offset-Berechnung)
     // verrundungen[i] = Radius an Ecke i (für Links/Rechts = Werkstückradius)
@@ -1293,6 +1594,45 @@ public static class GCodeGenerator
             _              => (xRel, yRel)
         };
 
+    // ── Bogen-Mittelpunkt aus PfadPunktParams berechnen ─────────────────
+
+    private static (double mx, double my) ResolveBogenMid(
+        (double x, double y) p1, (double x, double y) p2,
+        PfadPunktParams p, double workW, double workH)
+    {
+        string modus = p.BogenModus ?? "Bogenmitte";
+
+        if (modus == "Bogenmitte")
+        {
+            if (p.Bezugspunkt == "Letzter Punkt")
+                return (p1.x + p.XMid, p1.y + p.YMid);
+            return ConvertBezugspunkt(p.Bezugspunkt, p.XMid, p.YMid, workW, workH);
+        }
+
+        // Geometrie: Sehnenrichtung und linke Senkrechte
+        double dx = p2.x - p1.x, dy = p2.y - p1.y;
+        double L  = Math.Sqrt(dx * dx + dy * dy);
+        if (L < 1e-10) return ((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
+
+        double perpX = -dy / L, perpY = dx / L; // links der Fahrtrichtung
+        double mcx   = (p1.x + p2.x) / 2, mcy = (p1.y + p2.y) / 2;
+
+        double h; // vorzeichenbehaftete Pfeilhöhe (+ = links)
+        if (modus == "Radius")
+        {
+            double R    = p.XMid;
+            double a    = L / 2;
+            double absR = Math.Max(Math.Abs(R), a); // Mindestradius = Sehnenhälfte
+            h = (absR - Math.Sqrt(Math.Max(0, absR * absR - a * a))) * (R >= 0 ? 1 : -1);
+        }
+        else // "Pfeilhöhe"
+        {
+            h = p.XMid;
+        }
+
+        return (mcx + h * perpX, mcy + h * perpY);
+    }
+
     // ── Gravieren ────────────────────────────────────────────────────────
 
     public static string Gravieren(GraviereParams p, double workW, double workH)
@@ -1302,7 +1642,7 @@ public static class GCodeGenerator
 
         double scale  = ctx.Scale;
         double multiH = ctx.MultiH;
-        var flat2     = ctx.Flat;
+        var flat2     = ctx.FlatDisplay;
         double zDepth = -Math.Abs(p.ZTiefe);
 
         double MX(double wx) => ctx.Ox + wx * scale;
@@ -1353,7 +1693,8 @@ public static class GCodeGenerator
 
     public record TextGeoCtx(
         System.Windows.Media.Geometry  AlignedGeo,
-        System.Windows.Media.PathGeometry Flat,
+        System.Windows.Media.PathGeometry Flat,        // grob (tol 2.0) — VCarve-Berechnung
+        System.Windows.Media.PathGeometry FlatDisplay, // fein (tol 0.5) — Darstellung
         double Scale, double MultiH,
         double Ox, double Oy, double YOffset);
 
@@ -1381,12 +1722,10 @@ public static class GCodeGenerator
 
         double scale = p.FontSizeMm > 0 ? p.FontSizeMm / lineH : 1.0;
 
-        ft.TextAlignment = p.Ausrichtung switch
-        {
-            "Mitte"  => System.Windows.TextAlignment.Center,
-            "Rechts" => System.Windows.TextAlignment.Right,
-            _        => System.Windows.TextAlignment.Left
-        };
+        bool bezugRechts = p.Bezugspunkt.Contains("rechts", StringComparison.OrdinalIgnoreCase);
+        ft.TextAlignment = (p.Ausrichtung == "Rechts" || bezugRechts) ? System.Windows.TextAlignment.Right
+                         : p.Ausrichtung == "Mitte"                   ? System.Windows.TextAlignment.Center
+                                                                       : System.Windows.TextAlignment.Left;
         if (p.TextBreite > 0 && scale > 0)
             ft.MaxTextWidth = p.TextBreite / scale;
 
@@ -1395,11 +1734,22 @@ public static class GCodeGenerator
                        : (p.FontSizeMm > 0 ? p.FontSizeMm : multiH * scale);
         double yOffset = (fieldH - multiH * scale) / 2.0;
 
-        var geo2  = ft.BuildGeometry(new System.Windows.Point(0, 0));
-        var flat2 = geo2.GetFlattenedPathGeometry(0.5, System.Windows.Media.ToleranceType.Absolute);
+        var geo2        = ft.BuildGeometry(new System.Windows.Point(0, 0));
+        var flat2       = geo2.GetFlattenedPathGeometry(2.0, System.Windows.Media.ToleranceType.Absolute);
+        var flatDisplay = geo2.GetFlattenedPathGeometry(0.5, System.Windows.Media.ToleranceType.Absolute);
 
         var (ox, oy) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
-        return new TextGeoCtx(geo2, flat2, scale, multiH, ox, oy, yOffset);
+
+        // Verschiebung damit der gewählte Bezugspunkt an der richtigen Textfeldecke/-kante liegt
+        double textWEff = p.TextBreite > 0 ? p.TextBreite : ft.Width * scale;
+        if (p.Bezugspunkt.Contains("Oben"))                                       oy -= fieldH;
+        if (p.Bezugspunkt.Contains("rechts", StringComparison.OrdinalIgnoreCase)) ox -= textWEff;
+        if (p.Bezugspunkt is "Mitte" or "Oben Mitte" or "Unten Mitte")            ox -= textWEff / 2;
+
+        if (flat2.CanFreeze)       flat2.Freeze();
+        if (flatDisplay.CanFreeze) flatDisplay.Freeze();
+        if (geo2.CanFreeze)        geo2.Freeze();
+        return new TextGeoCtx(geo2, flat2, flatDisplay, scale, multiH, ox, oy, yOffset);
     }
 
     // ── Textfeld-Tasche (Clipper2-basiert, exakter Polygon-Offset) ──────────
@@ -1430,7 +1780,7 @@ public static class GCodeGenerator
         double allowWpf = allow / scale;
         double arcTol   = Math.Max(0.5, arcTolMm / scale);
 
-        var geo = ctx.Flat;
+        var geo = ctx.FlatDisplay;
         if (geo.Bounds.IsEmpty || scale < 1e-9)
         { sb.AppendLine("(kein Text)"); sb.AppendLine("M05"); return sb.ToString(); }
 
@@ -1771,11 +2121,16 @@ public static class GCodeGenerator
         return qx * qx + qy * qy;
     }
 
+    // Wrapper: BuildTextGeo muss auf dem UI/STA-Thread aufgerufen werden.
+    // Für Hintergrund-Berechnungen: ctx auf UI-Thread holen, dann Überladung mit ctx aufrufen.
     public static List<VCarveCircle> ComputeVCarveCircles(
         GraviereParams p, double workW, double workH, double sampleStepMm = 0.5)
+        => ComputeVCarveCircles(p, BuildTextGeo(p, workW, workH), sampleStepMm);
+
+    public static List<VCarveCircle> ComputeVCarveCircles(
+        GraviereParams p, TextGeoCtx ctx, double sampleStepMm = 0.5)
     {
-        var ctx = BuildTextGeo(p, workW, workH);
-        if (ctx.Flat.Bounds.IsEmpty) return [];
+        if (ctx.FlatDisplay.Bounds.IsEmpty) return [];
 
         double scale  = ctx.Scale;
         double multiH = ctx.MultiH;
@@ -1786,13 +2141,57 @@ public static class GCodeGenerator
             : p.FraeserD * 0.5;
         double maxRw = maxRmm / scale;
 
-        var figs = ctx.Flat.Figures.Where(f => f.IsClosed).ToList();
+        // Feine Geometrie (0.5) für Bogenabtastung, Normalen UND InGlyph-Ringe.
+        // Ein einheitliches Polygon stellt sicher, dass Kreise die der Binary-Search
+        // akzeptiert auch InGlyph bestehen — keine Inkonsistenz zwischen Toleranzen.
+        var figs = ctx.FlatDisplay.Figures.Where(f => f.IsClosed).ToList();
         if (figs.Count == 0) return [];
 
-        var fillGeo = ctx.Flat.Clone();
-        fillGeo.FillRule = System.Windows.Media.FillRule.EvenOdd;
-        fillGeo.Freeze();
         double probe = 0.1 / scale;
+
+        // ── Schneller Even-Odd Point-in-Polygon (ersetzt WPF fillGeo.FillContains) ──────
+        // Alle Figur-Ringe vorab aus den bereits geflatteneten Polygonen aufbauen.
+        // Even-Odd Ray-Casting ist identisch zu WPFs FillRule.EvenOdd, aber rein arithmetisch
+        // und damit ~50-100× schneller als der WPF-Geometry-Aufruf.
+        var allRings  = new (double x, double y)[figs.Count][];
+        var ringYMin  = new double[figs.Count];
+        var ringYMax  = new double[figs.Count];
+        for (int ri = 0; ri < figs.Count; ri++)
+        {
+            var f  = figs[ri];
+            var rg = new List<(double x, double y)>();
+            rg.Add((f.StartPoint.X, f.StartPoint.Y));
+            foreach (var seg in f.Segments)
+            {
+                if (seg is System.Windows.Media.PolyLineSegment pls)
+                    foreach (var pt in pls.Points) rg.Add((pt.X, pt.Y));
+                else if (seg is System.Windows.Media.LineSegment ls)
+                    rg.Add((ls.Point.X, ls.Point.Y));
+            }
+            allRings[ri] = rg.ToArray();
+            double yMin = double.MaxValue, yMax = double.MinValue;
+            foreach (var (_, ry) in allRings[ri]) { if (ry < yMin) yMin = ry; if (ry > yMax) yMax = ry; }
+            ringYMin[ri] = yMin; ringYMax[ri] = yMax;
+        }
+        bool InGlyph(double px, double py)
+        {
+            bool inside = false;
+            for (int ri = 0; ri < allRings.Length; ri++)
+            {
+                if (py < ringYMin[ri] || py > ringYMax[ri]) continue;
+                var ring = allRings[ri];
+                int n = ring.Length;
+                for (int i = 0, j = n - 1; i < n; j = i++)
+                {
+                    double xi = ring[i].x, yi = ring[i].y;
+                    double xj = ring[j].x, yj = ring[j].y;
+                    if ((yi > py) != (yj > py) &&
+                        px < (xj - xi) * (py - yi) / (yj - yi) + xi)
+                        inside = !inside;
+                }
+            }
+            return inside;
+        }
 
         // ── Original-Segment-Endpunkte sammeln (zur Unterscheidung echter Ecken vs. Kurven-Approx) ──
         // Punkte aus geraden Segmenten im Original sind echte Ecken; Punkte aus Bezier-Approximation nicht.
@@ -1908,8 +2307,8 @@ public static class GCodeGenerator
                     double lnx = -etsy, lny = etsx;
                     double mx = (pts[k].x + pts[k2].x) * 0.5;
                     double my = (pts[k].y + pts[k2].y) * 0.5;
-                    bool lIn = fillGeo.FillContains(new System.Windows.Point(mx + lnx*probe, my + lny*probe));
-                    bool rIn = fillGeo.FillContains(new System.Windows.Point(mx - lnx*probe, my - lny*probe));
+                    bool lIn = InGlyph(mx + lnx*probe, my + lny*probe);
+                    bool rIn = InGlyph(mx - lnx*probe, my - lny*probe);
                     if      ( lIn && !rIn) { einx =  lnx; einy =  lny; }
                     else if (!lIn &&  rIn) { einx = -lnx; einy = -lny; }
                 }
@@ -1927,7 +2326,7 @@ public static class GCodeGenerator
         // ── Räumliches Gitter: nur nahe Segmente bei Binarysuche prüfen ──────
         // cellSz = 2*maxRw → jede Zelle deckt alle Segmente innerhalb maxRw ab.
         // Segmente werden mit maxRw-Puffer eingetragen → Single-Cell-Lookup reicht.
-        var   flatBounds = ctx.Flat.Bounds;
+        var   flatBounds = ctx.FlatDisplay.Bounds;
         double gridX0    = flatBounds.X - maxRw;
         double gridY0    = flatBounds.Y - maxRw;
         double cellSz    = Math.Max(maxRw * 2.0, 1e-6);
@@ -1971,6 +2370,7 @@ public static class GCodeGenerator
             var segBounds = figSegBounds[fi];
             int so        = figSegStart[fi];
             var localResult = new List<VCarveCircle>();
+            bool lastWasRegular = false; // ob localResult[^1] ein regulärer Kreis ist
 
             // Bogenlängen
             var arcLen = new double[nPts + 1];
@@ -2021,16 +2421,16 @@ public static class GCodeGenerator
             }
 
             // Größten einbeschriebenen Kreis ab (ox,oy) in Richtung (nx,ny)
-            // 14 Iterationen reichen für < 0.001 mm Genauigkeit bei maxRw ≤ 16 mm
+            // 10 Iterationen → ~0.015 mm Genauigkeit bei maxRw ≤ 16 mm (reicht für 0.1 mm Schrittweite)
             VCarveCircle? TryPt(double ox, double oy, double nx, double ny, double minRmm = 0.02)
             {
                 double rL = 0.0, rH = maxRw;
-                for (int it = 0; it < 14; it++)
+                for (int it = 0; it < 10; it++)
                 {
                     double rm  = (rL + rH) * 0.5;
                     double ecx = ox + nx * rm, ecy = oy + ny * rm;
                     double r2  = rm * rm;
-                    bool   ok  = fillGeo.FillContains(new System.Windows.Point(ecx, ecy));
+                    bool   ok  = InGlyph(ecx, ecy);
                     if (ok)
                     {
                         int gcx = Math.Clamp((int)((ecx - gridX0) / cellSz), 0, gCols - 1);
@@ -2046,7 +2446,7 @@ public static class GCodeGenerator
                 }
                 if (rL * scale < minRmm) return null;
                 double fcx = ox + nx * rL, fcy = oy + ny * rL;
-                if (minRmm > 0 && !fillGeo.FillContains(new System.Windows.Point(fcx, fcy))) return null;
+                if (minRmm > 0 && !InGlyph(fcx, fcy)) return null;
                 return new VCarveCircle(
                     ctx.Ox + fcx * scale,
                     ctx.Oy + ctx.YOffset + (multiH - fcy) * scale,
@@ -2062,8 +2462,8 @@ public static class GCodeGenerator
                     // ── Regulärer Konturkreis ──────────────────────────────
                     var (px, py, tx, ty) = PolyInterp(arcPos);
                     double lnx = -ty, lny = tx;
-                    bool leftIn  = fillGeo.FillContains(new System.Windows.Point(px + lnx*probe, py + lny*probe));
-                    bool rightIn = fillGeo.FillContains(new System.Windows.Point(px - lnx*probe, py - lny*probe));
+                    bool leftIn  = InGlyph(px + lnx * probe, py + lny * probe);
+                    bool rightIn = InGlyph(px - lnx * probe, py - lny * probe);
                     double cnx = 0, cny = 0;
                     if      ( leftIn && !rightIn) { cnx =  lnx; cny =  lny; }
                     else if (!leftIn &&  rightIn) { cnx = -lnx; cny = -lny; }
@@ -2071,7 +2471,7 @@ public static class GCodeGenerator
                     if (cnx != 0 || cny != 0)
                     {
                         double rLo = 0.0, rHi = maxRw;
-                        for (int iter = 0; iter < 14; iter++)
+                        for (int iter = 0; iter < 10; iter++)
                         {
                             double mid  = (rLo + rHi) * 0.5;
                             double cx   = px + cnx * mid, cy = py + cny * mid;
@@ -2092,31 +2492,108 @@ public static class GCodeGenerator
                         if (rLo * scale >= 0.05)
                         {
                             double wpfCx = px + cnx * rLo, wpfCy = py + cny * rLo;
-                            if (fillGeo.FillContains(new System.Windows.Point(wpfCx, wpfCy)))
+                            // Auf konvexen Kurven kann der Kreismittelpunkt rückwärts
+                            // wandern. Nur gegen den vorherigen REGULÄREN Kreis prüfen —
+                            // Fächer-Kreise liegen radial zur Ecke und würden sonst
+                            // fälschlich als Referenz dienen.
+                            bool backward = false;
+                            if (lastWasRegular && localResult.Count > 0 && localResult[^1].FigIdx == fi)
+                            {
+                                var prev = localResult[^1];
+                                double prevWpfCx = (prev.X - ctx.Ox) / scale;
+                                double prevWpfCy = multiH - (prev.Y - ctx.Oy - ctx.YOffset) / scale;
+                                backward = (wpfCx - prevWpfCx) * tx + (wpfCy - prevWpfCy) * ty
+                                           < -stepW * 1.5;
+                            }
+                            if (!backward && InGlyph(wpfCx, wpfCy))
+                            {
                                 localResult.Add(new VCarveCircle(
                                     ctx.Ox + wpfCx * scale,
                                     ctx.Oy + ctx.YOffset + (multiH - wpfCy) * scale,
                                     rLo * scale, fi));
+                                lastWasRegular = true;
+                            }
                         }
                     }
                     continue;
                 }
 
-                // ── Ecken-Kreise (nur konkave Ecken) ──────────────────────
+                // ── Ecken-Kreise (konkav + konvex) ────────────────────────
                 int  ckP  = (ck - 1 + nPts) % nPts;
                 var  csP  = segsArr[so + ckP];
                 var  csC  = segsArr[so + ck];
                 double evx = pts[ck].x, evy = pts[ck].y;
                 bool isConcave = csP.tsx * csC.tsy - csP.tsy * csC.tsx < 0;
-                if (!isConcave) continue;
 
+                double a1 = Math.Atan2(csP.iny, csP.inx);
+                double a2 = Math.Atan2(csC.iny, csC.inx);
+                double da = a2 - a1;
+                while (da >  Math.PI) da -= 2 * Math.PI;
+                while (da <= -Math.PI) da += 2 * Math.PI;
+
+                if (isConcave)
                 {
-                    double a1 = Math.Atan2(csP.iny, csP.inx);
-                    double a2 = Math.Atan2(csC.iny, csC.inx);
-                    double da = a2 - a1;
-                    while (da >  Math.PI) da -= 2 * Math.PI;
-                    while (da <= -Math.PI) da += 2 * Math.PI;
-                    int ns = Math.Max(1, (int)Math.Ceiling(Math.Abs(da) / cornerStepRad));
+                    // Konkave Ecke: einbeschriebener Kreis entlang der Bisektrix beider Einwärts-Normalen.
+                    // TryPt kann hier nicht verwendet werden — die anliegenden Segmente (die durch den
+                    // Eckpunkt laufen) blockieren sonst den Binär-Such-Algorithmus auf Radius≈0.
+                    // Stattdessen: Mittelpunkt = Eckpunkt + Bisektrix * (R / sinα), wobei sinα der
+                    // Sinus des Winkels zwischen Bisektrix und jeder Einwärts-Normale ist.
+                    double nbX = csP.inx + csC.inx, nbY = csP.iny + csC.iny;
+                    double nbLen = Math.Sqrt(nbX * nbX + nbY * nbY);
+                    if (nbLen > 1e-10)
+                    {
+                        nbX /= nbLen; nbY /= nbLen;
+                        // sin(Winkel Bisektrix → n1) = |nb × n1|
+                        double sinA = Math.Abs(nbX * csP.iny - nbY * csP.inx);
+                        if (sinA > 1e-6)
+                        {
+                            // Binärsuche: grösstes R, sodass Kreis (Mittelpunkt = V + nb*(R/sinA), Radius R)
+                            // nicht gegen nicht-anliegende Segmente verstösst und innerhalb des Glyphs liegt.
+                            double rL = 0, rH = maxRw;
+                            for (int it = 0; it < 12; it++)
+                            {
+                                double rm  = (rL + rH) * 0.5;
+                                double d   = rm / sinA;
+                                double ecx = evx + nbX * d, ecy = evy + nbY * d;
+                                bool   ok  = InGlyph(ecx, ecy);
+                                if (ok)
+                                {
+                                    double rm2 = rm * rm;
+                                    int gcx2 = Math.Clamp((int)((ecx - gridX0) / cellSz), 0, gCols - 1);
+                                    int gcy2 = Math.Clamp((int)((ecy - gridY0) / cellSz), 0, gRows - 1);
+                                    foreach (var si in gridCells[gcy2 * gCols + gcx2])
+                                    {
+                                        var sg = segsArr[si];
+                                        // Anliegende Segmente ausschliessen (laufen durch den Eckpunkt)
+                                        if (sg.figIdx == fi &&
+                                            ((Math.Abs(sg.ax - evx) < 1e-9 && Math.Abs(sg.ay - evy) < 1e-9) ||
+                                             (Math.Abs(sg.bx - evx) < 1e-9 && Math.Abs(sg.by - evy) < 1e-9)))
+                                            continue;
+                                        if (PtSegDist2(ecx, ecy, sg.ax, sg.ay, sg.bx, sg.by) < rm2 - 1e-9)
+                                        { ok = false; break; }
+                                    }
+                                }
+                                if (ok) rL = rm; else rH = rm;
+                            }
+                            if (rL * scale >= 0.01)
+                            {
+                                double d   = rL / sinA;
+                                double fcx = evx + nbX * d, fcy = evy + nbY * d;
+                                localResult.Add(new VCarveCircle(
+                                    ctx.Ox + fcx * scale,
+                                    ctx.Oy + ctx.YOffset + (multiH - fcy) * scale,
+                                    rL * scale, fi));
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Konvexe Ecke: nur bei echten Ecken (≥ ~25°).
+                    if (Math.Abs(da) < 0.44) { lastWasRegular = false; continue; }
+
+                    // Fächer a1 → a2
+                    int ns = Math.Max(4, (int)Math.Ceiling(Math.Abs(da) / cornerStepRad));
                     for (int s = 0; s <= ns; s++)
                     {
                         double a = a1 + da * s / ns;
@@ -2124,6 +2601,8 @@ public static class GCodeGenerator
                         if (c != null) localResult.Add(c);
                     }
                 }
+                // Fächer-Kreise nicht als Referenz für den Rückwärts-Check verwenden
+                lastWasRegular = false;
             }
 
             resultsPerFig[fi] = localResult;
@@ -2134,205 +2613,6 @@ public static class GCodeGenerator
             if (r != null) result.AddRange(r);
 
         return result;
-    }
-
-    // ── V-Carve Raster: Distanzfeld-Ansatz ───────────────────────────────
-    //
-    // Statt die Medialachse über Binary-Search auf Konturpunkten zu approximieren
-    // (was an Ecken systematisch Lücken erzeugt), wird ein feines Raster über
-    // das gesamte Buchstaben-Innere gelegt:
-    //
-    //   Z(px, py) = –dist(px,py, nächste Kontur) / tan(Schneidenwinkel/2)
-    //
-    // Vorteile:
-    //  • Alle Ecken (innen + aussen) werden automatisch korrekt gefräst
-    //  • Kein Medialachsen-Lücken-Problem
-    //  • Einfach, schnell, auflösungssteuerbar
-    //
-    // Toolpath: Boustrophedon (Schlängellinien) in Y-Richtung
-
-    public static string VCarveRaster(GraviereParams p, double workW, double workH)
-    {
-        const double resMm = 0.1;   // Rasterauflösung in mm (≈ 0.1 mm)
-
-        var ctx = BuildTextGeo(p, workW, workH);
-        if (ctx.Flat.Bounds.IsEmpty) return string.Empty;
-
-        double scale  = ctx.Scale;
-        double multiH = ctx.MultiH;
-        double resWpf = resMm / scale;   // Schrittweite in WPF-Einheiten
-
-        double halfRad = p.SchneidenWinkel * 0.5 * Math.PI / 180.0;
-        double tanHalf = Math.Tan(halfRad);
-        int    zFeed   = Math.Max(1, (int)(p.Vorschub * 0.3));
-        double maxRmm  = p.SchneidenWinkel < 179.9
-            ? p.ZTiefe * Math.Tan(halfRad) : p.FraeserD * 0.5;
-        double maxRwpf = maxRmm / scale;
-
-        // ── Randkantensegmente aller Figuren sammeln ──────────────────────
-        // (Werden auch für den Scan-Line-Innen-Test verwendet – kein FillContains nötig)
-        var segs = new List<(double ax, double ay, double bx, double by)>();
-        foreach (var fig in ctx.Flat.Figures.Where(f => f.IsClosed))
-        {
-            var pts = new List<(double x, double y)>();
-            pts.Add((fig.StartPoint.X, fig.StartPoint.Y));
-            foreach (var seg in fig.Segments)
-            {
-                if (seg is System.Windows.Media.PolyLineSegment pls)
-                    foreach (var pt in pls.Points) pts.Add((pt.X, pt.Y));
-                else if (seg is System.Windows.Media.LineSegment ls)
-                    pts.Add((ls.Point.X, ls.Point.Y));
-            }
-            for (int k = 0; k < pts.Count; k++)
-            {
-                int k2 = (k + 1) % pts.Count;
-                segs.Add((pts[k].x, pts[k].y, pts[k2].x, pts[k2].y));
-            }
-        }
-        if (segs.Count == 0) return string.Empty;
-        var segsArr = segs.ToArray();
-
-        // ── Räumlicher Bucket-Grid für schnelle Abstandsabfragen ─────────
-        var   b  = ctx.Flat.Bounds;
-        int   gN = Math.Max(2, (int)Math.Sqrt(segsArr.Length / 2.0));
-        double gW = b.Width  / gN;
-        double gH = b.Height / gN;
-        int   bucketCount = gN * gN;
-        var   buckets = new List<int>[bucketCount];
-        for (int i = 0; i < bucketCount; i++) buckets[i] = [];
-
-        double padWpf = maxRwpf + resWpf;
-        for (int si = 0; si < segsArr.Length; si++)
-        {
-            var (ax, ay, bx, by) = segsArr[si];
-            int c0 = Math.Max(0,    (int)((Math.Min(ax, bx) - b.Left - padWpf) / gW));
-            int c1 = Math.Min(gN-1, (int)((Math.Max(ax, bx) - b.Left + padWpf) / gW));
-            int r0 = Math.Max(0,    (int)((Math.Min(ay, by) - b.Top  - padWpf) / gH));
-            int r1 = Math.Min(gN-1, (int)((Math.Max(ay, by) - b.Top  + padWpf) / gH));
-            for (int gx = c0; gx <= c1; gx++)
-            for (int gy = r0; gy <= r1; gy++)
-                buckets[gy * gN + gx].Add(si);
-        }
-
-        // Suchradius in Bucket-Zellen
-        double minCell  = Math.Min(gW, gH);
-        int    searchR  = (int)Math.Ceiling(maxRwpf / minCell) + 1;
-
-        // Minimaler Abstand vom Punkt (wx,wy) zu einem Randkantensegment.
-        // Sucht in expandierenden Ringen – bricht ab wenn der nächste Ring
-        // den aktuellen Bestwert nicht mehr verbessern kann.
-        double BoundaryDist(double wx, double wy)
-        {
-            double minD2 = maxRwpf * maxRwpf * 1.05;   // Sentinel: > maxR → Z = –ZTiefe
-            int    px    = Math.Clamp((int)((wx - b.Left) / gW), 0, gN - 1);
-            int    py    = Math.Clamp((int)((wy - b.Top)  / gH), 0, gN - 1);
-
-            for (int ring = 0; ring <= searchR; ring++)
-            {
-                // Frühzeitiger Abbruch: alle weiteren Ringe können minD2 nicht verbessern
-                double ringEdgeDist = ring == 0 ? 0.0 : (ring - 1) * minCell;
-                if (ring > 0 && ringEdgeDist * ringEdgeDist > minD2) break;
-
-                for (int dgx = -ring; dgx <= ring; dgx++)
-                for (int dgy = -ring; dgy <= ring; dgy++)
-                {
-                    if (Math.Abs(dgx) != ring && Math.Abs(dgy) != ring) continue; // nur äusserer Ring
-                    int gxi = px + dgx, gyi = py + dgy;
-                    if ((uint)gxi >= (uint)gN || (uint)gyi >= (uint)gN) continue;
-                    foreach (int si in buckets[gyi * gN + gxi])
-                    {
-                        var (ax, ay, bx2, by2) = segsArr[si];
-                        double d2 = PtSegDist2(wx, wy, ax, ay, bx2, by2);
-                        if (d2 < minD2) minD2 = d2;
-                    }
-                }
-            }
-            return Math.Sqrt(minD2);
-        }
-
-        // ── Raster-Dimensionen ─────────────────────────────────────────────
-        int nx = Math.Max(1, (int)Math.Ceiling(b.Width  / resWpf) + 1);
-        int ny = Math.Max(1, (int)Math.Ceiling(b.Height / resWpf) + 1);
-
-        // ── G-Code-Ausgabe (Boustrophedon in Y) ───────────────────────────
-        var sb = new StringBuilder();
-        sb.AppendLine("(V-Carve Raster)");
-        sb.AppendLine($"(Text: {p.Text.Replace('\n', ' ')})");
-        sb.AppendLine($"(Schrift: {p.FontFamily}, Höhe: {p.FontSizeMm:F2} mm)");
-        sb.AppendLine($"(Stichel: Winkel={p.SchneidenWinkel}°, D={p.FraeserD:F2} mm)");
-        sb.AppendLine($"(Max. Tiefe: {p.ZTiefe:F3} mm, Raster: {resMm:F2} mm)");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE={F(p.SchneidenWinkel)})");
-        sb.AppendLine();
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
-        sb.AppendLine(Sz());
-
-        bool inCut = false;
-        var  rowXs = new List<double>(segsArr.Length);
-
-        for (int row = 0; row < ny; row++)
-        {
-            double wy  = b.Top + row * resWpf;
-            bool   ltr = (row & 1) == 0;
-
-            // Scan-Line-Innen-Test: X-Schnittpunkte aller Segmente bei y=wy
-            rowXs.Clear();
-            foreach (var (ax, ay, bx2, by2) in segsArr)
-            {
-                if ((ay <= wy && by2 > wy) || (by2 <= wy && ay > wy))
-                {
-                    double t = (wy - ay) / (by2 - ay);
-                    rowXs.Add(ax + t * (bx2 - ax));
-                }
-            }
-            rowXs.Sort();
-            if (rowXs.Count == 0)
-            {
-                if (inCut) { sb.AppendLine(Sz()); inCut = false; }
-                continue;
-            }
-
-            // Spalten in Boustrophedon-Reihenfolge; Inside-Status per Zeiger toggeln
-            bool inside = false;
-            int  xsIdx  = ltr ? 0 : rowXs.Count - 1;
-
-            for (int ci = 0; ci < nx; ci++)
-            {
-                int    col = ltr ? ci : (nx - 1 - ci);
-                double wx  = b.Left + col * resWpf;
-
-                if (ltr) { while (xsIdx < rowXs.Count && rowXs[xsIdx] <= wx) { xsIdx++; inside = !inside; } }
-                else     { while (xsIdx >= 0           && rowXs[xsIdx] >= wx) { xsIdx--; inside = !inside; } }
-
-                if (!inside)
-                {
-                    if (inCut) { sb.AppendLine(Sz()); inCut = false; }
-                    continue;
-                }
-
-                double dist = BoundaryDist(wx, wy);
-                double rMm  = Math.Min(dist * scale, maxRmm);
-                double z    = -(rMm / tanHalf);
-                if (z < -p.ZTiefe) z = -p.ZTiefe;
-
-                double cncX = ctx.Ox + wx * scale;
-                double cncY = ctx.Oy + ctx.YOffset + (multiH - wy) * scale;
-
-                if (!inCut)
-                {
-                    sb.AppendLine($"G00 X{F(cncX)} Y{F(cncY)}");
-                    sb.AppendLine($"G01 Z{F(z)} F{zFeed}");
-                    inCut = true;
-                }
-                else
-                {
-                    sb.AppendLine($"G01 X{F(cncX)} Y{F(cncY)} Z{F(z)} F{(int)p.Vorschub}");
-                }
-            }
-        }
-
-        if (inCut) sb.AppendLine(Sz());
-        sb.AppendLine("M05");
-        return sb.ToString();
     }
 
     // ── V-Carve G-Code ───────────────────────────────────────────────────
@@ -2359,104 +2639,99 @@ public static class GCodeGenerator
             int j  = i;
             while (j < raw.Count && raw[j].FigIdx == fi) j++;
 
-            // 1. Duplikate entfernen
+            // 1. Konsekutives Dedup (original): entfernt unmittelbar aufeinanderfolgende Duplikate.
+            //    Globales Dedup wurde verworfen – es entfernte Kreuzungskreise die für
+            //    die Verknüpfung von Medialachsen-Ästen gebraucht werden.
             var dp = new List<VCarveCircle> { raw[i] };
             for (int k = i + 1; k < j; k++)
             {
                 var prev = dp[^1];
-                double dx = raw[k].X - prev.X, dy = raw[k].Y - prev.Y;
-                if (dx * dx + dy * dy >= dedupSq)
+                double ddx = raw[k].X - prev.X, ddy = raw[k].Y - prev.Y;
+                if (ddx * ddx + ddy * ddy >= dedupSq)
                     dp.Add(raw[k]);
             }
 
-            if (dp.Count == 1) { result.Add(dp[0]); i = j; continue; }
+            if (dp.Count == 1) { result.Add(dp[0] with { FigIdx = fi * 10000 }); i = j; continue; }
 
-            // 2. Kumulative Bogenlänge
-            var cum = new double[dp.Count];
+            // 1b. Ast-Segmentierung: Lücken > splitGap trennen verschiedene Medialachsen-Äste.
+            //     Jedes Segment wird separat resamplet (verhindert lineare Interpolation über Äste).
+            //     Schwellwert gross genug um Eckkreis-Sequenzen (< 1mm) nicht zu trennen.
+            double splitGapSq = 3.0 * 3.0;
+            var segs2   = new List<List<VCarveCircle>>();
+            var curSeg2 = new List<VCarveCircle> { dp[0] };
             for (int k = 1; k < dp.Count; k++)
             {
-                double dx = dp[k].X - dp[k - 1].X, dy = dp[k].Y - dp[k - 1].Y;
-                cum[k] = cum[k - 1] + Math.Sqrt(dx * dx + dy * dy);
+                double ddx = dp[k].X - dp[k - 1].X, ddy = dp[k].Y - dp[k - 1].Y;
+                if (ddx * ddx + ddy * ddy > splitGapSq) { segs2.Add(curSeg2); curSeg2 = []; }
+                curSeg2.Add(dp[k]);
             }
-            double total = cum[^1];
-            if (total < 1e-9) { result.Add(dp[0]); i = j; continue; }
+            segs2.Add(curSeg2);
 
-            // 3. Gleichmässige Neuabtastung
-            int nSamples = Math.Max(2, (int)Math.Round(total / spacingMm) + 1);
-            var figRes = new List<VCarveCircle>(nSamples);
-            int seg = 0;
-            for (int s = 0; s < nSamples; s++)
+            int subFi = fi * 10000;
+            foreach (var dpSeg in segs2)
             {
-                double pos = s * total / (nSamples - 1);
-                while (seg < dp.Count - 2 && cum[seg + 1] <= pos) seg++;
-                double segLen = cum[seg + 1] - cum[seg];
-                double t      = segLen > 1e-12 ? (pos - cum[seg]) / segLen : 0.0;
-                var a = dp[seg]; var b = dp[seg + 1];
-                figRes.Add(new VCarveCircle(
-                    a.X + t * (b.X - a.X),
-                    a.Y + t * (b.Y - a.Y),
-                    a.R + t * (b.R - a.R),
-                    fi));
-            }
+                int segFi = subFi++;
+                if (dpSeg.Count == 1) { result.Add(dpSeg[0] with { FigIdx = segFi }); continue; }
 
-            // 4. Spitzentoleranz: Umkehrpunkte kollabieren
-            // Wenn die Pfadrichtung umkehrt (Skalarprodukt < 0), werden alle
-            // folgenden Punkte innerhalb von simplifyMm auf den tiefsten (grössten R) reduziert.
-            if (simplifyMm > 0 && figRes.Count >= 3)
-            {
-                double simpSq = simplifyMm * simplifyMm;
-                var simp = new List<VCarveCircle>(figRes.Count);
-                int k = 0;
-                while (k < figRes.Count)
+                // 2. Kumulative Bogenlänge
+                var cum = new double[dpSeg.Count];
+                for (int k = 1; k < dpSeg.Count; k++)
                 {
-                    simp.Add(figRes[k]);
-                    if (simp.Count >= 2 && k + 1 < figRes.Count)
-                    {
-                        var p0 = simp[^2];
-                        var p1 = simp[^1];
-                        var p2 = figRes[k + 1];
-                        double d1x = p1.X - p0.X, d1y = p1.Y - p0.Y;
-                        double d2x = p2.X - p1.X, d2y = p2.Y - p1.Y;
-                        double dot    = d1x * d2x + d1y * d2y;
-                        double len1sq = d1x * d1x + d1y * d1y;
-                        double len2sq = d2x * d2x + d2y * d2y;
-                        if (dot < 0 && len1sq > 1e-12 && len2sq > 1e-12)
-                        {
-                            // Richtungsumkehr: tiefsten Punkt in der Toleranzzone behalten
-                            var best = p1;
-                            int m = k + 1;
-                            while (m < figRes.Count)
-                            {
-                                double dx = figRes[m].X - p1.X, dy = figRes[m].Y - p1.Y;
-                                if (dx * dx + dy * dy > simpSq) break;
-                                if (figRes[m].R > best.R) best = figRes[m];
-                                m++;
-                            }
-                            if (m > k + 1)
-                            {
-                                simp[^1] = best;
-                                k = m;
-                                continue;
-                            }
-                        }
-                    }
-                    k++;
+                    double dx = dpSeg[k].X - dpSeg[k - 1].X, dy = dpSeg[k].Y - dpSeg[k - 1].Y;
+                    cum[k] = cum[k - 1] + Math.Sqrt(dx * dx + dy * dy);
                 }
-                figRes = simp;
-            }
+                double total = cum[^1];
+                if (total < 1e-9) { result.Add(dpSeg[0] with { FigIdx = segFi }); continue; }
 
-            result.AddRange(figRes);
+                // 3. Gleichmässige Neuabtastung (deaktiviert – nur berechnete Kreise verwenden)
+                var figRes = dpSeg.Select(c => c with { FigIdx = segFi }).ToList();
+
+                // 4. (Rückwärtsschritte werden bereits bei der Erzeugung in ComputeVCarveCircles
+                // gefiltert — kein Post-Processing nötig.)
+
+                result.AddRange(figRes);
+            }
             i = j;
+        }
+        return result;
+    }
+
+    // ── V-Carve: G01/G00-Markierung (Erstellungsreihenfolge beibehalten) ────────────────────
+    //
+    // Die Kreise kommen aus ResampleVCarveCircles bereits in Bogenreihenfolge.
+    // Diese Funktion vergibt nur neue FigIdx-Werte (→ G00-Rückzug im G-Code),
+    // wenn die Lücke zwischen zwei aufeinanderfolgenden Kreisen > connectMm ist.
+    // Kein Umsortieren – die Erstellungsreihenfolge wird 1:1 beibehalten.
+    internal static List<VCarveCircle> RouteVCarveSegments(
+        List<VCarveCircle> flat, double connectMm = 0.5)
+    {
+        if (flat.Count < 2) return flat;
+
+        double cSq    = connectMm * connectMm;
+        var    result = new List<VCarveCircle>(flat.Count);
+        int    newFi  = 0;
+
+        result.Add(flat[0] with { FigIdx = newFi });
+        for (int i = 1; i < flat.Count; i++)
+        {
+            var    prev = flat[i - 1];
+            var    curr = flat[i];
+            double dx   = curr.X - prev.X, dy = curr.Y - prev.Y;
+            if (dx * dx + dy * dy > cSq)
+                newFi++;
+            result.Add(curr with { FigIdx = newFi });
         }
         return result;
     }
 
     public static string VCarve(GraviereParams p, double workW, double workH)
     {
-        double step    = Math.Clamp(p.FontSizeMm / 200.0, 0.025, 0.1);
-        var circles = ResampleVCarveCircles(
-                          ComputeVCarveCircles(p, workW, workH, step),
-                          simplifyMm: p.VereinfachungMm);
+        double step    = p.SampleStepMm > 0 ? p.SampleStepMm : Math.Clamp(p.FontSizeMm / 300.0, 0.02, 0.1);
+        var circles = RouteVCarveSegments(
+                          ResampleVCarveCircles(
+                              ComputeVCarveCircles(p, workW, workH, step),
+                              spacingMm:  step,
+                              simplifyMm: Math.Max(0.1, p.VereinfachungMm)));
         if (circles.Count == 0) return string.Empty;
 
         double halfRad = p.SchneidenWinkel * 0.5 * Math.PI / 180.0;
@@ -2474,7 +2749,8 @@ public static class GCodeGenerator
         sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
 
-        int prevFi = -1;
+        int    prevFi = -1;
+        double lastX  = 0, lastY = 0;
         foreach (var c in circles)
         {
             double z = -(c.R / tanHalf);
@@ -2482,8 +2758,12 @@ public static class GCodeGenerator
 
             if (c.FigIdx != prevFi)
             {
-                // Neue Figur: Rückzug (falls nötig) + Eilgang zum Startpunkt
-                if (prevFi >= 0) sb.AppendLine(Sz());
+                // Neue Figur: Eckpunkt auf Z=0 fahren, dann Rückzug + Eilgang
+                if (prevFi >= 0)
+                {
+                    sb.AppendLine($"G01 X{F(lastX)} Y{F(lastY)} Z0 F{zFeed}");
+                    sb.AppendLine(Sz());
+                }
                 sb.AppendLine();
                 sb.AppendLine($"G00 X{F(c.X)} Y{F(c.Y)}");
                 sb.AppendLine($"G01 Z{F(z)} F{zFeed}");
@@ -2494,9 +2774,12 @@ public static class GCodeGenerator
                 // Gleiche Figur: kontinuierlicher Schnitt, variable Tiefe, KEIN Rückzug
                 sb.AppendLine($"G01 X{F(c.X)} Y{F(c.Y)} Z{F(z)} F{(int)p.Vorschub}");
             }
+            lastX = c.X;
+            lastY = c.Y;
         }
 
         sb.AppendLine();
+        sb.AppendLine($"G01 X{F(lastX)} Y{F(lastY)} Z0 F{zFeed}");
         sb.AppendLine(Sz());
         sb.AppendLine("M05");
         return sb.ToString();

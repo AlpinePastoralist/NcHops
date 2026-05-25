@@ -13,6 +13,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="140"/>
@@ -49,7 +50,11 @@
         <Label Grid.Row="6" Grid.Column="0" Content="Z:" VerticalAlignment="Center"/>
         <TextBox Grid.Row="6" Grid.Column="1" x:Name="TxtZ" VerticalAlignment="Center"/>
 
-        <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <CheckBox Grid.Row="7" Grid.ColumnSpan="2" x:Name="ChkMehrfach"
+                  Content="Mehrfachzustellung (Z-Schritte des Fräsers)"
+                  Margin="0,6,0,0" VerticalAlignment="Center"/>
+
+        <StackPanel Grid.Row="8" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="OK" Width="75" Margin="0,0,8,0" Click="OnOk" IsDefault="True"/>
             <Button Content="Abbrechen" Width="85" Click="OnCancel"/>
         </StackPanel>

@@ -9,7 +9,7 @@ public partial class PfadPunktDialog : Window
     public PfadPunktParams? Result { get; private set; }
 
     public PfadPunktDialog(string title, double defaultZ, bool isStart = false, PfadPunktParams? prefill = null,
-                           IReadOnlyList<Werkzeug>? werkzeuge = null)
+                           IReadOnlyList<Werkzeug>? werkzeuge = null, bool isBogen = false)
     {
         InitializeComponent();
         Title = title;
@@ -21,11 +21,18 @@ public partial class PfadPunktDialog : Window
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         if (!isStart)
         {
-            LblZ.Visibility           = Visibility.Collapsed;
-            TxtZ.Visibility           = Visibility.Collapsed;
-            LblRadiuskorrektur.Visibility = Visibility.Collapsed;
-            CbRadiuskorrektur.Visibility  = Visibility.Collapsed;
-            RbLetzterPunkt.Visibility     = Visibility.Visible;
+            LblZ.Visibility               = Visibility.Collapsed;
+            TxtZ.Visibility               = Visibility.Collapsed;
+            LblRadiuskorrektur.Visibility  = Visibility.Collapsed;
+            CbRadiuskorrektur.Visibility   = Visibility.Collapsed;
+            RbLetzterPunkt.Visibility      = Visibility.Visible;
+        }
+        if (isBogen)
+        {
+            LblBogenModus.Visibility = Visibility.Visible;
+            CbBogenModus.Visibility  = Visibility.Visible;
+            LblXMid.Visibility       = Visibility.Visible;
+            TxtXMid.Visibility       = Visibility.Visible;
         }
         if (prefill != null)
         {
@@ -39,14 +46,52 @@ public partial class PfadPunktDialog : Window
                 _        => 1
             };
             SetBezug(prefill.Bezugspunkt);
+            if (isBogen)
+            {
+                // Modus setzen — triggert OnBogenModusChanged → passt Labels/Sichtbarkeit an
+                CbBogenModus.SelectedIndex = prefill.BogenModus switch
+                {
+                    "Radius"    => 1,
+                    "Pfeilhöhe" => 2,
+                    _           => 0
+                };
+                TxtXMid.Text = prefill.XMid.ToString(inv);
+                TxtYMid.Text = prefill.YMid.ToString(inv);
+            }
         }
         else
         {
             TxtZ.Text = defaultZ.ToString(inv);
             if (!isStart)
                 RbLetzterPunkt.IsChecked = true;
+            if (isBogen)
+                CbBogenModus.SelectedIndex = 2; // Pfeilhöhe als Standard
         }
     }
+
+    private void OnBogenModusChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (CbBogenModus == null || LblXMid == null) return;
+        string modus = GetBogenModus();
+        bool isMitte = modus == "Bogenmitte";
+        LblXMid.Content     = modus switch
+        {
+            "Radius"    => "Radius (mm):",
+            "Pfeilhöhe" => "Pfeilhöhe (mm):",
+            _           => "Bogen X-Mitte:"
+        };
+        // Bezugspunkt nur für Bogenmitte relevant (Radius/Pfeilhöhe sind absolute Werte)
+        LblBezugHinweis.Visibility = isMitte ? Visibility.Collapsed : Visibility.Visible;
+        LblYMid.Visibility  = isMitte ? Visibility.Visible : Visibility.Collapsed;
+        TxtYMid.Visibility  = isMitte ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private string GetBogenModus() => CbBogenModus.SelectedIndex switch
+    {
+        1 => "Radius",
+        2 => "Pfeilhöhe",
+        _ => "Bogenmitte"
+    };
 
     private void SetBezug(string bezug)
     {
@@ -79,7 +124,9 @@ public partial class PfadPunktDialog : Window
     private void OnOk(object sender, RoutedEventArgs e)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        bool vis = TxtZ.Visibility == Visibility.Visible;
+        bool vis    = TxtZ.Visibility  == Visibility.Visible;
+        bool hasMid = TxtXMid.Visibility == Visibility.Visible;
+        bool isMitte = GetBogenModus() == "Bogenmitte";
         var w = CbWerkzeug.SelectedItem as Werkzeug;
         string radiuskorrektur = CbRadiuskorrektur.SelectedIndex switch { 0 => "Links", 2 => "Rechts", _ => "Mittig" };
         Result = new PfadPunktParams(
@@ -94,7 +141,10 @@ public partial class PfadPunktDialog : Window
             Radiuskorrektur: vis ? radiuskorrektur : "Mittig",
             Bezugspunkt:     GetBezug(),
             Typ:             PfadPunktTyp.Start, // wird vom Aufrufer überschrieben
-            Eintauchwinkel:  w?.Eintauchwinkel ?? 90
+            Eintauchwinkel:  w?.Eintauchwinkel ?? 90,
+            XMid:            hasMid ? double.Parse(TxtXMid.Text, inv) : 0,
+            YMid:            hasMid && isMitte ? double.Parse(TxtYMid.Text, inv) : 0,
+            BogenModus:      hasMid ? GetBogenModus() : "Bogenmitte"
         );
         DialogResult = true;
     }
@@ -102,10 +152,12 @@ public partial class PfadPunktDialog : Window
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;
 }
 
-public enum PfadPunktTyp { Start, Punkt }
+public enum PfadPunktTyp { Start, Linie, Bogen }
 
 public record PfadPunktParams(
     double XRel, double YRel, double ZTiefe, double ZZustellung,
     double FraeserD, double Drehzahl, double Vorschub, double VorschubFz,
     string Radiuskorrektur, string Bezugspunkt, PfadPunktTyp Typ,
-    double Verrundung = 0, double Eintauchwinkel = 90);
+    double Verrundung = 0, double Eintauchwinkel = 90,
+    double XMid = 0, double YMid = 0,
+    string BogenModus = "Pfeilhöhe"); // "Bogenmitte" | "Radius" | "Pfeilhöhe"

@@ -27,6 +27,7 @@ public partial class UmfahrenDialog : Window
                 if (item.Content.ToString() == prefill.StartSide) { CbStartSide.SelectedItem = item; break; }
             foreach (System.Windows.Controls.ComboBoxItem item in CbDirection.Items)
                 if (item.Content.ToString() == prefill.Direction) { CbDirection.SelectedItem = item; break; }
+            ChkMehrfach.IsChecked = prefill.MehrfachZustellung;
         }
         else
         {
@@ -38,6 +39,7 @@ public partial class UmfahrenDialog : Window
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         var w = CbWerkzeug.SelectedItem as Werkzeug;
+        bool mehrfach = ChkMehrfach.IsChecked == true;
         Result = new UmfahrenParams(
             A: double.Parse(TxtA.Text, inv),
             StartSide: (CbStartSide.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "oben",
@@ -47,7 +49,9 @@ public partial class UmfahrenDialog : Window
             Diameter:    w?.Durchmesser ?? 10,
             Drehzahl:    w?.Drehzahl ?? 18000,
             VorschubFxy: w?.VorschubFxy ?? 3000,
-            VorschubFz:  w?.VorschubFz ?? 500
+            VorschubFz:  w?.VorschubFz ?? 500,
+            MehrfachZustellung: mehrfach,
+            ZZustellung: mehrfach ? (w?.ZZustellung ?? 0) : 0
         );
         DialogResult = true;
     }
@@ -56,4 +60,5 @@ public partial class UmfahrenDialog : Window
 }
 
 public record UmfahrenParams(double A, string StartSide, string Direction, double Radius, double Z,
-    double Diameter, double Drehzahl, double VorschubFxy, double VorschubFz);
+    double Diameter, double Drehzahl, double VorschubFxy, double VorschubFz,
+    bool MehrfachZustellung = false, double ZZustellung = 0);

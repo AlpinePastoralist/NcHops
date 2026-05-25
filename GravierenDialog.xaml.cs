@@ -21,8 +21,9 @@ public record GraviereParams(
     string Ausrichtung    = "Links",    // "Links" | "Mitte" | "Rechts"
     bool   IsVCarve        = false,     // true = V-Carve (Medialachse), false = Umriss
     bool   IsTasche        = false,     // true = Tasche pro Buchstabe
-    bool   IsVCarveRaster  = false,     // true = V-Carve (Raster-Distanzfeld)
-    double VereinfachungMm = 1.0);      // Spitzentoleranz: Umkehrpunkte kollabieren (0 = aus)
+    double VereinfachungMm = 1.0,       // Spitzentoleranz: Umkehrpunkte kollabieren (0 = aus)
+    double SampleStepMm    = 0,         // Abtastschrittweite mm (0 = auto: FontSizeMm/300, clamp 0.02–0.1)
+    int    WerkzeugNr      = 0);        // Werkzeug-Nr aus Werkzeugliste (0 = keines)
 
 public partial class GravierenDialog : Window
 {
@@ -66,7 +67,7 @@ public partial class GravierenDialog : Window
             TxtX.Text      = "0";
             TxtY.Text      = "0";
             TxtBreite.Text = workX > 0 ? workX.ToString(inv) : "100";
-            TxtHoehe.Text  = workY > 0 ? workY.ToString(inv) : "100";
+            TxtHoehe.Text  = "30";
         }
     }
 
@@ -118,10 +119,17 @@ public partial class GravierenDialog : Window
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-
         var w = CbWerkzeug.SelectedItem as Werkzeug;
 
         // Text, Schriftart und Ausrichtung werden in den Eigenschaften gesetzt
+        var bezug = GetBezug();
+        var ausrichtung = bezug switch
+        {
+            _ when bezug.Contains("Rechts")                      => "Rechts",
+            "Mitte" or "Oben Mitte" or "Unten Mitte"             => "Mitte",
+            _                                                     => "Links"
+        };
+
         Result = new GraviereParams(
             Text:            "Text",
             FontFamily:      "Arial",
@@ -135,7 +143,8 @@ public partial class GravierenDialog : Window
             FraeserD:        w?.Durchmesser     ?? 1.0,
             Vorschub:        w?.VorschubFxy ?? 800,
             Drehzahl:        w?.Drehzahl    ?? 20000,
-            Bezugspunkt:     GetBezug());
+            Bezugspunkt:     bezug,
+            Ausrichtung:     ausrichtung);
 
         DialogResult = true;
     }

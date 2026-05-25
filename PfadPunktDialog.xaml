@@ -64,6 +64,10 @@
                 <RowDefinition Height="34"/>
                 <RowDefinition Height="34"/>
                 <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <Label Grid.Row="0" Grid.Column="0" Content="X relativ:"  VerticalAlignment="Center"/>
@@ -82,6 +86,35 @@
                 <ComboBoxItem Content="Mittig"/>
                 <ComboBoxItem Content="Rechts (G42)"/>
             </ComboBox>
+
+            <!-- Bogen-Modus-Auswahl -->
+            <Label Grid.Row="4" Grid.Column="0" x:Name="LblBogenModus" Content="Bogen-Art:"
+                   VerticalAlignment="Center" Visibility="Collapsed"/>
+            <ComboBox Grid.Row="4" Grid.Column="1" x:Name="CbBogenModus"
+                      VerticalAlignment="Center" Visibility="Collapsed"
+                      SelectionChanged="OnBogenModusChanged">
+                <ComboBoxItem Content="Bogenmitte"/>
+                <ComboBoxItem Content="Radius"/>
+                <ComboBoxItem Content="Pfeilhöhe"/>
+            </ComboBox>
+
+            <!-- Wert: Bogen X-Mitte / Radius / Pfeilhöhe -->
+            <Label Grid.Row="5" Grid.Column="0" x:Name="LblXMid" Content="Bogen X-Mitte:"
+                   VerticalAlignment="Center" Visibility="Collapsed"/>
+            <TextBox Grid.Row="5" Grid.Column="1" x:Name="TxtXMid" Text="0"
+                     VerticalAlignment="Center" Visibility="Collapsed"/>
+
+            <!-- Bogen Y-Mitte (nur für Bogenmitte-Modus) -->
+            <Label Grid.Row="6" Grid.Column="0" x:Name="LblYMid" Content="Bogen Y-Mitte:"
+                   VerticalAlignment="Center" Visibility="Collapsed"/>
+            <TextBox Grid.Row="6" Grid.Column="1" x:Name="TxtYMid" Text="0"
+                     VerticalAlignment="Center" Visibility="Collapsed"/>
+
+            <!-- Hinweis für Radius / Pfeilhöhe: Bezugspunkt wird ignoriert -->
+            <TextBlock Grid.Row="7" Grid.ColumnSpan="2" x:Name="LblBezugHinweis"
+                       Text="Vorzeichen: + = links, − = rechts (Fahrtrichtung)"
+                       FontSize="10" Foreground="#888" TextWrapping="Wrap"
+                       Margin="0,2,0,4" Visibility="Collapsed"/>
         </Grid>
 
         <!-- Bezugspunkt -->

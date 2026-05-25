@@ -161,6 +161,11 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.3"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <!-- ── Separatoren & Array ────────────────────────────────── -->
@@ -251,7 +256,7 @@
                     </MenuItem.Icon>
                 </MenuItem>
                 <!-- Nut: drei Linien = Schlitz -->
-                <MenuItem Header="Nut" Click="OnPlanfraesen" IsEnabled="False">
+                <MenuItem Header="Nut" Click="OnNut">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}" Text="≡" FontSize="13"/>
                     </MenuItem.Icon>
@@ -284,10 +289,16 @@
                         <TextBlock Style="{StaticResource MI}" Text="⊙" FontSize="14"/>
                     </MenuItem.Icon>
                 </MenuItem>
-                <!-- Punkt: kleiner Punkt = Wegpunkt -->
-                <MenuItem Header="Punkt" Click="OnPfadPunkt" x:Name="MnuPfadPunkt">
+                <!-- Linie: kleiner Punkt = Linienpunkt -->
+                <MenuItem Header="Linie" Click="OnPfadLinie" x:Name="MnuPfadLinie">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}" Text="●" FontSize="10"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Bogen: Bogensymbol -->
+                <MenuItem Header="Bogen" Click="OnPfadBogen" x:Name="MnuPfadBogen">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="◜" FontSize="14"/>
                     </MenuItem.Icon>
                 </MenuItem>
             </MenuItem>
@@ -318,11 +329,6 @@
                 <MenuItem Header="Textfeld A carve"  Click="OnVCarve">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}" Text="▲" FontSize="11"/>
-                    </MenuItem.Icon>
-                </MenuItem>
-                <MenuItem Header="Textfeld A carve (Raster)"  Click="OnVCarveRaster">
-                    <MenuItem.Icon>
-                        <TextBlock Style="{StaticResource MI}" Text="▦" FontSize="11"/>
                     </MenuItem.Icon>
                 </MenuItem>
                 <MenuItem Header="Textfeld A Tasche" Click="OnTextfeldTasche">
@@ -589,6 +595,50 @@
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>
+                            <Button x:Name="BtnToolVCarveText"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnToolVCarveText"
+                                    ToolTip="V-Carve Textfeld aufziehen">
+                                <TextBlock Text="▲" FontSize="14" Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <Button x:Name="BtnToolMove"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnToolMove"
+                                    ToolTip="Verschieben – Textfeld / Pfad-Punkt ziehen">
+                                <Viewbox Width="16" Height="16">
+                                    <Path Fill="White" Stretch="None"
+                                          Data="M 8,0 L 10.5,4 L 9,4 L 9,7 L 12,7 L 12,9 L 9,9 L 9,12 L 10.5,12 L 8,16 L 5.5,12 L 7,12 L 7,9 L 4,9 L 4,7 L 7,7 L 7,4 L 5.5,4 Z"/>
+                                </Viewbox>
+                            </Button>
+                            <Rectangle Height="1" Margin="4,6" Fill="#44FFFFFF"/>
+                            <Button x:Name="BtnToolPfadStart"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnPfadStart"
+                                    ToolTip="Pfad-Startpunkt">
+                                <TextBlock Text="⊙" FontSize="16" Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <Button x:Name="BtnToolPfadLinie"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnPfadLinie"
+                                    IsEnabled="False"
+                                    ToolTip="Pfad-Linie">
+                                <TextBlock Text="╌" FontSize="14" Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <Button x:Name="BtnToolPfadKurve"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnPfadBogen"
+                                    IsEnabled="False"
+                                    ToolTip="Pfad-Kurve (Bogen)">
+                                <TextBlock Text="◜" FontSize="15" Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
                         </StackPanel>
                     </Border>
                     <!-- Zoom-Anzeige -->
@@ -771,6 +821,36 @@
                                           SelectionChanged="OnEigFontChanged"
                                           KeyUp="OnEigFontKeyUp"/>
 
+                                <TextBlock Text="Bezugspunkt:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="EigBezugspunkt" Margin="0,0,0,6"
+                                          SelectionChanged="OnEigFontChanged">
+                                    <ComboBoxItem Content="Unten links"/>
+                                    <ComboBoxItem Content="Oben links"/>
+                                    <ComboBoxItem Content="Unten rechts"/>
+                                    <ComboBoxItem Content="Oben rechts"/>
+                                    <ComboBoxItem Content="Links Mitte"/>
+                                    <ComboBoxItem Content="Rechts Mitte"/>
+                                    <ComboBoxItem Content="Oben Mitte"/>
+                                    <ComboBoxItem Content="Unten Mitte"/>
+                                    <ComboBoxItem Content="Mitte"/>
+                                </ComboBox>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigXRel" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigYRel" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -799,7 +879,7 @@
                                     </StackPanel>
                                 </Grid>
 
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                     <TextBlock Text="Ausrichtung:" FontWeight="SemiBold"
                                                VerticalAlignment="Center" Margin="0,0,8,0"/>
                                     <RadioButton x:Name="EigAusrLinks"  Content="Links"  GroupName="Ausrichtung"
@@ -813,6 +893,79 @@
                                                  Checked="OnEigAusrichtungChanged"/>
                                 </StackPanel>
 
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <Button Content="↔ H. einmitten" Padding="6,3"
+                                            Margin="0,0,6,0" Click="OnHorizEinmitten"/>
+                                    <Button Content="↕ V. einmitten" Padding="6,3"
+                                            Click="OnVertEinmitten"/>
+                                </StackPanel>
+
+                                <TextBlock Text="Fräser:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="EigWerkzeug"
+                                          DisplayMemberPath="DisplayName"
+                                          Margin="0,0,0,6"
+                                          SelectionChanged="OnEigWerkzeugChanged"/>
+
+                                <!-- V-Carve-spezifische Felder -->
+                                <StackPanel x:Name="PnlVCarveEig" Visibility="Collapsed" Margin="0,2,0,0">
+                                    <Separator Margin="0,2,0,8"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                            <TextBlock Text="Max. Tiefe (mm):" FontWeight="SemiBold"
+                                                       Margin="0,0,0,3" TextWrapping="Wrap" FontSize="11"/>
+                                            <TextBox x:Name="EigMaxTiefe" TextChanged="OnEigSizeChanged"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Margin="2,0,2,0">
+                                            <TextBlock Text="Auflösung (mm):" FontWeight="SemiBold"
+                                                       Margin="0,0,0,3" TextWrapping="Wrap" FontSize="11"/>
+                                            <TextBox x:Name="EigAufloesung" TextChanged="OnEigSizeChanged"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Margin="4,0,0,0">
+                                            <TextBlock Text="Spitzentol. (mm):" FontWeight="SemiBold"
+                                                       Margin="0,0,0,3" TextWrapping="Wrap" FontSize="11"/>
+                                            <TextBox x:Name="EigSpitzenTol" TextChanged="OnEigSizeChanged"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+
+                                <TextBlock x:Name="TbEigInfo"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           FontSize="11" TextWrapping="Wrap"
+                                           Margin="0,4,0,0"/>
+                            </StackPanel>
+
+                            <!-- Pfad Fräsen – Punkt-Eigenschaften (Start / Linie / Bogen) -->
+                            <StackPanel x:Name="PnlPfadStart" Visibility="Collapsed">
+
+                                <TextBlock x:Name="PfadEigTitel" FontWeight="Bold"
+                                           FontSize="13" Margin="0,0,0,8"
+                                           Foreground="{StaticResource TextDarkBrush}"/>
+
+                                <!-- Nur für Startpunkt: Werkzeug, Z, Radiuskorrektur -->
+                                <StackPanel x:Name="PnlPfadEigStartOnly">
+                                    <TextBlock Text="Werkzeug:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="PfadEigWerkzeug"
+                                              DisplayMemberPath="DisplayName"
+                                              Margin="0,0,0,10"
+                                              SelectionChanged="OnPfadEigWerkzeugChanged"/>
+                                    <TextBlock Text="Z-Tiefe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="PfadEigZ" Margin="0,0,0,10"
+                                             LostFocus="OnPfadEigLostFocus"
+                                             TextChanged="OnPfadEigTextChanged"/>
+                                    <TextBlock Text="Radiuskorrektur:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="PfadEigRadius" Margin="0,0,0,10"
+                                              SelectionChanged="OnPfadEigSelChanged">
+                                        <ComboBoxItem Content="Links (G41)"/>
+                                        <ComboBoxItem Content="Mittig"/>
+                                        <ComboBoxItem Content="Rechts (G42)"/>
+                                    </ComboBox>
+                                </StackPanel>
+
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -820,39 +973,58 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock x:Name="LblEigTiefe" Text="Max. Tiefe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigTiefe" TextChanged="OnEigSizeChanged"/>
+                                        <TextBlock Text="X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="PfadEigX" LostFocus="OnPfadEigLostFocus"
+                                                 TextChanged="OnPfadEigTextChanged"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
-                                        <TextBlock Text="Schneidenwinkel (°):" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigSchneidenWinkel" TextChanged="OnEigSizeChanged"/>
-                                    </StackPanel>
-                                </Grid>
-                                <Grid Margin="0,0,0,10">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="8"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Text="Vorschub:" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigVorschub" TextChanged="OnEigSizeChanged"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Text="Drehzahl:" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigDrehzahl" TextChanged="OnEigSizeChanged"/>
+                                        <TextBlock Text="Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="PfadEigY" LostFocus="OnPfadEigLostFocus"
+                                                 TextChanged="OnPfadEigTextChanged"/>
                                     </StackPanel>
                                 </Grid>
 
-                                <StackPanel Margin="0,0,0,10">
-                                    <TextBlock Text="Spitzentoleranz (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                    <TextBox x:Name="EigVereinfachung" TextChanged="OnEigSizeChanged"/>
+                                <!-- Nur für Bogen: Mittelpunkt / Radius / Pfeilhöhe -->
+                                <StackPanel x:Name="PnlPfadEigBogenMid">
+                                    <TextBlock Text="Bogen-Art:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="PfadEigBogenModus" Margin="0,0,0,6"
+                                              SelectionChanged="OnPfadEigBogenModusChanged">
+                                        <ComboBoxItem Content="Bogenmitte"/>
+                                        <ComboBoxItem Content="Radius"/>
+                                        <ComboBoxItem Content="Pfeilhöhe"/>
+                                    </ComboBox>
+                                    <TextBlock x:Name="PfadEigBogenWertLabel"
+                                               Text="Bogen-Mitte X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="PfadEigXMid" Margin="0,0,0,6"
+                                             LostFocus="OnPfadEigLostFocus"
+                                             TextChanged="OnPfadEigTextChanged"/>
+                                    <StackPanel x:Name="PnlPfadEigYMid">
+                                        <TextBlock Text="Bogen-Mitte Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="PfadEigYMid" Margin="0,0,0,6"
+                                                 LostFocus="OnPfadEigLostFocus"
+                                                 TextChanged="OnPfadEigTextChanged"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="PfadEigBogenHinweis"
+                                               Text="Vorzeichen: + = links, − = rechts (Fahrtrichtung)"
+                                               FontSize="10" Foreground="#888" TextWrapping="Wrap"
+                                               Margin="0,0,0,6" Visibility="Collapsed"/>
                                 </StackPanel>
 
-                                <TextBlock x:Name="TbEigInfo"
-                                           Foreground="{StaticResource AccentBrush}"
-                                           FontSize="11" TextWrapping="Wrap"
-                                           Margin="0,4,0,0"/>
+                                <TextBlock Text="Bezugspunkt:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="PfadEigBezug" Margin="0,0,0,6"
+                                          SelectionChanged="OnPfadEigSelChanged">
+                                    <ComboBoxItem Content="Letzter Punkt"/>
+                                    <ComboBoxItem Content="Unten links"/>
+                                    <ComboBoxItem Content="Oben links"/>
+                                    <ComboBoxItem Content="Unten rechts"/>
+                                    <ComboBoxItem Content="Oben rechts"/>
+                                    <ComboBoxItem Content="Mitte"/>
+                                    <ComboBoxItem Content="Links Mitte"/>
+                                    <ComboBoxItem Content="Rechts Mitte"/>
+                                    <ComboBoxItem Content="Oben Mitte"/>
+                                    <ComboBoxItem Content="Unten Mitte"/>
+                                </ComboBox>
+
                             </StackPanel>
 
                         </StackPanel>
