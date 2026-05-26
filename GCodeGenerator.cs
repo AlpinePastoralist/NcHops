@@ -2032,7 +2032,7 @@ public static class GCodeGenerator
     // ── V-Carve: Einbeschriebene Kreise (Konturabtastung / Medialachs) ───
 
     /// CNC-Koordinaten (mm), Radius (mm) und Figur-Index eines einbeschriebenen Kreises.
-    public record VCarveCircle(double X, double Y, double R, int FigIdx = -1);
+    public record VCarveCircle(double X, double Y, double R, int FigIdx = -1, bool IsFan = false);
 
     /// <summary>
     /// Läuft entlang einer geschlossenen PathFigure und liefert alle
@@ -2370,7 +2370,6 @@ public static class GCodeGenerator
             var segBounds = figSegBounds[fi];
             int so        = figSegStart[fi];
             var localResult = new List<VCarveCircle>();
-            bool lastWasRegular = false; // ob localResult[^1] ein regulärer Kreis ist
 
             // Bogenlängen
             var arcLen = new double[nPts + 1];
@@ -2492,27 +2491,11 @@ public static class GCodeGenerator
                         if (rLo * scale >= 0.05)
                         {
                             double wpfCx = px + cnx * rLo, wpfCy = py + cny * rLo;
-                            // Auf konvexen Kurven kann der Kreismittelpunkt rückwärts
-                            // wandern. Nur gegen den vorherigen REGULÄREN Kreis prüfen —
-                            // Fächer-Kreise liegen radial zur Ecke und würden sonst
-                            // fälschlich als Referenz dienen.
-                            bool backward = false;
-                            if (lastWasRegular && localResult.Count > 0 && localResult[^1].FigIdx == fi)
-                            {
-                                var prev = localResult[^1];
-                                double prevWpfCx = (prev.X - ctx.Ox) / scale;
-                                double prevWpfCy = multiH - (prev.Y - ctx.Oy - ctx.YOffset) / scale;
-                                backward = (wpfCx - prevWpfCx) * tx + (wpfCy - prevWpfCy) * ty
-                                           < -stepW * 1.5;
-                            }
-                            if (!backward && InGlyph(wpfCx, wpfCy))
-                            {
+                            if (InGlyph(wpfCx, wpfCy))
                                 localResult.Add(new VCarveCircle(
                                     ctx.Ox + wpfCx * scale,
                                     ctx.Oy + ctx.YOffset + (multiH - wpfCy) * scale,
                                     rLo * scale, fi));
-                                lastWasRegular = true;
-                            }
                         }
                     }
                     continue;
@@ -2533,64 +2516,22 @@ public static class GCodeGenerator
 
                 if (isConcave)
                 {
-                    // Konkave Ecke: einbeschriebener Kreis entlang der Bisektrix beider Einwärts-Normalen.
-                    // TryPt kann hier nicht verwendet werden — die anliegenden Segmente (die durch den
-                    // Eckpunkt laufen) blockieren sonst den Binär-Such-Algorithmus auf Radius≈0.
-                    // Stattdessen: Mittelpunkt = Eckpunkt + Bisektrix * (R / sinα), wobei sinα der
-                    // Sinus des Winkels zwischen Bisektrix und jeder Einwärts-Normale ist.
-                    double nbX = csP.inx + csC.inx, nbY = csP.iny + csC.iny;
-                    double nbLen = Math.Sqrt(nbX * nbX + nbY * nbY);
-                    if (nbLen > 1e-10)
+                    // Konkave Ecke: Fächer von Einwärts-Normal P bis Einwärts-Normal C,
+                    // analog zum konvexen Fächer.  TryPt funktioniert von V aus, weil die
+                    // anliegenden Segmente an V enden — PtSegDist2 zum Kreismittelpunkt
+                    // ergibt genau r² (tangential), nie < r², und blockiert die Suche nicht.
+                    int ns = Math.Max(2, (int)Math.Ceiling(Math.Abs(da) / cornerStepRad));
+                    for (int s = 0; s <= ns; s++)
                     {
-                        nbX /= nbLen; nbY /= nbLen;
-                        // sin(Winkel Bisektrix → n1) = |nb × n1|
-                        double sinA = Math.Abs(nbX * csP.iny - nbY * csP.inx);
-                        if (sinA > 1e-6)
-                        {
-                            // Binärsuche: grösstes R, sodass Kreis (Mittelpunkt = V + nb*(R/sinA), Radius R)
-                            // nicht gegen nicht-anliegende Segmente verstösst und innerhalb des Glyphs liegt.
-                            double rL = 0, rH = maxRw;
-                            for (int it = 0; it < 12; it++)
-                            {
-                                double rm  = (rL + rH) * 0.5;
-                                double d   = rm / sinA;
-                                double ecx = evx + nbX * d, ecy = evy + nbY * d;
-                                bool   ok  = InGlyph(ecx, ecy);
-                                if (ok)
-                                {
-                                    double rm2 = rm * rm;
-                                    int gcx2 = Math.Clamp((int)((ecx - gridX0) / cellSz), 0, gCols - 1);
-                                    int gcy2 = Math.Clamp((int)((ecy - gridY0) / cellSz), 0, gRows - 1);
-                                    foreach (var si in gridCells[gcy2 * gCols + gcx2])
-                                    {
-                                        var sg = segsArr[si];
-                                        // Anliegende Segmente ausschliessen (laufen durch den Eckpunkt)
-                                        if (sg.figIdx == fi &&
-                                            ((Math.Abs(sg.ax - evx) < 1e-9 && Math.Abs(sg.ay - evy) < 1e-9) ||
-                                             (Math.Abs(sg.bx - evx) < 1e-9 && Math.Abs(sg.by - evy) < 1e-9)))
-                                            continue;
-                                        if (PtSegDist2(ecx, ecy, sg.ax, sg.ay, sg.bx, sg.by) < rm2 - 1e-9)
-                                        { ok = false; break; }
-                                    }
-                                }
-                                if (ok) rL = rm; else rH = rm;
-                            }
-                            if (rL * scale >= 0.01)
-                            {
-                                double d   = rL / sinA;
-                                double fcx = evx + nbX * d, fcy = evy + nbY * d;
-                                localResult.Add(new VCarveCircle(
-                                    ctx.Ox + fcx * scale,
-                                    ctx.Oy + ctx.YOffset + (multiH - fcy) * scale,
-                                    rL * scale, fi));
-                            }
-                        }
+                        double a = a1 + da * s / ns;
+                        var c = TryPt(evx, evy, Math.Cos(a), Math.Sin(a), minRmm: 0);
+                        if (c != null) localResult.Add(c with { IsFan = true });
                     }
                 }
                 else
                 {
                     // Konvexe Ecke: nur bei echten Ecken (≥ ~25°).
-                    if (Math.Abs(da) < 0.44) { lastWasRegular = false; continue; }
+                    if (Math.Abs(da) < 0.44) continue;
 
                     // Fächer a1 → a2
                     int ns = Math.Max(4, (int)Math.Ceiling(Math.Abs(da) / cornerStepRad));
@@ -2598,13 +2539,42 @@ public static class GCodeGenerator
                     {
                         double a = a1 + da * s / ns;
                         var c = TryPt(evx, evy, Math.Cos(a), Math.Sin(a), minRmm: 0);
-                        if (c != null) localResult.Add(c);
+                        if (c != null) localResult.Add(c with { IsFan = true });
                     }
                 }
-                // Fächer-Kreise nicht als Referenz für den Rückwärts-Check verwenden
-                lastWasRegular = false;
             }
 
+            // Fenster-Greedy: tauscht nur wenn Kandidat ≥ 2× näher liegt
+            // (echter Schleifenfall). Konturlinie-Reihenfolge bleibt für
+            // marginal-nähere Kreise unverändert.
+            if (localResult.Count >= 3)
+            {
+                static double distSq(VCarveCircle a, VCarveCircle b)
+                { double dx = a.X - b.X, dy = a.Y - b.Y; return dx * dx + dy * dy; }
+                const int W = 100;
+                for (int i = 0; i < localResult.Count - 1; i++)
+                {
+                    // Fächer-Kreise nie verschieben und nicht überspringen
+                    if (localResult[i].IsFan || localResult[i + 1].IsFan) continue;
+                    double d1  = distSq(localResult[i], localResult[i + 1]);
+                    double thr = d1 * 0.25; // Schwelle: √0.25 = 0.5× → mind. 2× näher
+                    int best = i + 1;
+                    int end = Math.Min(localResult.Count, i + 1 + W);
+                    for (int j = i + 2; j < end; j++)
+                    {
+                        if (localResult[j].IsFan) break; // Fächer-Block nicht überspringen
+                        double d = distSq(localResult[i], localResult[j]);
+                        if (d < thr) { thr = d; best = j; }
+                    }
+                    if (best != i + 1)
+                    {
+                        var tmp = localResult[best];
+                        for (int k = best; k > i + 1; k--)
+                            localResult[k] = localResult[k - 1];
+                        localResult[i + 1] = tmp;
+                    }
+                }
+            }
             resultsPerFig[fi] = localResult;
         });
 
@@ -2731,7 +2701,8 @@ public static class GCodeGenerator
                           ResampleVCarveCircles(
                               ComputeVCarveCircles(p, workW, workH, step),
                               spacingMm:  step,
-                              simplifyMm: Math.Max(0.1, p.VereinfachungMm)));
+                              simplifyMm: Math.Max(0.1, p.VereinfachungMm)),
+                          connectMm: 3.0);   // ≥ splitGap → Eckkreise via G01 verbunden, kein G00-Abhub
         if (circles.Count == 0) return string.Empty;
 
         double halfRad = p.SchneidenWinkel * 0.5 * Math.PI / 180.0;

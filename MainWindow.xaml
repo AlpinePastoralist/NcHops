@@ -599,7 +599,8 @@
                                     Style="{StaticResource ToolPalBtn}"
                                     Click="OnToolVCarveText"
                                     ToolTip="V-Carve Textfeld aufziehen">
-                                <TextBlock Text="▲" FontSize="14" Foreground="White"
+                                <TextBlock Text="T" FontSize="15" Foreground="White"
+                                           FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>

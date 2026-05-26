@@ -1720,6 +1720,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             case Key.Escape:
                 if (_activeTool == CanvasTool.PfadBogen && _pfadBogenWaiting)
                 { _pfadBogenWaiting = false; DrawSkia?.InvalidateVisual(); }
+                else if (_activeTool == CanvasTool.VCarveText && _isTextDragging)
+                { _isTextDragging = false; ClearTextRubberBand(); }
                 else
                     SetActiveTool(CanvasTool.Select);
                 e.Handled = true; break;
@@ -1860,6 +1862,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         DrawSkia.InvalidateVisual();
         if (TxtZoomLevel is not null)
             TxtZoomLevel.Text = $"{_zoom * 100:F0} %";
+        RepositionInlineTextBox();
     }
 
     private void ResetZoom()
@@ -2110,10 +2113,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wx <= 0 || wy <= 0) return;
         _inlineExistingIdx = -1;   // new entry
 
-        double ax = (screenA.X - _panX) / _zoom;
-        double ay = wy - (screenA.Y - _panY) / _zoom;
-        double bx = (screenB.X - _panX) / _zoom;
-        double by = wy - (screenB.Y - _panY) / _zoom;
+        double ax = SnapX((screenA.X - _panX) / _zoom);
+        double ay = SnapY(wy - (screenA.Y - _panY) / _zoom);
+        double bx = SnapX((screenB.X - _panX) / _zoom);
+        double by = SnapY(wy - (screenB.Y - _panY) / _zoom);
 
         double left   = Math.Round(Math.Max(0, Math.Min(ax, bx)), 2);
         double bottom = Math.Round(Math.Max(0, Math.Min(ay, by)), 2);
@@ -2237,6 +2240,23 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
+    }
+
+    private void RepositionInlineTextBox()
+    {
+        if (_inlineTextBox == null || _inlineParams == null) return;
+        double wy = WorkY;
+        if (wy <= 0) return;
+        var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(_inlineParams);
+        double sl = leftMm * _zoom + _panX;
+        double st = (wy - (bottomMm + hMm)) * _zoom + _panY;
+        double sw = wMm * _zoom;
+        double sh = hMm * _zoom;
+        _inlineTextBox.Width    = sw;
+        _inlineTextBox.Height   = sh;
+        _inlineTextBox.FontSize = _inlineParams.FontSizeMm * _zoom;
+        System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
+        System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
     }
 
     private void InlineTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -2905,12 +2925,32 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
-        // VCarveText-Werkzeug: Drag starten
-        if (_activeTool == CanvasTool.VCarveText && e.ChangedButton == MouseButton.Left)
+        // VCarveText-Werkzeug: Abbrechen mit Rechtsklick
+        if (_activeTool == CanvasTool.VCarveText && e.ChangedButton == MouseButton.Right && _isTextDragging)
         {
-            _textDragStart  = e.GetPosition(CanvasGrid);
             _isTextDragging = false;
-            CanvasGrid.CaptureMouse();
+            ClearTextRubberBand();
+            e.Handled = true;
+            return;
+        }
+
+        // VCarveText-Werkzeug: 2-Klick-Modus
+        if (_activeTool == CanvasTool.VCarveText && e.ChangedButton == MouseButton.Left && _inlineTextBox == null)
+        {
+            var pos = e.GetPosition(CanvasGrid);
+            if (!_isTextDragging)
+            {
+                // Erster Klick: Anfangspunkt merken
+                _textDragStart  = pos;
+                _isTextDragging = true;
+            }
+            else
+            {
+                // Zweiter Klick: Textfeld erstellen
+                _isTextDragging = false;
+                ClearTextRubberBand();
+                StartInlineTextEdit(_textDragStart, pos);
+            }
             e.Handled = true;
             return;
         }
@@ -3004,14 +3044,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 return;
             }
 
-            // VCarveText-Werkzeug: Drag beendet
+            // VCarveText-Werkzeug: Mouse-Capture freigeben (z.B. nach Ctrl-Resize)
             if (_activeTool == CanvasTool.VCarveText && CanvasGrid.IsMouseCaptured)
             {
                 CanvasGrid.ReleaseMouseCapture();
-                ClearTextRubberBand();
-                if (_isTextDragging)
-                    StartInlineTextEdit(_textDragStart, e.GetPosition(CanvasGrid));
-                _isTextDragging = false;
                 e.Handled = true;
                 return;
             }
@@ -3092,7 +3128,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             // Pfad-Punkt wird gezogen
             if (_pfadDragHistIdx >= 0 && CanvasGrid.IsMouseCaptured)
             {
-                UpdatePfadPunktPos(_pfadDragHistIdx, mmX, mmY);
+                UpdatePfadPunktPos(_pfadDragHistIdx, SnapX(mmX), SnapY(mmY));
                 DrawSkia?.InvalidateVisual();
                 return;
             }
@@ -3134,15 +3170,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;
         }
 
-        // VCarveText-Werkzeug: Gummiband aufziehen
-        if (_activeTool == CanvasTool.VCarveText && CanvasGrid.IsMouseCaptured && !_isPanning)
+        // VCarveText-Werkzeug: Gummiband nach erstem Klick
+        if (_activeTool == CanvasTool.VCarveText && _isTextDragging && !_isPanning)
         {
-            var pos   = e.GetPosition(CanvasGrid);
-            var delta = pos - _textDragStart;
-            if (!_isTextDragging && (Math.Abs(delta.X) > 4 || Math.Abs(delta.Y) > 4))
-                _isTextDragging = true;
-            if (_isTextDragging)
-                UpdateTextRubberBand(_textDragStart, pos);
+            UpdateTextRubberBand(_textDragStart, e.GetPosition(CanvasGrid));
             return;
         }
 
@@ -3164,6 +3195,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var hPos  = e.GetPosition(CanvasGrid);
             double hx = (hPos.X - _panX) / _zoom;
             double hy = WorkY - (hPos.Y - _panY) / _zoom;
+            _pfadMouseMm    = (SnapX(hx), SnapY(hy));
+            _pfadMouseValid = _inlineTextBox == null;
+            DrawSkia?.InvalidateVisual();
             if (_ctrlResizeMode && _inlineTextBox != null && _inlineExistingIdx >= 0
                 && _inlineExistingIdx < _history.Count
                 && _history[_inlineExistingIdx].Params is GraviereParams ctrlHovGp)
@@ -3756,9 +3790,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_activeTool == CanvasTool.Move)
             DrawPfadPunkteDots(canvas);
 
-        // Pfad-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche + wartender Bogenpunkt
+        // Pfad- und Textfeld-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
-            && _activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen)
+            && (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen
+                || _activeTool == CanvasTool.VCarveText))
         {
             double sc2 = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
             float  cx2 = (float)(_topRect.Left   + _pfadMouseMm.x * sc2);
