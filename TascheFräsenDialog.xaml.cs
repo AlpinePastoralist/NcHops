@@ -92,4 +92,5 @@ public record TascheFräsenParams(
     double FraeserD, double Faktor,
     double Vorschub, double VorschubFz, double Drehzahl,
     string Bezugspunkt,
-    double Eintauchwinkel = 90);
+    double Eintauchwinkel = 90,
+    double Verrundung = 0);

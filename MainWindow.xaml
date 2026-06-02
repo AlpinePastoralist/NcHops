@@ -168,6 +168,34 @@
             </Style.Triggers>
         </Style>
 
+        <!-- ── Bezugspunkt-Radio (kompakt) für Seitenleiste ─────── -->
+        <Style x:Key="BezugKompakt" TargetType="RadioButton">
+            <Setter Property="Width"  Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Ellipse x:Name="Outer" Width="11" Height="11"
+                                     Stroke="#8B7040" StrokeThickness="1.5" Fill="White"/>
+                            <Ellipse x:Name="Inner" Width="5" Height="5"
+                                     Fill="#9B7820" Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Inner" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Outer" Property="Fill"       Value="#F5EDD0"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Outer" Property="Fill" Value="#EAD8A0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── Separatoren & Array ────────────────────────────────── -->
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <x:Array x:Key="BezugListe" Type="{x:Type sys:String}">
@@ -581,10 +609,10 @@
                                     Style="{StaticResource ToolPalBtn}"
                                     Click="OnToolHand"
                                     ToolTip="Hand (H) – Bild verschieben">
-                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE81A;"
-                                           FontSize="17" Foreground="White"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"/>
+                                <Viewbox Width="16" Height="16">
+                                    <Path Fill="White" Stretch="Uniform"
+                                          Data="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16L7 15.66V6c0-.83.67-1.5 1.5-1.5S10 5.17 10 6v5h1V3.5c0-.83.67-1.5 1.5-1.5S14 2.67 14 3.5V11h1V4.5c0-.83.67-1.5 1.5-1.5S18 3.67 18 4.5V11h1V5.5c0-.83.67-1.5 1.5-1.5S23 4.67 23 5.5z"/>
+                                </Viewbox>
                             </Button>
                             <Button x:Name="BtnToolZoom"
                                     Style="{StaticResource ToolPalBtn}"
@@ -639,6 +667,16 @@
                                 <TextBlock Text="◜" FontSize="15" Foreground="White"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
+                            </Button>
+                            <Rectangle Height="1" Margin="4,6" Fill="#44FFFFFF"/>
+                            <Button x:Name="BtnToolRechteck"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnRechteckTool"
+                                    ToolTip="Rechteck aufziehen">
+                                <Viewbox Width="16" Height="16">
+                                    <Path Fill="White" Stretch="None"
+                                          Data="M 1,1 L 15,1 L 15,11 L 1,11 Z"/>
+                                </Viewbox>
                             </Button>
                         </StackPanel>
                     </Border>
@@ -734,10 +772,11 @@
                                  SelectionChanged="OnHistorySelectionChanged">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
-                                    <Setter Property="Padding" Value="8,6"/>
-                                    <Setter Property="Margin" Value="0,2"/>
-                                    <Setter Property="Background" Value="{StaticResource BgBrush}"/>
-                                    <Setter Property="Cursor" Value="Hand"/>
+                                    <Setter Property="Padding"         Value="8,6"/>
+                                    <Setter Property="Margin"          Value="0,2"/>
+                                    <Setter Property="Background"      Value="{StaticResource BgBrush}"/>
+                                    <Setter Property="BorderThickness" Value="0"/>
+                                    <Setter Property="Cursor"          Value="Hand"/>
                                     <Style.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter Property="Background" Value="{StaticResource AccentTintBrush}"/>
@@ -746,25 +785,66 @@
                                             <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
                                             <Setter Property="Foreground" Value="White"/>
                                         </Trigger>
+                                        <!-- Sub-Einträge (Linie / Bogen): linker Balken + engere Abstände -->
                                         <DataTrigger Binding="{Binding Level}" Value="1">
-                                            <Setter Property="Padding"  Value="24,4,8,4"/>
-                                            <Setter Property="Margin"   Value="0,1"/>
-                                            <Setter Property="Opacity"  Value="0.82"/>
+                                            <Setter Property="Padding"         Value="22,3,8,3"/>
+                                            <Setter Property="Margin"          Value="0,0"/>
+                                            <Setter Property="Background"      Value="{StaticResource BgLightBrush}"/>
+                                            <Setter Property="BorderThickness" Value="3,0,0,0"/>
+                                            <Setter Property="BorderBrush"     Value="{StaticResource AccentBrush}"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Label}"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="{StaticResource AccentBrush}"/>
-                                        <TextBlock Text="{Binding Details}"
-                                                   FontSize="11"
-                                                   Foreground="{StaticResource TextDarkBrush}"
-                                                   Opacity="0.75"/>
-                                    </StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <!-- Einklapp-Pfeil (nur für Pfad-Startpunkte) -->
+                                        <Button x:Name="BtnCollapse"
+                                                Grid.Column="0"
+                                                Content="▼"
+                                                Visibility="Collapsed"
+                                                Click="OnHistoryToggleCollapse"
+                                                Width="18" Height="18"
+                                                FontSize="9"
+                                                Padding="0"
+                                                Margin="0,0,4,0"
+                                                VerticalAlignment="Center"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Foreground="{StaticResource AccentBrush}"
+                                                Cursor="Hand"/>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock x:Name="LblLabel"
+                                                       Text="{Binding Label}"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{StaticResource AccentBrush}"/>
+                                            <TextBlock x:Name="LblDetails"
+                                                       Text="{Binding Details}"
+                                                       FontSize="11"
+                                                       Foreground="{StaticResource TextDarkBrush}"
+                                                       Opacity="0.75"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsExpandable}" Value="True">
+                                            <Setter TargetName="BtnCollapse" Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsCollapsed}" Value="True">
+                                            <Setter TargetName="BtnCollapse" Property="Content" Value="▶"/>
+                                        </DataTrigger>
+                                        <!-- Sub-Einträge: kleineres, normales Label -->
+                                        <DataTrigger Binding="{Binding Level}" Value="1">
+                                            <Setter TargetName="LblLabel"   Property="FontSize"   Value="11"/>
+                                            <Setter TargetName="LblLabel"   Property="FontWeight" Value="Normal"/>
+                                            <Setter TargetName="LblLabel"   Property="Foreground" Value="{StaticResource TextDarkBrush}"/>
+                                            <Setter TargetName="LblDetails" Property="FontSize"   Value="10"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
@@ -1025,6 +1105,179 @@
                                     <ComboBoxItem Content="Oben Mitte"/>
                                     <ComboBoxItem Content="Unten Mitte"/>
                                 </ComboBox>
+
+                                <!-- Verrundung: nur für Linie und Bogen sichtbar -->
+                                <StackPanel x:Name="PnlPfadEigVerrundung">
+                                    <TextBlock Text="Verrundung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="PfadEigVer" Margin="0,0,0,6"
+                                             LostFocus="OnPfadEigLostFocus"
+                                             TextChanged="OnPfadEigTextChanged"
+                                             KeyDown="OnPfadEigKeyDown"/>
+                                </StackPanel>
+
+                            </StackPanel>
+
+                            <!-- Rechteck Fräsen – Eigenschaften -->
+                            <StackPanel x:Name="PnlRechteck" Visibility="Collapsed">
+
+                                <TextBlock Text="Rechteck" FontWeight="Bold" FontSize="13"
+                                           Margin="0,0,0,8"
+                                           Foreground="{StaticResource TextDarkBrush}"/>
+
+                                <!-- Modus: Kontur / Tasche -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <RadioButton x:Name="RktModusNut" Content="Kontur"
+                                                 GroupName="RktModus" IsChecked="True"
+                                                 Margin="0,0,12,0" VerticalAlignment="Center"
+                                                 Checked="OnRktEigChanged"/>
+                                    <RadioButton x:Name="RktModusTasche" Content="Tasche"
+                                                 GroupName="RktModus"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnRktEigChanged"/>
+                                </StackPanel>
+
+                                <!-- Werkzeug -->
+                                <TextBlock Text="Werkzeug:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="RktEigWerkzeug"
+                                          DisplayMemberPath="DisplayName"
+                                          Margin="0,0,0,10"
+                                          SelectionChanged="OnRktEigChanged"/>
+
+                                <!-- X / Y -->
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RktEigX" LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RktEigY" LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Bezugspunkt (kompakt) -->
+                                <TextBlock Text="Bezugspunkt:" FontWeight="SemiBold" Margin="0,4,0,2"/>
+                                <Canvas Width="90" Height="64" HorizontalAlignment="Left" Margin="0,0,0,8">
+                                    <Rectangle Canvas.Left="10" Canvas.Top="8"
+                                               Width="70" Height="48"
+                                               Fill="#F5EFDA" Stroke="#C8A864"
+                                               StrokeThickness="1.5" RadiusX="2" RadiusY="2"/>
+                                    <!-- Oben -->
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugOL"
+                                                 GroupName="RktBezug" Canvas.Left="3"  Canvas.Top="1"
+                                                 ToolTip="Oben links"  Checked="OnRktEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugOM"
+                                                 GroupName="RktBezug" Canvas.Left="38" Canvas.Top="1"
+                                                 ToolTip="Oben Mitte"  Checked="OnRktEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugOR"
+                                                 GroupName="RktBezug" Canvas.Left="73" Canvas.Top="1"
+                                                 ToolTip="Oben rechts" Checked="OnRktEigChanged"/>
+                                    <!-- Mitte -->
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugML"
+                                                 GroupName="RktBezug" Canvas.Left="3"  Canvas.Top="25"
+                                                 ToolTip="Links Mitte"  Checked="OnRktEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugMM"
+                                                 GroupName="RktBezug" Canvas.Left="38" Canvas.Top="25"
+                                                 ToolTip="Mitte"        Checked="OnRktEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugMR"
+                                                 GroupName="RktBezug" Canvas.Left="73" Canvas.Top="25"
+                                                 ToolTip="Rechts Mitte" Checked="OnRktEigChanged"/>
+                                    <!-- Unten -->
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugUL"
+                                                 GroupName="RktBezug" Canvas.Left="3"  Canvas.Top="49"
+                                                 IsChecked="True"
+                                                 ToolTip="Unten links"  Checked="OnRktEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugUM"
+                                                 GroupName="RktBezug" Canvas.Left="38" Canvas.Top="49"
+                                                 ToolTip="Unten Mitte"  Checked="OnRktEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="RktBezugUR"
+                                                 GroupName="RktBezug" Canvas.Left="73" Canvas.Top="49"
+                                                 ToolTip="Unten rechts" Checked="OnRktEigChanged"/>
+                                </Canvas>
+
+                                <!-- Breite / Höhe -->
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Breite (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RktEigBreite" LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Höhe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RktEigHoehe" LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Z-Tiefe -->
+                                <TextBlock Text="Z-Tiefe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBox x:Name="RktEigZ" Margin="0,0,0,10"
+                                         LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+
+                                <!-- Fräsung (nur Kontur-Modus) -->
+                                <StackPanel x:Name="PnlRktFraesung">
+                                    <TextBlock Text="Fräsung:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <RadioButton x:Name="RktEigFrAussen" Content="Außen"
+                                                     GroupName="RktFraesung" IsChecked="True"
+                                                     Margin="0,0,10,0" VerticalAlignment="Center"
+                                                     Checked="OnRktEigChanged"/>
+                                        <RadioButton x:Name="RktEigFrInnen"  Content="Innen"
+                                                     GroupName="RktFraesung"
+                                                     Margin="0,0,10,0" VerticalAlignment="Center"
+                                                     Checked="OnRktEigChanged"/>
+                                        <RadioButton x:Name="RktEigFrMittig" Content="Mittig"
+                                                     GroupName="RktFraesung"
+                                                     VerticalAlignment="Center"
+                                                     Checked="OnRktEigChanged"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- Laufrichtung (nur Kontur-Modus) -->
+                                <StackPanel x:Name="PnlRktLauf">
+                                    <TextBlock Text="Laufrichtung:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <RadioButton x:Name="RktEigGegen"  Content="Gegenlauf"
+                                                     GroupName="RktLauf" IsChecked="True"
+                                                     Margin="0,0,10,0" VerticalAlignment="Center"
+                                                     Checked="OnRktEigChanged"/>
+                                        <RadioButton x:Name="RktEigGleich" Content="Gleichlauf"
+                                                     GroupName="RktLauf"
+                                                     VerticalAlignment="Center"
+                                                     Checked="OnRktEigChanged"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- Verrundung (nur Kontur-Modus) -->
+                                <StackPanel x:Name="PnlRktVerrundung">
+                                    <TextBlock Text="Verrundung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="RktEigVer" Margin="0,0,0,10"
+                                             LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+                                </StackPanel>
+
+                                <!-- Z-Zustellung -->
+                                <CheckBox x:Name="RktEigMehrfach" Content="Mehrfach-Zustellung"
+                                          Margin="0,0,0,4"
+                                          Checked="OnRktEigChanged" Unchecked="OnRktEigChanged"/>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Z-Zustellung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RktEigZZust" LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
 
                             </StackPanel>
 

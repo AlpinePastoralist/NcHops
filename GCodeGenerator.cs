@@ -184,6 +184,9 @@ public static class GCodeGenerator
         double zStep = Math.Abs(p.ZZustellung);
         double curZ  = 0;
 
+        // Eckradius der Werkzeugmittelpunktbahn (Fertigkante - Werkzeugradius)
+        double cr = Math.Max(0.0, p.Verrundung - r);
+
         // Schrupp-Bereich: 1mm Aufmaß an allen Wänden lassen
         double rx0 = ix0 + allowance;
         double ry0 = iy0 + allowance;
@@ -191,13 +194,30 @@ public static class GCodeGenerator
         double ry1 = iy1 - allowance;
         bool hasRoughArea = rx1 > rx0 && ry1 > ry0;
 
-        // Zick-Zack-Räumen (mit oder ohne Aufmaß)
-        double zx0 = hasRoughArea ? rx0 : ix0;
+        // Y-Bereich für Räumfräsung
         double zy0 = hasRoughArea ? ry0 : iy0;
-        double zx1 = hasRoughArea ? rx1 : ix1;
         double zy1 = hasRoughArea ? ry1 : iy1;
 
-        // Eintauchrampe: von prevZ diagonal auf curZ absenken (entlang X-Achse der Tasche)
+        // Räumfräsung-X-Bereich bei Werkzeugmittelpunkt-Höhe yy.
+        // In geraden Abschnitten: Aufmaß auf Wände (rx0/rx1).
+        // In Eckzonen: Aufmaß radial auf den Verrundungsbogen (Radius crClear = cr - allowance).
+        (double xL, double xR) RoundedBounds(double yy)
+        {
+            double dy = cr > 1e-6 ? Math.Max(0, Math.Max(iy0 + cr - yy, yy - (iy1 - cr))) : 0;
+            if (dy < 1e-6)
+                return (hasRoughArea ? rx0 : ix0, hasRoughArea ? rx1 : ix1);
+            // Eckzone: Aufmaß radial vom Eckbogen abziehen
+            double crClear = cr - (hasRoughArea ? allowance : 0);
+            if (crClear <= 0 || dy >= crClear - 1e-6)
+                return (ix0 + cr, ix1 - cr); // gesamte Eckzone ist Aufmaß → keine Räumzeile hier
+            double dx = Math.Sqrt(crClear * crClear - dy * dy);
+            return (ix0 + cr - dx, ix1 - cr + dx);
+        }
+
+        // Startpunkt der Räumfräsung: erste Zeile, linke Kante (1mm von Schlichtkontur)
+        var (startX0, startX1) = RoundedBounds(zy0);
+
+        // Eintauchrampe: von startX0 diagonal auf curZ absenken (entlang erster Zeile)
         void AppendEntry(double prevZ, double nextZ)
         {
             double dz    = Math.Abs(nextZ - prevZ);
@@ -208,17 +228,17 @@ public static class GCodeGenerator
                 return;
             }
             double rampLen = (dz / 2.0) / Math.Tan(angle * Math.PI / 180.0);
-            if (ix0 + rampLen > ix1)
+            if (startX0 + rampLen > startX1)
             {
                 sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
                 return;
             }
             double midZ = prevZ - dz / 2.0;
-            sb.AppendLine($"G01 X{F(ix0 + rampLen)} Z{F(midZ)} F{(int)p.VorschubFz}");
-            sb.AppendLine($"G01 X{F(ix0)} Z{F(nextZ)} F{(int)p.VorschubFz}");
+            sb.AppendLine($"G01 X{F(startX0 + rampLen)} Z{F(midZ)} F{(int)p.VorschubFz}");
+            sb.AppendLine($"G01 X{F(startX0)} Z{F(nextZ)} F{(int)p.VorschubFz}");
         }
 
-        double lastToolX = zx0;
+        double lastToolX = startX0;
         double lastToolY = zy0;
 
         while (curZ > depth)
@@ -226,39 +246,103 @@ public static class GCodeGenerator
             double prevDepth = curZ;
             curZ = Math.Max(depth, curZ - zStep);
 
-            // 1. G00 zur Taschenecke (Materialkante) in XY
-            sb.AppendLine($"G00 X{F(ix0)} Y{F(iy0)}");
-            // 2. G00 runter auf vorherige Räumebene (Z=0 beim ersten Pass)
+            // 1. G00 direkt zum Räumstartpunkt (erste Zeile, 1mm von Schlichtkontur)
+            sb.AppendLine($"G00 X{F(startX0)} Y{F(zy0)}");
+            // 2. G00 runter auf vorherige Räumebene
             sb.AppendLine($"G00 Z{F(prevDepth)}");
-            // 3. Eintauchrampe diagonal auf neue Tiefe
+            // 3. Eintauchrampe
             AppendEntry(prevDepth, curZ);
-            // 4. auf Räumstartpunkt vorfahren
-            sb.AppendLine($"G01 X{F(zx0)} Y{F(zy0)} F{(int)p.Vorschub}");
 
-            double y       = zy0;
+            double y      = zy0;
             bool rightward = true;
+            double curXPos = startX0;
+
             while (true)
             {
-                sb.AppendLine(rightward
-                    ? $"G01 X{F(zx1)} F{(int)p.Vorschub}"
-                    : $"G01 X{F(zx0)} F{(int)p.Vorschub}");
+                var (rowX0, rowX1) = RoundedBounds(y);
+
+                if (rowX1 > rowX0 + 1e-6)
+                {
+                    double startX = rightward ? rowX0 : rowX1;
+                    double endX   = rightward ? rowX1 : rowX0;
+                    if (Math.Abs(curXPos - startX) > 1e-6)
+                        sb.AppendLine($"G01 X{F(startX)} F{(int)p.Vorschub}");
+                    sb.AppendLine($"G01 X{F(endX)} F{(int)p.Vorschub}");
+                    curXPos = endX;
+                    rightward = !rightward;
+                }
+
                 if (y >= zy1) break;
-                y = Math.Min(y + step, zy1);
-                sb.AppendLine($"G01 Y{F(y)} F{(int)p.Vorschub}");
-                rightward = !rightward;
+
+                // Nächste Y-Position: kein Einschnappen auf Eckgrenzen → volle Überlappung genutzt
+                double nextY = Math.Min(y + step, zy1);
+
+                // Verbindung zur nächsten Zeile
+                bool curInCorner  = cr > 1e-6 && rowX1 > rowX0 + 1e-6 &&
+                                    (y     < iy0 + cr - 1e-6 || y     > iy1 - cr + 1e-6);
+                bool nextInCorner = cr > 1e-6 &&
+                                    (nextY < iy0 + cr - 1e-6 || nextY > iy1 - cr + 1e-6);
+                if (!curInCorner && !nextInCorner)
+                {
+                    sb.AppendLine($"G01 Y{F(nextY)} F{(int)p.Vorschub}");
+                }
+                else
+                {
+                    bool onRight = Math.Abs(curXPos - rowX1) < 1e-6;
+                    double ccx   = onRight ? ix1 - cr : ix0 + cr;
+                    string arc   = onRight ? "G03" : "G02";
+
+                    if (!curInCorner)
+                    {
+                        // Gerade Zone → Eckzone: G01 bis Eckgrenze, dann Bogen
+                        double b = nextY > iy1 - cr + 1e-6 ? iy1 - cr : iy0 + cr;
+                        var (nrX0, nrX1) = RoundedBounds(nextY);
+                        double nextX = onRight ? nrX1 : nrX0;
+                        sb.AppendLine($"G01 Y{F(b)} F{(int)p.Vorschub}");
+                        sb.AppendLine($"{arc} X{F(nextX)} Y{F(nextY)} I{F(ccx - curXPos)} J0 F{(int)p.Vorschub}");
+                        curXPos = nextX;
+                    }
+                    else if (!nextInCorner)
+                    {
+                        // Eckzone → gerade Zone: Bogen bis Eckgrenze, dann G01
+                        double b   = y < iy0 + cr - 1e-6 ? iy0 + cr : iy1 - cr;
+                        double ccy = b;
+                        var (brX0, brX1) = RoundedBounds(b);
+                        double bX = onRight ? brX1 : brX0;
+                        sb.AppendLine($"{arc} X{F(bX)} Y{F(b)} I{F(ccx - curXPos)} J{F(ccy - y)} F{(int)p.Vorschub}");
+                        sb.AppendLine($"G01 Y{F(nextY)} F{(int)p.Vorschub}");
+                        curXPos = bX;
+                    }
+                    else
+                    {
+                        // Eckzone → Eckzone: direkter Bogen
+                        double ccy = y < iy0 + cr - 1e-6 ? iy0 + cr : iy1 - cr;
+                        var (nrX0, nrX1) = RoundedBounds(nextY);
+                        double nextX = onRight ? nrX1 : nrX0;
+                        sb.AppendLine($"{arc} X{F(nextX)} Y{F(nextY)} I{F(ccx - curXPos)} J{F(ccy - y)} F{(int)p.Vorschub}");
+                        curXPos = nextX;
+                    }
+                }
+                y = nextY;
             }
-            lastToolX = rightward ? zx1 : zx0;
+            lastToolX = curXPos;
             lastToolY = zy1;
 
             if (curZ > depth)
                 sb.AppendLine(Sz());
         }
 
-        // Schlichten: nächstgelegene Ecke direkt anfahren (kein Austauchen), Kontur im Uhrzeigersinn
-        (double x, double y)[] corners = [(ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1)];
+        // Schlichten: nächstgelegene Ecke anfahren, Kontur CW (Gegenlauf)
+        // Reihenfolge: BL, TL, TR, BR → CW
+        (double x, double y)[] corners = cr < 1e-6
+            ? [(ix0, iy0), (ix0, iy1), (ix1, iy1), (ix1, iy0)]
+            : [(ix0, iy1 - cr), (ix0 + cr, iy1), (ix1 - cr, iy1), (ix1, iy1 - cr),
+               (ix1, iy0 + cr), (ix1 - cr, iy0), (ix0 + cr, iy0), (ix0, iy0 + cr)];
+
         int startCorner = 0;
         double minDist  = double.MaxValue;
-        for (int i = 0; i < 4; i++)
+        int nc = corners.Length;
+        for (int i = 0; i < nc; i++)
         {
             double dx = corners[i].x - lastToolX;
             double dy = corners[i].y - lastToolY;
@@ -266,10 +350,37 @@ public static class GCodeGenerator
             if (d < minDist) { minDist = d; startCorner = i; }
         }
         sb.AppendLine($"G01 X{F(corners[startCorner].x)} Y{F(corners[startCorner].y)} F{(int)p.Vorschub}");
-        for (int i = 1; i <= 4; i++)
+
+        if (cr < 1e-6)
         {
-            var c = corners[(startCorner + i) % 4];
-            sb.AppendLine($"G01 X{F(c.x)} Y{F(c.y)} F{(int)p.Vorschub}");
+            for (int i = 1; i <= 4; i++)
+            {
+                var c = corners[(startCorner + i) % 4];
+                sb.AppendLine($"G01 X{F(c.x)} Y{F(c.y)} F{(int)p.Vorschub}");
+            }
+        }
+        else
+        {
+            // 8 Punkte: Eintritt/Austritt jeder Ecke; Ecken liegen bei ungeraden Indizes
+            // Arc-IJ-Tabelle: (I, J) des Bogenmittelpunkts relativ zum Startpunkt
+            // CW (G02) Bögen: TL=(+cr,0), TR=(0,-cr), BR=(-cr,0), BL=(0,+cr)
+            (double i, double j)[] arcIJ = [(cr, 0), (0, -cr), (-cr, 0), (0, cr)];
+            for (int k = 1; k <= 8; k++)
+            {
+                int idx    = (startCorner + k) % 8;
+                var (ex, ey) = corners[idx];
+                if (idx % 2 == 0)
+                {
+                    // gerader Abschnitt: Linie
+                    sb.AppendLine($"G01 X{F(ex)} Y{F(ey)} F{(int)p.Vorschub}");
+                }
+                else
+                {
+                    // Eckbogen: G02 (CW = Gegenlauf)
+                    var (aI, aJ) = arcIJ[idx / 2 % 4];
+                    sb.AppendLine($"G02 X{F(ex)} Y{F(ey)} I{F(aI)} J{F(aJ)} F{(int)p.Vorschub}");
+                }
+            }
         }
 
         sb.AppendLine(Sz());
@@ -752,6 +863,168 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    public static string Rechteck(RechteckParams p, double workW, double workH)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("(Rechteck fräsen)");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
+        sb.AppendLine($"(B={F(p.Breite)} H={F(p.Hoehe)}, Fraesung={p.Fraesung}, {p.Laufrichtung})");
+
+        // Position der unteren-linken Ecke berechnen
+        var (refX, refY) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+        var (bx, by) = p.Bezugspunkt switch
+        {
+            "Unten links"  => (0.0,           0.0),
+            "Unten Mitte"  => (-p.Breite/2,   0.0),
+            "Unten rechts" => (-p.Breite,      0.0),
+            "Links Mitte"  => (0.0,           -p.Hoehe/2),
+            "Mitte"        => (-p.Breite/2,   -p.Hoehe/2),
+            "Rechts Mitte" => (-p.Breite,     -p.Hoehe/2),
+            "Oben links"   => (0.0,           -p.Hoehe),
+            "Oben Mitte"   => (-p.Breite/2,   -p.Hoehe),
+            _              => (-p.Breite,     -p.Hoehe)   // Oben rechts
+        };
+        double x0 = refX + bx, y0 = refY + by;
+        double x1 = x0 + p.Breite, y1 = y0 + p.Hoehe;
+
+        // Werkzeug-Offset je nach Fräsung
+        double off = p.Fraesung switch
+        {
+            "Aussen" =>  p.FraeserD / 2.0,
+            "Innen"  => -p.FraeserD / 2.0,
+            _        =>  0.0
+        };
+        double mX0 = x0 - off, mY0 = y0 - off;
+        double mX1 = x1 + off, mY1 = y1 + off;
+
+        if (mX1 - mX0 < 1e-6 || mY1 - mY0 < 1e-6)
+        {
+            sb.AppendLine("(Rechteck zu klein für gewählte Fräsung/Fräser)");
+            sb.AppendLine("M05");
+            return sb.ToString();
+        }
+
+        // v  = Fertigkante-Eckenradius (auf halbe Werkstückdimension begrenzt)
+        // ar = Werkzeugmittelpunkt-Bogenradius = v + off
+        //      Aussen (off>0): ar > v  — Bogen um konvexe Außenecke herum
+        //      Mittig (off=0): ar = v
+        //      Innen  (off<0): ar = v - |off|; <= 0 → keine Bögen
+        double v  = Math.Max(0.0, Math.Min(p.Verrundung, Math.Min((x1-x0)/2.0, (y1-y0)/2.0)));
+        double ar = v + off;   // Bogenradius der Werkzeugmittelpunktbahn
+
+        bool gegenlauf = p.Laufrichtung != "Gleichlauf";
+        double startX  = (mX0 + mX1) / 2.0;
+        double startY  = mY0;
+
+        // Eintauchrampe: entlang der Unterkante zur nächsten Ecke hin und zurück
+        void AppendEntry(double prevZ, double nextZ)
+        {
+            double dz    = Math.Abs(nextZ - prevZ);
+            double angle = p.Eintauchwinkel;
+            if (angle >= 90 || angle <= 0 || dz < 1e-6)
+            {
+                sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
+                return;
+            }
+            double rampLen = (dz / 2.0) / Math.Tan(angle * Math.PI / 180.0);
+            // Erster Konturpunkt der Unterseite
+            double firstX = ar > 1e-6
+                ? (gegenlauf ? x1 - v : x0 + v)
+                : (gegenlauf ? mX1    : mX0);
+            double segLen  = Math.Abs(firstX - startX);
+            if (segLen >= rampLen * 2)
+            {
+                double midZ  = prevZ - dz / 2.0;
+                double rampX = gegenlauf ? startX + rampLen : startX - rampLen;
+                sb.AppendLine($"G01 X{F(rampX)} Y{F(startY)} Z{F(midZ)} F{(int)p.VorschubFz}");
+                sb.AppendLine($"G01 X{F(startX)} Y{F(startY)} Z{F(nextZ)} F{(int)p.VorschubFz}");
+            }
+            else
+            {
+                sb.AppendLine($"G01 Z{F(nextZ)} F{(int)p.VorschubFz}");
+            }
+        }
+
+        var contour = new List<string>();
+        string L(double x, double y) =>
+            $"G01 X{F(x)} Y{F(y)} F{(int)p.Vorschub}";
+        string A3(double x, double y, double i, double j) =>
+            $"G03 X{F(x)} Y{F(y)} I{F(i)} J{F(j)} F{(int)p.Vorschub}";
+        string A2(double x, double y, double i, double j) =>
+            $"G02 X{F(x)} Y{F(y)} I{F(i)} J{F(j)} F{(int)p.Vorschub}";
+
+        // Bögen an allen vier Ecken — unified formula:
+        //   Tangentenpunkte auf den Geradestücken hängen von v (Fertigkante) ab.
+        //   Bogenmittelpunkte liegen an den Werkstückecken, versetzt um v.
+        //   I/J = ar (= v + off).
+        //   ar <= 0: keine Bögen (z.B. Innen mit kleinem v), einfache Ecken.
+        if (ar > 1e-6)
+        {
+            if (gegenlauf)
+            {
+                // Gegenlauf (G03): CW-Pfad, BR→TR→TL→BL
+                contour.Add(L(x1-v, mY0));
+                contour.Add(A3(mX1,  y0+v,   0,  ar));  // BR: Mitte (x1-v, y0+v)
+                contour.Add(L(mX1,  y1-v));
+                contour.Add(A3(x1-v, mY1,  -ar,   0));  // TR: Mitte (x1-v, y1-v)
+                contour.Add(L(x0+v, mY1));
+                contour.Add(A3(mX0,  y1-v,   0, -ar));  // TL: Mitte (x0+v, y1-v)
+                contour.Add(L(mX0,  y0+v));
+                contour.Add(A3(x0+v, mY0,   ar,   0));  // BL: Mitte (x0+v, y0+v)
+            }
+            else
+            {
+                // Gleichlauf (G02): CCW-Pfad, BL→TL→TR→BR
+                contour.Add(L(x0+v, mY0));
+                contour.Add(A2(mX0,  y0+v,   0,  ar));  // BL: Mitte (x0+v, y0+v)
+                contour.Add(L(mX0,  y1-v));
+                contour.Add(A2(x0+v, mY1,   ar,   0));  // TL: Mitte (x0+v, y1-v)
+                contour.Add(L(x1-v, mY1));
+                contour.Add(A2(mX1,  y1-v,   0, -ar));  // TR: Mitte (x1-v, y1-v)
+                contour.Add(L(mX1,  y0+v));
+                contour.Add(A2(x1-v, mY0,  -ar,   0));  // BR: Mitte (x1-v, y0+v)
+            }
+        }
+        else
+        {
+            if (gegenlauf)
+            {
+                contour.Add(L(mX1,mY0)); contour.Add(L(mX1,mY1));
+                contour.Add(L(mX0,mY1)); contour.Add(L(mX0,mY0));
+            }
+            else
+            {
+                contour.Add(L(mX0,mY0)); contour.Add(L(mX0,mY1));
+                contour.Add(L(mX1,mY1)); contour.Add(L(mX1,mY0));
+            }
+        }
+        contour.Add(L(startX, startY));
+
+        // Z-Stufen
+        var zLevels = new List<double>();
+        if (p.MehrfachZustellung && p.ZZustellung > 0 && p.ZTiefe < 0)
+        {
+            for (double cz = -p.ZZustellung; cz > p.ZTiefe; cz -= p.ZZustellung)
+                zLevels.Add(Math.Round(cz, 4));
+        }
+        zLevels.Add(p.ZTiefe);
+
+        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
+        sb.AppendLine(Sz());
+        sb.AppendLine($"G00 X{F(startX)} Y{F(startY)}");
+        double prevZ = 0;
+        for (int pass = 0; pass < zLevels.Count; pass++)
+        {
+            sb.AppendLine($"G00 Z{F(prevZ)}");
+            AppendEntry(prevZ, zLevels[pass]);
+            foreach (var ln in contour) sb.AppendLine(ln);
+            prevZ = zLevels[pass];
+        }
+        sb.AppendLine(Sz());
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
     // Berechnet versetzte Segmentpunkte und liefert (Startpunkt, Liste von G-Code-Moves).
     // Konvexe Ecken → G02/G03-Bogen; konkave Ecken → Miter-Schnittpunkt.
     private static ((double X, double Y) Start, List<string> Moves) BuildOffsetMoves(
@@ -911,10 +1184,19 @@ public static class GCodeGenerator
         bool closed = pts.Count >= 3 &&
             Math.Sqrt(Math.Pow(pts[0].x - pts[^1].x, 2) + Math.Pow(pts[0].y - pts[^1].y, 2)) < 0.01;
 
+        // Corner rounding: Startpunkt-R als globaler Fallback, Einzelpunkte können überschreiben
+        double globalR = sp.Verrundung;
+        var verrundungen = path.Select(p => p.Verrundung > 1e-10 ? p.Verrundung : globalR).ToList();
+        bool hasRounding = verrundungen.Any(v => v > 1e-10);
+
         List<PathMove> moves;
         if (hasBogen)
         {
-            moves = BuildBogenMoves(pts, arcMids, corr ? r : 0, corr ? sg : 0, closed);
+            // Bei gemischten Pfaden (Linien + Bögen): Linie→Linie-Ecken mit Verrundung vorverarbeiten
+            var (rPts, rMids) = hasRounding
+                ? InsertLineCornerArcs(pts, arcMids, verrundungen, closed)
+                : (pts, arcMids);
+            moves = BuildBogenMoves(rPts, rMids, corr ? r : 0, corr ? sg : 0, closed);
             if (closed && moves.Count > 0)
                 moves.Add(moves[0]);
         }
@@ -922,11 +1204,6 @@ public static class GCodeGenerator
         {
             // Unique points (no duplicate endpoint for closed path)
             var uniquePts = closed ? pts.Take(pts.Count - 1).ToList() : pts;
-
-            // Corner rounding: Startpunkt-R als globaler Fallback, Einzelpunkte können überschreiben
-            double globalR = sp.Verrundung;
-            var verrundungen = path.Select(p => p.Verrundung > 1e-10 ? p.Verrundung : globalR).ToList();
-            bool hasRounding = verrundungen.Any(v => v > 1e-10);
 
             if (corr && r > 1e-10 && uniquePts.Count >= 2)
             {
@@ -1237,6 +1514,189 @@ public static class GCodeGenerator
         double R = Math.Sqrt(dx * dx + dy * dy);
         if (R < 1e-12) return (1, 0);
         return cw ? (dy / R, -dx / R) : (-dy / R, dx / R);
+    }
+
+    // Ecken in einem gemischten Pfad (Linien + Bögen) verrunden.
+    // Funktioniert an allen Übergängen: L→L, L→B, B→L, B→B.
+    // Verkürzt eingehende/ausgehende Segmente und fügt einen Tangentialbogen ein.
+    internal static (List<(double x, double y)> pts, List<(double mx, double my)?> arcMids)
+        InsertLineCornerArcs(
+            List<(double x, double y)> pts,
+            List<(double mx, double my)?> arcMids,
+            List<double> verrundungen, bool closed)
+    {
+        int n = pts.Count;
+
+        // Bogengeometrie für alle Bogensegmente vorberechnen
+        var geom = new (double cx, double cy, double R, bool cw)?[n];
+        for (int i = 1; i < n; i++)
+        {
+            if (arcMids[i].HasValue)
+            {
+                var (cx, cy, R, cw) = ArcFrom3Points(
+                    pts[i-1].x, pts[i-1].y,
+                    arcMids[i].Value.mx, arcMids[i].Value.my,
+                    pts[i].x, pts[i].y);
+                if (!double.IsInfinity(R))
+                    geom[i] = (cx, cy, R, cw);
+            }
+        }
+
+        // Effektive Start-/Endpunkte jedes Segments (nach Verrundungskürzung)
+        var segStart = new (double x, double y)[n]; // Start von Segment i
+        var segEnd   = new (double x, double y)[n]; // End   von Segment i
+        for (int i = 1; i < n; i++) { segStart[i] = pts[i-1]; segEnd[i] = pts[i]; }
+
+        // Verrundungsbogen an Ecke i: (Eintrittspunkt, arcMid, Austrittspunkt)
+        var corner = new (double ex, double ey, double mx, double my, double ax, double ay)?[n];
+
+        // Bogenlänge eines Segments (für t-Begrenzung)
+        double SegLen(int i)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                double a1 = Math.Atan2(pts[i-1].y - g.cy, pts[i-1].x - g.cx);
+                double a2 = Math.Atan2(pts[i].y   - g.cy, pts[i].x   - g.cx);
+                double sp = a2 - a1;
+                if (g.cw) { if (sp > 0) sp -= 2*Math.PI; } else { if (sp < 0) sp += 2*Math.PI; }
+                return g.R * Math.Abs(sp);
+            }
+            double dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+            return Math.Sqrt(dx*dx + dy*dy);
+        }
+
+        // Vorwärtstangente am Ende von Segment i (am Punkt pts[i])
+        (double x, double y) TanEnd(int i)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                return BogenArcTangentAt(g.cx, g.cy, pts[i].x, pts[i].y, g.cw);
+            }
+            double dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            return len > 1e-10 ? (dx/len, dy/len) : (1, 0);
+        }
+
+        // Vorwärtstangente am Anfang von Segment i (am Punkt pts[i-1])
+        (double x, double y) TanStart(int i)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                return BogenArcTangentAt(g.cx, g.cy, pts[i-1].x, pts[i-1].y, g.cw);
+            }
+            double dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            return len > 1e-10 ? (dx/len, dy/len) : (1, 0);
+        }
+
+        // Punkt auf Segment i im Abstand t vom Ende (rückwärts)
+        (double x, double y) StepBack(int i, double t)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                double a2  = Math.Atan2(pts[i].y - g.cy, pts[i].x - g.cx);
+                double dA  = t / g.R;
+                double ang = a2 + (g.cw ? dA : -dA); // rückwärts = gegen Fahrtrichtung
+                return (g.cx + g.R * Math.Cos(ang), g.cy + g.R * Math.Sin(ang));
+            }
+            var tan = TanEnd(i);
+            return (pts[i].x - t * tan.x, pts[i].y - t * tan.y);
+        }
+
+        // Punkt auf Segment i im Abstand t vom Anfang (vorwärts)
+        (double x, double y) StepFwd(int i, double t)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                double a1  = Math.Atan2(pts[i-1].y - g.cy, pts[i-1].x - g.cx);
+                double dA  = t / g.R;
+                double ang = a1 + (g.cw ? -dA : dA); // vorwärts = Fahrtrichtung
+                return (g.cx + g.R * Math.Cos(ang), g.cy + g.R * Math.Sin(ang));
+            }
+            var tan = TanStart(i);
+            return (pts[i-1].x + t * tan.x, pts[i-1].y + t * tan.y);
+        }
+
+        // Bögen verrunden: alle inneren Ecken
+        for (int i = 1; i < n - 1; i++)
+        {
+            double v = i < verrundungen.Count ? verrundungen[i] : 0;
+            if (v < 1e-10) continue;
+
+            var tanIn  = TanEnd(i);     // Tangente am Ende von Segment i
+            var tanOut = TanStart(i+1); // Tangente am Anfang von Segment i+1
+
+            double cross = tanIn.x * tanOut.y - tanIn.y * tanOut.x;
+            if (Math.Abs(cross) < 1e-6) continue; // parallel/antiparallel
+
+            double dot   = Math.Clamp(tanIn.x * tanOut.x + tanIn.y * tanOut.y, -1.0, 1.0);
+            double theta = Math.Acos(dot);
+            double t     = v * Math.Tan(theta / 2.0);
+            t = Math.Min(t, SegLen(i)   * 0.45);
+            t = Math.Min(t, SegLen(i+1) * 0.45);
+            double rEff  = t / Math.Tan(theta / 2.0);
+
+            var entry = StepBack(i,   t); // Eintrittspunkt (auf Segment i,   t vor Ende)
+            var exit_ = StepFwd (i+1, t); // Austrittspunkt (auf Segment i+1, t nach Anfang)
+
+            // Verrundungsbogen-Mitte berechnen
+            double sgn = Math.Sign(cross);
+            double nx   = -tanIn.y * sgn, ny = tanIn.x * sgn;
+            double acx  = entry.x + nx * rEff, acy = entry.y + ny * rEff;
+            double aa1  = Math.Atan2(entry.y - acy, entry.x - acx);
+            double aa2  = Math.Atan2(exit_.y  - acy, exit_.x  - acx);
+            double span = aa2 - aa1;
+            if (sgn > 0) { if (span < 0) span += 2 * Math.PI; }
+            else         { if (span > 0) span -= 2 * Math.PI; }
+            double midX = acx + rEff * Math.Cos(aa1 + span / 2);
+            double midY = acy + rEff * Math.Sin(aa1 + span / 2);
+
+            corner[i]   = (entry.x, entry.y, midX, midY, exit_.x, exit_.y);
+            segEnd[i]   = entry;
+            segStart[i+1] = exit_;
+        }
+
+        // Ausgabeliste aufbauen
+        var newPts  = new List<(double x, double y)>();
+        var newMids = new List<(double mx, double my)?>();
+        newPts.Add(pts[0]);
+        newMids.Add(null);
+
+        for (int i = 1; i < n; i++)
+        {
+            var sStart = segStart[i];
+            var sEnd   = segEnd[i];
+
+            // arcMid für (ggf. gekürzten) Bogen neu berechnen
+            (double mx, double my)? mid = arcMids[i];
+            if (geom[i].HasValue)
+            {
+                var g   = geom[i].Value;
+                double a1 = Math.Atan2(sStart.y - g.cy, sStart.x - g.cx);
+                double a2 = Math.Atan2(sEnd.y   - g.cy, sEnd.x   - g.cx);
+                double sp = a2 - a1;
+                if (g.cw) { if (sp > 0) sp -= 2*Math.PI; } else { if (sp < 0) sp += 2*Math.PI; }
+                mid = (g.cx + g.R * Math.Cos(a1 + sp / 2), g.cy + g.R * Math.Sin(a1 + sp / 2));
+            }
+
+            newPts.Add(sEnd);
+            newMids.Add(mid);
+
+            // Verrundungsbogen nach diesem Segment einfügen
+            if (i < n - 1 && corner[i].HasValue)
+            {
+                var c = corner[i].Value;
+                newPts.Add((c.ax, c.ay));           // Austrittspunkt
+                newMids.Add((c.mx, c.my));           // arcMid = Verrundungsbogen
+            }
+        }
+
+        return (newPts, newMids);
     }
 
     // Ecken mit Radius runden (approximiert als Segmente, vor Offset-Berechnung)
@@ -2355,7 +2815,7 @@ public static class GCodeGenerator
         var figSegStart = new int[figs.Count];
         { int fso = 0; for (int fi2 = 0; fi2 < figs.Count; fi2++) { figSegStart[fi2] = fso; fso += figPts[fi2].Length; } }
 
-        const double cornerStepRad = 5.0 * Math.PI / 180.0;
+        const double cornerStepRad = 2.0 * Math.PI / 180.0;
 
         // Jede Figur (Buchstabe) ist unabhängig → parallel verarbeiten.
         // fillGeo ist Frozen → thread-sicher; segsArr/gridCells sind read-only.
@@ -2388,11 +2848,60 @@ public static class GCodeGenerator
             {
                 if (!segBounds[k]) continue;
                 int kP = (k - 1 + nPts) % nPts;
-                if (edgeTsx[kP] * edgeTsx[k] + edgeTsy[kP] * edgeTsy[k] > 0.990) continue;
+
+                // Tangenten-Fallback: sehr kurze Segmente (letztes Bezier-Approx-Stück)
+                // haben tsx=tsy=0 → Dot-Product wäre 0, glatte Kurve würde fälschlich als
+                // Ecke erkannt. Daher nächstes gültiges Segment suchen.
+                double tsPx = edgeTsx[kP], tsPy = edgeTsy[kP];
+                if (tsPx * tsPx + tsPy * tsPy < 1e-18)
+                {
+                    for (int t = 1; t <= 5; t++)
+                    {
+                        int kk = (kP - t + nPts) % nPts;
+                        if (edgeTsx[kk] * edgeTsx[kk] + edgeTsy[kk] * edgeTsy[kk] > 1e-18)
+                        { tsPx = edgeTsx[kk]; tsPy = edgeTsy[kk]; break; }
+                    }
+                }
+                double tsCx = edgeTsx[k], tsCy = edgeTsy[k];
+                if (tsCx * tsCx + tsCy * tsCy < 1e-18)
+                {
+                    for (int t = 1; t <= 5; t++)
+                    {
+                        int kk = (k + t) % nPts;
+                        if (edgeTsx[kk] * edgeTsx[kk] + edgeTsy[kk] * edgeTsy[kk] > 1e-18)
+                        { tsCx = edgeTsx[kk]; tsCy = edgeTsy[kk]; break; }
+                    }
+                }
+                // Keine gültige Tangente gefunden → Ecke nicht klassifizierbar → überspringen
+                if (tsPx * tsPx + tsPy * tsPy < 1e-18) continue;
+                if (tsCx * tsCx + tsCy * tsCy < 1e-18) continue;
+                // Glatte Bezier-Übergänge (tangenten-kontinuierlich) überspringen.
+                if (tsPx * tsCx + tsPy * tsCy > 0.990) continue;
+
+                // Einwärts-Normale der anliegenden Segmente ermitteln.
+                // Fallback: sehr kurze Segmente haben inx=iny=0 → nächstes gültiges suchen.
                 var sP = segsArr[so + kP];
-                var sC = segsArr[so + k];
+                if (sP.inx * sP.inx + sP.iny * sP.iny < 1e-18)
+                {
+                    for (int t = 1; t <= 5; t++)
+                    {
+                        var cand = segsArr[so + (kP - t + nPts) % nPts];
+                        if (cand.inx * cand.inx + cand.iny * cand.iny > 1e-18) { sP = cand; break; }
+                    }
+                }
                 if (sP.inx * sP.inx + sP.iny * sP.iny < 1e-18) continue;
+
+                var sC = segsArr[so + k];
+                if (sC.inx * sC.inx + sC.iny * sC.iny < 1e-18)
+                {
+                    for (int t = 1; t <= 5; t++)
+                    {
+                        var cand = segsArr[so + (k + t) % nPts];
+                        if (cand.inx * cand.inx + cand.iny * cand.iny > 1e-18) { sC = cand; break; }
+                    }
+                }
                 if (sC.inx * sC.inx + sC.iny * sC.iny < 1e-18) continue;
+
                 double bX = sP.inx + sC.inx, bY = sP.iny + sC.iny;
                 if (bX * bX + bY * bY < 1e-18) continue;
                 cornerAtArc[arcLen[k]] = k;
@@ -2503,8 +3012,28 @@ public static class GCodeGenerator
 
                 // ── Ecken-Kreise (konkav + konvex) ────────────────────────
                 int  ckP  = (ck - 1 + nPts) % nPts;
-                var  csP  = segsArr[so + ckP];
-                var  csC  = segsArr[so + ck];
+
+                // Fallback: sehr kurze Segmente haben tsx=tsy=inx=iny=0.
+                // Gleiches Schema wie in cornerAtArc-Detektion.
+                var csP = segsArr[so + ckP];
+                if (csP.inx * csP.inx + csP.iny * csP.iny < 1e-18)
+                {
+                    for (int t = 1; t <= 5; t++)
+                    {
+                        var cand = segsArr[so + (ckP - t + nPts) % nPts];
+                        if (cand.inx * cand.inx + cand.iny * cand.iny > 1e-18) { csP = cand; break; }
+                    }
+                }
+                var csC = segsArr[so + ck];
+                if (csC.inx * csC.inx + csC.iny * csC.iny < 1e-18)
+                {
+                    for (int t = 1; t <= 5; t++)
+                    {
+                        var cand = segsArr[so + (ck + t) % nPts];
+                        if (cand.inx * cand.inx + cand.iny * cand.iny > 1e-18) { csC = cand; break; }
+                    }
+                }
+
                 double evx = pts[ck].x, evy = pts[ck].y;
                 bool isConcave = csP.tsx * csC.tsy - csP.tsy * csC.tsx < 0;
 
@@ -2516,10 +3045,11 @@ public static class GCodeGenerator
 
                 if (isConcave)
                 {
-                    // Konkave Ecke: Fächer von Einwärts-Normal P bis Einwärts-Normal C,
-                    // analog zum konvexen Fächer.  TryPt funktioniert von V aus, weil die
-                    // anliegenden Segmente an V enden — PtSegDist2 zum Kreismittelpunkt
-                    // ergibt genau r² (tangential), nie < r², und blockiert die Suche nicht.
+                    // Konkave Ecke: Fächer von Einwärts-Normal P bis Einwärts-Normal C.
+                    // Pro Winkel: Probe-Test ob die Richtung ins Glyphen-Innere zeigt.
+                    // Dadurch werden falsch orientierte Winkel (z.B. wenn da-Vorzeichen
+                    // durch Floating-Point kippt) still gefiltert, ohne da umzuklappen
+                    // (Umklappen würde riesige Fächer erzeugen und die Reihenfolge brechen).
                     int ns = Math.Max(2, (int)Math.Ceiling(Math.Abs(da) / cornerStepRad));
                     for (int s = 0; s <= ns; s++)
                     {
@@ -2530,11 +3060,16 @@ public static class GCodeGenerator
                 }
                 else
                 {
-                    // Konvexe Ecke: nur bei echten Ecken (≥ ~25°).
-                    if (Math.Abs(da) < 0.44) continue;
+                    // Konvexe (oder falsch klassifizierte) Ecke.
+                    // segBounds + dot-product > 0.990 filtern glatte Bezier-Übergänge
+                    // bereits zuverlässig → kein zusätzlicher da-Schwellwert nötig.
+                    // Ohne Schwellwert werden auch konkave Ecken gefangen, deren
+                    // isConcave-Flag durch Pfadorientierung falsch gesetzt ist
+                    // (z. B. Innenecke 'r' mit CCW-orientierter Kontur).
+                    if (Math.Abs(da) < 0.08) continue;   // nur rein numerisches Rauschen (< 5°) überspringen
 
                     // Fächer a1 → a2
-                    int ns = Math.Max(4, (int)Math.Ceiling(Math.Abs(da) / cornerStepRad));
+                    int ns = Math.Max(2, (int)Math.Ceiling(Math.Abs(da) / cornerStepRad));
                     for (int s = 0; s <= ns; s++)
                     {
                         double a = a1 + da * s / ns;
@@ -2686,8 +3221,11 @@ public static class GCodeGenerator
         {
             var    prev = flat[i - 1];
             var    curr = flat[i];
-            double dx   = curr.X - prev.X, dy = curr.Y - prev.Y;
-            if (dx * dx + dy * dy > cSq)
+            // Verschiedene Original-Glyphen (FigIdx-Quotienten aus ResampleVCarveCircles)
+            // → immer Abhub (G00), niemals G01-Verbindung egal wie nah die Kreise sind.
+            bool diffGlyph = (prev.FigIdx / 10000) != (curr.FigIdx / 10000);
+            double dx = curr.X - prev.X, dy = curr.Y - prev.Y;
+            if (diffGlyph || dx * dx + dy * dy > cSq)
                 newFi++;
             result.Add(curr with { FigIdx = newFi });
         }

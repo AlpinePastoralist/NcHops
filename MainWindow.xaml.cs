@@ -43,7 +43,7 @@ public partial class MainWindow : Window
     private Point  _panOrigin;  // _panX/_panY beim Drag-Start
 
     // ── Aktives Werkzeug ─────────────────────────────────────────
-    private enum CanvasTool { Select, Hand, Zoom, VCarveText, Move, PfadStart, PfadLinie, PfadBogen }
+    private enum CanvasTool { Select, Hand, Zoom, VCarveText, Move, PfadStart, PfadLinie, PfadBogen, Rechteck }
     private CanvasTool _activeTool    = CanvasTool.Select;
     private bool       _isZoomDragging = false;
     private Point      _zoomDragStart;
@@ -70,6 +70,11 @@ public partial class MainWindow : Window
     private (double x, double y) _pfadBogenEndAbs;       // Bogen-Endpunkt (absolut mm)
     private (double x, double y) _pfadMouseMm;            // Aktuell gefangene Mausposition (mm)
     private bool             _pfadMouseValid = false;
+
+    // ── Rechteck-Werkzeug ────────────────────────────────────────
+    private bool             _rktDragging  = false;
+    private Point            _rktDragStart;             // Canvas-Pixel
+    private System.Windows.Shapes.Rectangle? _rktRubberBand;
 
     // ── Pfad-Punkte verschieben (Move-Werkzeug) ──────────────
     private int              _pfadDragHistIdx = -1;       // History-Idx des gezogenen Pfad-Punkts
@@ -109,6 +114,9 @@ public partial class MainWindow : Window
     private double _rasterY = 10.0;
     private readonly ObservableCollection<HistoryEntry> _history = [];
     private readonly List<HistoryEntry> _historyClipboard = [];
+    private System.ComponentModel.ICollectionView? _historyView;
+    // Verlauf-Eintrag → G-Code-Zeilenbereich (1-basiert, inklusiv)
+    private Dictionary<HistoryEntry, (int start, int end)> _historyLineMap = [];
     private bool _suppressHistoryRegen;
     private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
     private bool _suppressSave;
@@ -130,7 +138,8 @@ public partial class MainWindow : Window
         _textGeoCache = new();
     private readonly HashSet<GraviereParams> _vCarvePending = new();
     public List<GCodeGenerator.VCarveCircle> VCarveCenters { get; private set; } = [];
-    private GraviereParams? _previewGravParams;
+    private GraviereParams?  _previewGravParams;
+    private RechteckParams?  _previewRktParams;
     private static readonly string WerkzeugDatei = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "NCHops", "werkzeuge.json");
@@ -262,7 +271,9 @@ public partial class MainWindow : Window
             DispatcherPriority.Render, OnSimTick, Dispatcher);
         _simTimer.Stop();
 
-        HistoryList.ItemsSource = _history;
+        _historyView = System.Windows.Data.CollectionViewSource.GetDefaultView(_history);
+        _historyView.Filter = IsHistoryEntryVisible;
+        HistoryList.ItemsSource = _historyView;
         _history.CollectionChanged += (_, _) => { if (!_suppressHistoryRegen) RegenerateGCodeFromHistory(); };
         WerkzeugGrid.ItemsSource = _werkzeuge;
         _werkzeuge.CollectionChanged += (_, _) => SaveWerkzeuge();
@@ -444,6 +455,71 @@ public partial class MainWindow : Window
         BtnToolPfadKurve.IsEnabled = aktiv;
     }
 
+    // ── Verlauf: Einklappen ──────────────────────────────────────
+    private bool IsHistoryEntryVisible(object obj)
+    {
+        if (obj is not HistoryEntry e || e.Level == 0) return true;
+        // Level-1-Eintrag: zum übergeordneten Level-0-Eintrag suchen
+        int idx = _history.IndexOf(e);
+        for (int i = idx - 1; i >= 0; i--)
+        {
+            if (_history[i].Level == 0)
+                return !_history[i].IsCollapsed;
+        }
+        return true;
+    }
+
+    private void OnHistoryToggleCollapse(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is HistoryEntry entry)
+        {
+            entry.IsCollapsed = !entry.IsCollapsed;
+            _historyView?.Refresh();
+            // Klick nicht weiter propagieren – kein ungewolltes Deselect
+            e.Handled = true;
+        }
+    }
+
+    // ── Verlauf: G-Code-Zeilen hervorheben ──────────────────────
+    private void HighlightHistoryEntry(HistoryEntry? entry)
+    {
+        if (_gcodeBgRenderer is null) return;
+
+        // Bei Mehrfach-Selektion: Union aller Bereiche
+        var selected = HistoryList.SelectedItems.Cast<HistoryEntry>().ToList();
+        int rangeStart = -1, rangeEnd = -1;
+
+        foreach (var e in selected)
+        {
+            // Bei Pfad-Startpunkt auch alle zugehörigen Sub-Einträge einschließen
+            var candidates = (e.Params is PfadPunktParams { Typ: PfadPunktTyp.Start })
+                ? _history
+                    .SkipWhile(h => !ReferenceEquals(h, e))
+                    .TakeWhile(h => ReferenceEquals(h, e) || h.Level == 1)
+                    .ToList()
+                : [e];
+
+            foreach (var ce in candidates)
+            {
+                if (!_historyLineMap.TryGetValue(ce, out var r)) continue;
+                if (rangeStart < 0) { rangeStart = r.start; rangeEnd = r.end; }
+                else { rangeStart = Math.Min(rangeStart, r.start); rangeEnd = Math.Max(rangeEnd, r.end); }
+            }
+        }
+
+        _gcodeBgRenderer.HistRangeStart = rangeStart;
+        _gcodeBgRenderer.HistRangeEnd   = rangeEnd;
+        GCodeBox.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+
+        // Editor zum Bereich scrollen (nur wenn sinnvolle Range)
+        if (rangeStart > 0 && GCodeBox.Document.LineCount >= rangeStart)
+        {
+            var docLine = GCodeBox.Document.GetLineByNumber(
+                Math.Min(rangeStart, GCodeBox.Document.LineCount));
+            GCodeBox.ScrollTo(docLine.LineNumber, 1);
+        }
+    }
+
     private void OnPfadStart(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.PfadStart ? CanvasTool.Select : CanvasTool.PfadStart);
 
@@ -494,6 +570,7 @@ public partial class MainWindow : Window
             Typ:           PfadPunktTyp.Start,
             Eintauchwinkel: wz?.Eintauchwinkel ?? 90
         );
+        _suppressNextAutoFit = true;
         _history.Add(new HistoryEntry("Pfad Start",
             $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}, {p.Bezugspunkt}", p));
         UpdatePfadMenuState();
@@ -502,12 +579,149 @@ public partial class MainWindow : Window
         SetActiveTool(CanvasTool.PfadLinie);
     }
 
+    // ── Rechteck ────────────────────────────────────────────────
+    private void AddRechteck(double x0mm, double y0mm, double bMm, double hMm)
+    {
+        var wz = _werkzeuge.FirstOrDefault();
+        var p = new RechteckParams(
+            XRel:        Math.Round(x0mm, 3),
+            YRel:        Math.Round(y0mm, 3),
+            Breite:      bMm,
+            Hoehe:       hMm,
+            ZTiefe:      wz != null ? -(Math.Abs(WorkZ)) : -5,
+            FraeserD:    wz?.Durchmesser ?? 6,
+            Drehzahl:    wz?.Drehzahl    ?? 18000,
+            Vorschub:    wz?.VorschubFxy ?? 3000,
+            VorschubFz:  wz?.VorschubFz  ?? 500,
+            Bezugspunkt: "Unten links",
+            Fraesung:    "Aussen",
+            Laufrichtung:"Gegenlauf",
+            Verrundung:  0,
+            WerkzeugNr:  wz?.Nr ?? 0,
+            Eintauchwinkel:    wz?.Eintauchwinkel ?? 3,
+            MehrfachZustellung: wz != null,
+            ZZustellung:       wz?.ZZustellung ?? 2
+        );
+        _history.Add(new HistoryEntry("Rechteck",
+            $"X={p.XRel} Y={p.YRel}, {p.Breite}×{p.Hoehe}, Z={p.ZTiefe}", p));
+        HistoryList.SelectedItem    = _history[^1];
+        TabEigenschaften.IsSelected = true;
+    }
+
+    private void OnRechteckTool(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.Rechteck ? CanvasTool.Select : CanvasTool.Rechteck);
+
+    private void ApplyRechteckEig()
+    {
+        if (_eigSuppressUpdate) return;
+        int idx = HistoryList.SelectedIndex;
+        if (idx < 0 || _history[idx].Params is not RechteckParams rkt) return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sty = System.Globalization.NumberStyles.Float;
+        string Norm(string s) => s.Replace(',', '.');
+
+        if (!double.TryParse(Norm(RktEigX.Text),    sty, inv, out var x))    return;
+        if (!double.TryParse(Norm(RktEigY.Text),    sty, inv, out var y))    return;
+        if (!double.TryParse(Norm(RktEigBreite.Text),sty, inv, out var b))   return;
+        if (!double.TryParse(Norm(RktEigHoehe.Text), sty, inv, out var h))   return;
+        if (!double.TryParse(Norm(RktEigZ.Text),    sty, inv, out var z))    return;
+        if (!double.TryParse(Norm(RktEigVer.Text),  sty, inv, out var ver))  return;
+        bool mehrfach = RktEigMehrfach.IsChecked == true;
+        double.TryParse(Norm(RktEigZZust.Text), sty, inv, out var zzust);
+
+        string bezug = RktBezugName();
+        string fraesung = (RktEigFrAussen.IsChecked == true) ? "Aussen"
+                        : (RktEigFrInnen.IsChecked  == true) ? "Innen"
+                        : "Mittig";
+        string lauf = (RktEigGleich.IsChecked == true) ? "Gleichlauf" : "Gegenlauf";
+        bool isTasche = RktModusTasche.IsChecked == true;
+
+        var wz = RktEigWerkzeug.SelectedItem as Werkzeug;
+        var np = rkt with
+        {
+            XRel = x, YRel = y, Breite = b, Hoehe = h, ZTiefe = z,
+            FraeserD   = wz?.Durchmesser ?? rkt.FraeserD,
+            Drehzahl   = wz?.Drehzahl    ?? rkt.Drehzahl,
+            Vorschub   = wz?.VorschubFxy ?? rkt.Vorschub,
+            VorschubFz     = wz?.VorschubFz     ?? rkt.VorschubFz,
+            WerkzeugNr     = wz?.Nr             ?? rkt.WerkzeugNr,
+            Eintauchwinkel = wz?.Eintauchwinkel ?? rkt.Eintauchwinkel,
+            Bezugspunkt         = bezug,
+            Fraesung            = fraesung,
+            Laufrichtung        = lauf,
+            Verrundung          = ver,
+            MehrfachZustellung  = mehrfach,
+            ZZustellung         = zzust > 0 ? zzust : rkt.ZZustellung,
+            IsTasche            = isTasche,
+        };
+        UpdateRktModusVisibility(isTasche);
+
+        _eigSuppressUpdate = true;
+        _suppressHistoryRegen = true;
+        try { _history[idx] = new HistoryEntry("Rechteck",
+            $"X={np.XRel} Y={np.YRel}, {np.Breite}×{np.Hoehe}, Z={np.ZTiefe}", np); }
+        finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+        HistoryList.SelectedIndex = idx;
+    }
+
+    // Name des gewählten Bezugspunkts aus den RadioButtons
+    private string RktBezugName()
+    {
+        if (RktBezugOL.IsChecked == true) return "Oben links";
+        if (RktBezugOM.IsChecked == true) return "Oben Mitte";
+        if (RktBezugOR.IsChecked == true) return "Oben rechts";
+        if (RktBezugML.IsChecked == true) return "Links Mitte";
+        if (RktBezugMM.IsChecked == true) return "Mitte";
+        if (RktBezugMR.IsChecked == true) return "Rechts Mitte";
+        if (RktBezugUM.IsChecked == true) return "Unten Mitte";
+        if (RktBezugUR.IsChecked == true) return "Unten rechts";
+        return "Unten links";
+    }
+
+    private void SetRktBezugRadio(string name)
+    {
+        RktBezugOL.IsChecked = name == "Oben links";
+        RktBezugOM.IsChecked = name == "Oben Mitte";
+        RktBezugOR.IsChecked = name == "Oben rechts";
+        RktBezugML.IsChecked = name == "Links Mitte";
+        RktBezugMM.IsChecked = name == "Mitte";
+        RktBezugMR.IsChecked = name == "Rechts Mitte";
+        RktBezugUL.IsChecked = name == "Unten links";
+        RktBezugUM.IsChecked = name == "Unten Mitte";
+        RktBezugUR.IsChecked = name == "Unten rechts";
+    }
+
+    private void UpdateRktModusVisibility(bool isTasche)
+    {
+        var vis = isTasche ? Visibility.Collapsed : Visibility.Visible;
+        PnlRktFraesung.Visibility   = vis;
+        PnlRktLauf.Visibility       = vis;
+    }
+
+    private static TascheFräsenParams RechteckToTasche(RechteckParams p) =>
+        new(XRel: p.XRel, YRel: p.YRel, Breite: p.Breite, Höhe: p.Hoehe,
+            ZTiefe: p.ZTiefe, ZZustellung: p.ZZustellung > 0 ? p.ZZustellung : 2,
+            FraeserD: p.FraeserD, Faktor: 0.5,
+            Vorschub: p.Vorschub, VorschubFz: p.VorschubFz, Drehzahl: p.Drehzahl,
+            Bezugspunkt: p.Bezugspunkt, Eintauchwinkel: p.Eintauchwinkel,
+            Verrundung: p.Verrundung);
+
+    private void OnRktEigChanged(object sender, RoutedEventArgs e)   => ApplyRechteckEig();
+    private void OnRktEigTextChanged(object sender, TextChangedEventArgs e) { /* LostFocus reicht */ }
+    private void OnRktEigLostFocus(object sender, RoutedEventArgs e) => ApplyRechteckEig();
+    private void OnRktEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyRechteckEig(); }
+    private void OnPfadEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyPfadStartEig(); }
+
     private void AddPfadLinie(double mmX, double mmY)
     {
         var last = GetLastPfadAbsPoint();
         string bezug = last.HasValue ? "Letzter Punkt" : "Unten links";
         double xRel  = last.HasValue ? Math.Round(mmX - last.Value.x, 3) : Math.Round(mmX, 3);
         double yRel  = last.HasValue ? Math.Round(mmY - last.Value.y, 3) : Math.Round(mmY, 3);
+        _suppressNextAutoFit = true;
         var p = new PfadPunktParams(
             XRel: xRel, YRel: yRel,
             ZTiefe: 0, ZZustellung: 0, FraeserD: 0, Drehzahl: 0,
@@ -524,6 +738,7 @@ public partial class MainWindow : Window
 
     private void AddPfadBogen((double x, double y) endAbs, (double x, double y) midAbs)
     {
+        _suppressNextAutoFit = true;
         var last = GetLastPfadAbsPoint();
         string bezug = last.HasValue ? "Letzter Punkt" : "Unten links";
         double xRel  = last.HasValue ? Math.Round(endAbs.x - last.Value.x, 3) : Math.Round(endAbs.x, 3);
@@ -780,7 +995,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     }
 
     // ── Eigenschaften-Tab ─────────────────────────────────────────
-    private bool _eigSuppressUpdate;
+    private bool         _eigSuppressUpdate;
+    private HistoryEntry? _lastShownEntry;   // letzter in Eigenschaften angezeigter Eintrag
 
     private void UpdateEigenschaften()
     {
@@ -794,6 +1010,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 TbEigKein.Visibility    = Visibility.Collapsed;
                 PnlGravieren.Visibility = Visibility.Visible;
                 PnlPfadStart.Visibility = Visibility.Collapsed;
+                PnlRechteck.Visibility  = Visibility.Collapsed;
             }
 
             var inv = System.Globalization.CultureInfo.InvariantCulture;
@@ -853,15 +1070,22 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
         else if (entry?.Params is PfadPunktParams pfad)
         {
+            // Neuer Punkt ausgewählt → Felder immer überschreiben, auch wenn ein Feld fokussiert ist.
+            // Gleicher Punkt (z. B. Position-Update während Drag) → fokussierte Felder schonen.
+            bool entryChanged = !ReferenceEquals(entry, _lastShownEntry);
+            _lastShownEntry = entry;
+
             bool isStart = pfad.Typ == PfadPunktTyp.Start;
             bool isBogen = pfad.Typ == PfadPunktTyp.Bogen;
             if (!_eigSuppressUpdate)
             {
                 TbEigKein.Visibility            = Visibility.Collapsed;
                 PnlGravieren.Visibility         = Visibility.Collapsed;
+                PnlRechteck.Visibility          = Visibility.Collapsed;
                 PnlPfadStart.Visibility         = Visibility.Visible;
-                PnlPfadEigStartOnly.Visibility  = isStart ? Visibility.Visible : Visibility.Collapsed;
-                PnlPfadEigBogenMid.Visibility   = isBogen ? Visibility.Visible : Visibility.Collapsed;
+                PnlPfadEigStartOnly.Visibility    = isStart ? Visibility.Visible : Visibility.Collapsed;
+                PnlPfadEigBogenMid.Visibility    = isBogen ? Visibility.Visible : Visibility.Collapsed;
+                PnlPfadEigVerrundung.Visibility  = isStart ? Visibility.Collapsed : Visibility.Visible;
                 PfadEigTitel.Text = pfad.Typ switch
                 {
                     PfadPunktTyp.Bogen => "Pfad – Bogen",
@@ -871,11 +1095,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             _eigSuppressUpdate = true;
-            if (!PfadEigX.IsKeyboardFocused) PfadEigX.Text = pfad.XRel.ToString(inv);
-            if (!PfadEigY.IsKeyboardFocused) PfadEigY.Text = pfad.YRel.ToString(inv);
+            if (entryChanged || !PfadEigX.IsKeyboardFocused) PfadEigX.Text = pfad.XRel.ToString(inv);
+            if (entryChanged || !PfadEigY.IsKeyboardFocused) PfadEigY.Text = pfad.YRel.ToString(inv);
             if (isStart)
             {
-                if (!PfadEigZ.IsKeyboardFocused) PfadEigZ.Text = pfad.ZTiefe.ToString(inv);
+                if (entryChanged || !PfadEigZ.IsKeyboardFocused) PfadEigZ.Text = pfad.ZTiefe.ToString(inv);
                 PfadEigWerkzeug.ItemsSource  = _werkzeuge.ToList();
                 PfadEigWerkzeug.SelectedItem = _werkzeuge.FirstOrDefault(w =>
                     Math.Abs(w.Durchmesser - pfad.FraeserD) < 0.01 &&
@@ -888,11 +1112,46 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 // Modus-ComboBox (triggert OnPfadEigBogenModusChanged → passt Labels/Sichtbarkeit an)
                 foreach (System.Windows.Controls.ComboBoxItem ci in PfadEigBogenModus.Items)
                     if (ci.Content as string == pfad.BogenModus) { PfadEigBogenModus.SelectedItem = ci; break; }
-                if (!PfadEigXMid.IsKeyboardFocused) PfadEigXMid.Text = pfad.XMid.ToString(inv);
-                if (!PfadEigYMid.IsKeyboardFocused) PfadEigYMid.Text = pfad.YMid.ToString(inv);
+                if (entryChanged || !PfadEigXMid.IsKeyboardFocused) PfadEigXMid.Text = pfad.XMid.ToString(inv);
+                if (entryChanged || !PfadEigYMid.IsKeyboardFocused) PfadEigYMid.Text = pfad.YMid.ToString(inv);
             }
+            if (!isStart)
+                if (entryChanged || !PfadEigVer.IsKeyboardFocused) PfadEigVer.Text = pfad.Verrundung.ToString(inv);
             foreach (ComboBoxItem ci in PfadEigBezug.Items)
                 if (ci.Content as string == pfad.Bezugspunkt) { PfadEigBezug.SelectedItem = ci; break; }
+            _eigSuppressUpdate = false;
+        }
+        else if (entry?.Params is RechteckParams rkt)
+        {
+            if (!_eigSuppressUpdate)
+            {
+                TbEigKein.Visibility    = Visibility.Collapsed;
+                PnlGravieren.Visibility = Visibility.Collapsed;
+                PnlPfadStart.Visibility = Visibility.Collapsed;
+                PnlRechteck.Visibility  = Visibility.Visible;
+            }
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            _eigSuppressUpdate = true;
+            RktEigWerkzeug.ItemsSource  = _werkzeuge.ToList();
+            RktEigWerkzeug.SelectedItem = _werkzeuge.FirstOrDefault(w => w.Nr == rkt.WerkzeugNr)
+                                       ?? _werkzeuge.FirstOrDefault();
+            if (!RktEigX.IsKeyboardFocused)      RktEigX.Text      = rkt.XRel.ToString(inv);
+            if (!RktEigY.IsKeyboardFocused)      RktEigY.Text      = rkt.YRel.ToString(inv);
+            if (!RktEigBreite.IsKeyboardFocused) RktEigBreite.Text = rkt.Breite.ToString(inv);
+            if (!RktEigHoehe.IsKeyboardFocused)  RktEigHoehe.Text  = rkt.Hoehe.ToString(inv);
+            if (!RktEigZ.IsKeyboardFocused)      RktEigZ.Text      = rkt.ZTiefe.ToString(inv);
+            if (!RktEigVer.IsKeyboardFocused)    RktEigVer.Text    = rkt.Verrundung.ToString(inv);
+            RktModusNut.IsChecked     = !rkt.IsTasche;
+            RktModusTasche.IsChecked  = rkt.IsTasche;
+            RktEigFrAussen.IsChecked  = rkt.Fraesung     == "Aussen";
+            RktEigFrInnen.IsChecked   = rkt.Fraesung     == "Innen";
+            RktEigFrMittig.IsChecked  = rkt.Fraesung     == "Mittig";
+            RktEigGegen.IsChecked     = rkt.Laufrichtung == "Gegenlauf";
+            RktEigGleich.IsChecked    = rkt.Laufrichtung == "Gleichlauf";
+            RktEigMehrfach.IsChecked  = rkt.MehrfachZustellung;
+            if (!RktEigZZust.IsKeyboardFocused) RktEigZZust.Text = rkt.ZZustellung.ToString(inv);
+            SetRktBezugRadio(rkt.Bezugspunkt);
+            UpdateRktModusVisibility(rkt.IsTasche);
             _eigSuppressUpdate = false;
         }
         else if (!_eigSuppressUpdate)
@@ -900,6 +1159,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             TbEigKein.Visibility    = Visibility.Visible;
             PnlGravieren.Visibility = Visibility.Collapsed;
             PnlPfadStart.Visibility = Visibility.Collapsed;
+            PnlRechteck.Visibility  = Visibility.Collapsed;
         }
     }
 
@@ -948,7 +1208,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             if (!double.TryParse(Norm(PfadEigXMid.Text), sty, inv, out var xm)) return;
             double ym = 0;
             if (bMitte && !double.TryParse(Norm(PfadEigYMid.Text), sty, inv, out ym)) return;
-            np  = pfad with { XRel = xRel, YRel = yRel, XMid = xm, YMid = ym, Bezugspunkt = bezug, BogenModus = bModus };
+            double.TryParse(Norm(PfadEigVer.Text), sty, inv, out var verB);
+            np  = pfad with { XRel = xRel, YRel = yRel, XMid = xm, YMid = ym,
+                              Bezugspunkt = bezug, BogenModus = bModus, Verrundung = Math.Max(0, verB) };
             lbl = "Pfad Bogen";
             det = bMitte
                 ? $"X={np.XRel} Y={np.YRel}, M={np.XMid}/{np.YMid}, {np.Bezugspunkt}"
@@ -956,7 +1218,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
         else
         {
-            np  = pfad with { XRel = xRel, YRel = yRel, Bezugspunkt = bezug };
+            double.TryParse(Norm(PfadEigVer.Text), sty, inv, out var verL);
+            np  = pfad with { XRel = xRel, YRel = yRel, Bezugspunkt = bezug, Verrundung = Math.Max(0, verL) };
             lbl = "Pfad Linie";
             det = $"X={np.XRel} Y={np.YRel}, {np.Bezugspunkt}";
         }
@@ -966,6 +1229,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         try { _history[idx] = new HistoryEntry(lbl, det, np, entry.Level); }
         finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
 
+        _suppressNextAutoFit = true;
         RegenerateGCodeFromHistory();
         HistoryList.SelectedIndex = idx;
     }
@@ -1093,11 +1357,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             $"\"{np.Text.Replace('\n', ' ')}\" {np.FontFamily} {np.FontSizeMm} mm", np); }
         finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
 
+        _suppressNextAutoFit = true;
         RegenerateGCodeFromHistory();
         HistoryList.SelectedIndex = idx;
     }
 
-    private void OnEigTextDirty(object sender, TextChangedEventArgs e) => UpdatePreviewFromFields();
+    private void OnEigTextDirty(object sender, TextChangedEventArgs e) => RestartEigTimer();
 
     private void UpdatePreviewFromFields()
     {
@@ -1259,7 +1524,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         UpdateAll();
     }
 
-    private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateEigenschaften();
+    private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateEigenschaften();
+        HighlightHistoryEntry(HistoryList.SelectedItem as HistoryEntry);
+    }
 
     // ── Verlauf: Doppelklick → Bearbeiten ───────────────────────
     private void OnHistoryDoubleClick(object sender, MouseButtonEventArgs e)
@@ -1552,16 +1821,30 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             var sb          = new System.Text.StringBuilder();
             var pfadBuffer  = new List<PfadPunktParams>();
+            var pfadEntries = new List<HistoryEntry>();   // Einträge im aktuellen Pfad-Block
             double lastStartZ          = 0;
             string lastRadiuskorrektur = "Mittig";
             double lastFraeserD        = 0;
+            int lineCounter = 1;  // nächste Zeile im entstehenden Dokument (1-basiert)
+            var lineMap = new Dictionary<HistoryEntry, (int start, int end)>();
+
+            // Zählt Zeilen, die sb.AppendLine(code) hinzufügt
+            int LinesIn(string s) => s.Count(c => c == '\n') + 1;
 
             void FlushPfad()
             {
                 if (pfadBuffer.Count == 0) return;
                 var c = GCodeGenerator.PfadFräsen(pfadBuffer, workX, workY);
-                if (!string.IsNullOrEmpty(c)) sb.AppendLine(c);
+                if (!string.IsNullOrEmpty(c))
+                {
+                    int ls = lineCounter;
+                    sb.AppendLine(c);
+                    lineCounter += LinesIn(c);
+                    int le = lineCounter - 1;
+                    foreach (var e in pfadEntries) lineMap[e] = (ls, le);
+                }
                 pfadBuffer.Clear();
+                pfadEntries.Clear();
             }
 
             foreach (var entry in historySnap)
@@ -1586,6 +1869,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                             FraeserD        = lastFraeserD
                         });
                     }
+                    pfadEntries.Add(entry);
                     continue;
                 }
 
@@ -1599,12 +1883,20 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     TascheFräsenParams p      => GCodeGenerator.Tasche(p, workX, workY),
                     NutParams p               => GCodeGenerator.Nut(p, workX, workY),
                     KreistascheParams p       => GCodeGenerator.Kreistasche(p, workX, workY),
+                    RechteckParams p when p.IsTasche => GCodeGenerator.Tasche(RechteckToTasche(p), workX, workY),
+                    RechteckParams p          => GCodeGenerator.Rechteck(p, workX, workY),
                     GraviereParams p when p.IsTasche => GCodeGenerator.TextfeldTasche(p, workX, workY),
                     GraviereParams p when p.IsVCarve => GCodeGenerator.VCarve(p, workX, workY),
-                    GraviereParams p                       => GCodeGenerator.Gravieren(p, workX, workY),
-                    _                         => string.Empty
+                    GraviereParams p                 => GCodeGenerator.Gravieren(p, workX, workY),
+                    _                                => string.Empty
                 };
-                if (!string.IsNullOrEmpty(code)) sb.AppendLine(code);
+                if (!string.IsNullOrEmpty(code))
+                {
+                    int ls = lineCounter;
+                    sb.AppendLine(code);
+                    lineCounter += LinesIn(code);
+                    lineMap[entry] = (ls, lineCounter - 1);
+                }
             }
             FlushPfad();
 
@@ -1617,9 +1909,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 _vCarveCache.Clear();
                 _textGeoCache.Clear();
                 _vCarvePending.Clear();
+                _historyLineMap = lineMap;
                 GCodeText = result;
                 UpdatePfadMenuState();
                 UpdateAll();
+                // Aktuell gewählten Eintrag sofort hervorheben
+                HighlightHistoryEntry(HistoryList.SelectedItem as HistoryEntry);
             });
         });
         t.SetApartmentState(ApartmentState.STA);
@@ -1722,6 +2017,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 { _pfadBogenWaiting = false; DrawSkia?.InvalidateVisual(); }
                 else if (_activeTool == CanvasTool.VCarveText && _isTextDragging)
                 { _isTextDragging = false; ClearTextRubberBand(); }
+                else if (_activeTool == CanvasTool.Rechteck && _rktDragging)
+                { _rktDragging = false; ClearRktRubberBand(); DrawSkia?.InvalidateVisual(); }
                 else
                     SetActiveTool(CanvasTool.Select);
                 e.Handled = true; break;
@@ -2019,6 +2316,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         BtnToolPfadStart.Background   = tool == CanvasTool.PfadStart  ? active : inactive;
         BtnToolPfadLinie.Background   = tool == CanvasTool.PfadLinie  ? active : inactive;
         BtnToolPfadKurve.Background   = tool == CanvasTool.PfadBogen  ? active : inactive;
+        BtnToolRechteck.Background    = tool == CanvasTool.Rechteck  ? active : inactive;
         CanvasGrid.Cursor = tool switch
         {
             CanvasTool.Hand       => Cursors.Hand,
@@ -2027,6 +2325,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             CanvasTool.PfadStart  => Cursors.Cross,
             CanvasTool.PfadLinie  => Cursors.Cross,
             CanvasTool.PfadBogen  => Cursors.Cross,
+            CanvasTool.Rechteck   => Cursors.Cross,
             _                     => Cursors.Arrow,   // Move: context-sensitive (see MouseMove)
         };
         DrawSkia?.InvalidateVisual();
@@ -2107,6 +2406,34 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             SimToolCanvas.Children.Remove(_textRubberBand);
     }
 
+    // ── Rechteck-Werkzeug: Rubber-Band ───────────────────────────
+    private void UpdateRktRubberBand(Point p1, Point p2)
+    {
+        if (_rktRubberBand == null)
+        {
+            _rktRubberBand = new System.Windows.Shapes.Rectangle
+            {
+                Stroke           = System.Windows.Media.Brushes.Orange,
+                StrokeThickness  = 1.5,
+                StrokeDashArray  = new System.Windows.Media.DoubleCollection { 5, 3 },
+                Fill             = new System.Windows.Media.SolidColorBrush(
+                                       System.Windows.Media.Color.FromArgb(25, 255, 160, 0)),
+                IsHitTestVisible = false,
+            };
+        }
+        _rktRubberBand.Width  = Math.Abs(p2.X - p1.X);
+        _rktRubberBand.Height = Math.Abs(p2.Y - p1.Y);
+        System.Windows.Controls.Canvas.SetLeft(_rktRubberBand, Math.Min(p1.X, p2.X));
+        System.Windows.Controls.Canvas.SetTop (_rktRubberBand, Math.Min(p1.Y, p2.Y));
+        if (!SimToolCanvas.Children.Contains(_rktRubberBand))
+            SimToolCanvas.Children.Add(_rktRubberBand);
+    }
+
+    private void ClearRktRubberBand()
+    {
+        if (_rktRubberBand != null) SimToolCanvas.Children.Remove(_rktRubberBand);
+    }
+
     private void StartInlineTextEdit(Point screenA, Point screenB)
     {
         double wx = WorkX, wy = WorkY;
@@ -2125,7 +2452,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (width < 0.5 || height < 0.5) return;
 
         var lastGrav  = _history.Select(h => h.Params).OfType<GraviereParams>().LastOrDefault();
-        double fontSizeMm = lastGrav?.FontSizeMm > 0 ? lastGrav.FontSizeMm : Math.Round(height * 0.7, 1);
+        double fontSizeMm = Math.Round(height * 0.7, 1);
 
         // Temporärer History-Eintrag mit leerem Text — wird live beim Tippen aktualisiert
         _inlineParams = new GraviereParams(
@@ -2505,6 +2832,151 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _previewGravParams = gp;
     }
 
+    private (double left, double bottom, double width, double height) RechteckBoundsInMm(RechteckParams rp)
+    {
+        var (refX, refY) = GCodeGenerator.ConvertBezugspunkt(rp.Bezugspunkt, rp.XRel, rp.YRel, WorkX, WorkY);
+        var (bx, by) = rp.Bezugspunkt switch
+        {
+            "Unten links"  => (0.0,           0.0),
+            "Unten Mitte"  => (-rp.Breite/2,  0.0),
+            "Unten rechts" => (-rp.Breite,    0.0),
+            "Links Mitte"  => (0.0,           -rp.Hoehe/2),
+            "Mitte"        => (-rp.Breite/2,  -rp.Hoehe/2),
+            "Rechts Mitte" => (-rp.Breite,    -rp.Hoehe/2),
+            "Oben links"   => (0.0,           -rp.Hoehe),
+            "Oben Mitte"   => (-rp.Breite/2,  -rp.Hoehe),
+            _              => (-rp.Breite,    -rp.Hoehe)
+        };
+        return (refX + bx, refY + by, rp.Breite, rp.Hoehe);
+    }
+
+    private int HitTestRechteck(double mmX, double mmY)
+    {
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            if (_history[i].Params is not RechteckParams rp) continue;
+            var (left, bottom, w, h) = RechteckBoundsInMm(rp);
+            if (mmX >= left && mmX <= left + w && mmY >= bottom && mmY <= bottom + h)
+                return i;
+        }
+        return -1;
+    }
+
+    // 0=BL 1=BR 2=TL 3=TR  4=BM 5=RM 6=TM 7=LM  –1=kein Treffer
+    private int HitTestRktCorner(double mmX, double mmY, RechteckParams rp)
+    {
+        var (left, bottom, w, h) = RechteckBoundsInMm(rp);
+        double r     = 10.0 / _zoom;
+        double right = left + w;
+        double top   = bottom + h;
+        double mx    = left + w / 2;
+        double my    = bottom + h / 2;
+        (double x, double y)[] anchors =
+        [
+            (left,  bottom), (right, bottom), (left,  top),   (right, top),
+            (mx,    bottom), (right, my),     (mx,    top),   (left,  my),
+        ];
+        for (int i = 0; i < anchors.Length; i++)
+            if (Math.Abs(mmX - anchors[i].x) <= r && Math.Abs(mmY - anchors[i].y) <= r)
+                return i;
+        return -1;
+    }
+
+    private void StartMoveRechteck(int idx, double mmX, double mmY)
+    {
+        _moveHistoryIdx   = idx;
+        _moveResizeCorner = -1;
+        _moveDragStartMm  = new Point(mmX, mmY);
+        var rp = (RechteckParams)_history[idx].Params;
+        (_moveStartRefX, _moveStartRefY) = GCodeGenerator.ConvertBezugspunkt(
+            rp.Bezugspunkt, rp.XRel, rp.YRel, WorkX, WorkY);
+        HistoryList.SelectedItem    = _history[idx];
+        TabEigenschaften.IsSelected = true;
+        _previewRktParams = rp;
+    }
+
+    private void StartResizeRechteck(int idx, int corner, double mmX, double mmY)
+    {
+        _moveHistoryIdx   = idx;
+        _moveResizeCorner = corner;
+        _moveDragStartMm  = new Point(mmX, mmY);
+        var rp = (RechteckParams)_history[idx].Params;
+        (_resizeStartLeft, _resizeStartBottom, _resizeStartWidth, _resizeStartHeight)
+            = RechteckBoundsInMm(rp);
+        HistoryList.SelectedItem    = _history[idx];
+        TabEigenschaften.IsSelected = true;
+        _previewRktParams = rp;
+    }
+
+    private void UpdateMoveRechteck(double mmX, double mmY)
+    {
+        if (_moveHistoryIdx < 0 || _previewRktParams == null) return;
+        if (_moveResizeCorner >= 0) { UpdateResizeRechteck(mmX, mmY); return; }
+        var rp = (RechteckParams)_history[_moveHistoryIdx].Params;
+        double newRefX = SnapX(_moveStartRefX + (mmX - _moveDragStartMm.X));
+        double newRefY = SnapY(_moveStartRefY + (mmY - _moveDragStartMm.Y));
+        var (newXRel, newYRel) = AbsToRel(rp.Bezugspunkt, newRefX, newRefY, WorkX, WorkY);
+        _previewRktParams = rp with { XRel = Math.Round(newXRel, 3), YRel = Math.Round(newYRel, 3) };
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void UpdateResizeRechteck(double mmX, double mmY)
+    {
+        if (_moveHistoryIdx < 0 || _previewRktParams == null) return;
+        var rp = (RechteckParams)_history[_moveHistoryIdx].Params;
+        double sx = SnapX(mmX), sy = SnapY(mmY);
+        const double minSize = 1.0;
+        double newLeft   = _resizeStartLeft;
+        double newBottom = _resizeStartBottom;
+        double newRight  = _resizeStartLeft   + _resizeStartWidth;
+        double newTop    = _resizeStartBottom + _resizeStartHeight;
+        switch (_moveResizeCorner)
+        {
+            case 0: newLeft   = Math.Min(sx, newRight  - minSize); newBottom = Math.Min(sy, newTop    - minSize); break;
+            case 1: newRight  = Math.Max(sx, newLeft   + minSize); newBottom = Math.Min(sy, newTop    - minSize); break;
+            case 2: newLeft   = Math.Min(sx, newRight  - minSize); newTop    = Math.Max(sy, newBottom + minSize); break;
+            case 3: newRight  = Math.Max(sx, newLeft   + minSize); newTop    = Math.Max(sy, newBottom + minSize); break;
+            case 4: newBottom = Math.Min(sy, newTop    - minSize); break;
+            case 5: newRight  = Math.Max(sx, newLeft   + minSize); break;
+            case 6: newTop    = Math.Max(sy, newBottom + minSize); break;
+            case 7: newLeft   = Math.Min(sx, newRight  - minSize); break;
+        }
+        double newW = Math.Round(newRight - newLeft, 3);
+        double newH = Math.Round(newTop   - newBottom, 3);
+        var (newRefX, newRefY) = BezugAbsPos(rp.Bezugspunkt, newLeft, newBottom, newW, newH);
+        var (newXRel, newYRel) = AbsToRel(rp.Bezugspunkt, newRefX, newRefY, WorkX, WorkY);
+        _previewRktParams = rp with
+        {
+            XRel   = Math.Round(newXRel, 3),
+            YRel   = Math.Round(newYRel, 3),
+            Breite = newW,
+            Hoehe  = newH,
+        };
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void CommitMoveRechteck()
+    {
+        if (_moveHistoryIdx < 0 || _previewRktParams == null) return;
+        var final        = _previewRktParams;
+        var entry        = _history[_moveHistoryIdx];
+        bool isResize    = _moveResizeCorner >= 0;
+        _moveResizeCorner = -1;
+        int committedIdx = _moveHistoryIdx;
+        _suppressHistoryRegen = true;
+        try { _history[committedIdx] = new HistoryEntry(entry.Label,
+            isResize ? $"B={final.Breite:F1} H={final.Hoehe:F1}"
+                     : $"X={final.XRel:F2} Y={final.YRel:F2}", final); }
+        finally { _suppressHistoryRegen = false; }
+        _moveHistoryIdx   = -1;
+        _previewRktParams = null;
+        HistoryList.SelectedItem    = _history[committedIdx];
+        TabEigenschaften.IsSelected = true;
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+        UpdateAll();
+    }
+
     // Inverse of GCodeGenerator.ConvertBezugspunkt
     private static (double xRel, double yRel) AbsToRel(string bezug, double absX, double absY, double w, double h)
         => bezug switch
@@ -2614,6 +3086,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void UpdateMoveTextField(double mmX, double mmY)
     {
         if (_moveHistoryIdx < 0) return;
+        if (_previewRktParams != null) { UpdateMoveRechteck(mmX, mmY); return; }
         if (_moveResizeCorner >= 0) { UpdateResizeTextField(mmX, mmY); return; }
         var gp = (GraviereParams)_history[_moveHistoryIdx].Params;
         double newRefX = SnapX(_moveStartRefX + (mmX - _moveDragStartMm.X));
@@ -2693,7 +3166,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void CommitMoveTextField()
     {
-        if (_moveHistoryIdx < 0 || _previewGravParams == null) return;
+        if (_moveHistoryIdx < 0) return;
+        if (_previewRktParams != null) { CommitMoveRechteck(); return; }
+        if (_previewGravParams == null) return;
         var final    = _previewGravParams;
         var entry    = _history[_moveHistoryIdx];
 
@@ -2894,6 +3369,33 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 CanvasGrid.CaptureMouse();
                 CanvasGrid.Cursor = Cursors.SizeAll;
                 e.Handled = true;
+                return;
+            }
+
+            // Rechteck: Ecke des selektierten Eintrags prüfen (Resize)
+            if (HistoryList.SelectedItem is HistoryEntry selRktEntry
+                && selRktEntry.Params is RechteckParams selRp)
+            {
+                int corner = HitTestRktCorner(mmX, mmY, selRp);
+                if (corner >= 0)
+                {
+                    int selIdx = _history.IndexOf(selRktEntry);
+                    StartResizeRechteck(selIdx, corner, mmX, mmY);
+                    CanvasGrid.CaptureMouse();
+                    CanvasGrid.Cursor = CornerCursor(corner);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            // Rechteck verschieben (Body-Hit)
+            int rktIdx = HitTestRechteck(mmX, mmY);
+            if (rktIdx >= 0)
+            {
+                StartMoveRechteck(rktIdx, mmX, mmY);
+                CanvasGrid.CaptureMouse();
+                CanvasGrid.Cursor = Cursors.SizeAll;
+                e.Handled = true;
             }
             return;
         }
@@ -2940,8 +3442,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var pos = e.GetPosition(CanvasGrid);
             if (!_isTextDragging)
             {
-                // Erster Klick: Anfangspunkt merken
-                _textDragStart  = pos;
+                // Erster Klick: gefangene (Fadenkreuz-)Position als Startpunkt merken
+                double mmX = SnapX((pos.X - _panX) / _zoom);
+                double mmY = SnapY(WorkY - (pos.Y - _panY) / _zoom);
+                _textDragStart  = new Point(mmX * _zoom + _panX, (WorkY - mmY) * _zoom + _panY);
+                _pfadMouseMm    = (mmX, mmY);
+                _pfadMouseValid = true;
                 _isTextDragging = true;
             }
             else
@@ -2987,6 +3493,35 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     AddPfadBogen(_pfadBogenEndAbs, (pfX, pfY));
                     _pfadBogenWaiting = false;
                     DrawSkia?.InvalidateVisual();
+                }
+                e.Handled = true;
+                return;
+            }
+            if (_activeTool == CanvasTool.Rechteck)
+            {
+                var rp = e.GetPosition(CanvasGrid);
+                double rsmmX = SnapX((rp.X - _panX) / _zoom);
+                double rsmmY = SnapY(WorkY - (rp.Y - _panY) / _zoom);
+                var snappedPx = new Point(rsmmX * _zoom + _panX, (WorkY - rsmmY) * _zoom + _panY);
+                if (!_rktDragging)
+                {
+                    _rktDragStart   = snappedPx;
+                    _pfadMouseMm    = (rsmmX, rsmmY);
+                    _pfadMouseValid = true;
+                    _rktDragging    = true;
+                }
+                else
+                {
+                    _rktDragging = false;
+                    ClearRktRubberBand();
+                    double x1mm = SnapX((Math.Min(_rktDragStart.X, snappedPx.X) - _panX) / _zoom);
+                    double y1mm = SnapY(WorkY - (Math.Max(_rktDragStart.Y, snappedPx.Y) - _panY) / _zoom);
+                    double x2mm = SnapX((Math.Max(_rktDragStart.X, snappedPx.X) - _panX) / _zoom);
+                    double y2mm = SnapY(WorkY - (Math.Min(_rktDragStart.Y, snappedPx.Y) - _panY) / _zoom);
+                    double bMm  = Math.Round(x2mm - x1mm, 3);
+                    double hMm  = Math.Round(y2mm - y1mm, 3);
+                    if (bMm > 0.1 && hMm > 0.1)
+                        AddRechteck(x1mm, y1mm, bMm, hMm);
                 }
                 e.Handled = true;
                 return;
@@ -3051,6 +3586,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 e.Handled = true;
                 return;
             }
+
 
             // Zoom-Werkzeug: Drag beendet oder Klick
             if (_activeTool == CanvasTool.Zoom && CanvasGrid.IsMouseCaptured)
@@ -3152,7 +3688,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     else if (HitTestTextField(mmX, mmY) >= 0)
                         cur = Cursors.SizeAll;
                 }
-                else if (HitTestTextField(mmX, mmY) >= 0)
+                else if (HistoryList.SelectedItem is HistoryEntry hovRktEntry
+                    && hovRktEntry.Params is RechteckParams hovRp)
+                {
+                    int hc = HitTestRktCorner(mmX, mmY, hovRp);
+                    if (hc >= 0)
+                        cur = CornerCursor(hc);
+                    else if (HitTestTextField(mmX, mmY) >= 0 || HitTestRechteck(mmX, mmY) >= 0)
+                        cur = Cursors.SizeAll;
+                }
+                else if (HitTestTextField(mmX, mmY) >= 0 || HitTestRechteck(mmX, mmY) >= 0)
                     cur = Cursors.SizeAll;
                 CanvasGrid.Cursor = cur;
             }
@@ -3170,10 +3715,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;
         }
 
-        // VCarveText-Werkzeug: Gummiband nach erstem Klick
+        // VCarveText-Werkzeug: Gummiband nach erstem Klick — Fadenkreuz + eingerastetes Gummiband
         if (_activeTool == CanvasTool.VCarveText && _isTextDragging && !_isPanning)
         {
-            UpdateTextRubberBand(_textDragStart, e.GetPosition(CanvasGrid));
+            var pos2   = e.GetPosition(CanvasGrid);
+            double mx2 = SnapX((pos2.X - _panX) / _zoom);
+            double my2 = SnapY(WorkY - (pos2.Y - _panY) / _zoom);
+            _pfadMouseMm    = (mx2, my2);
+            _pfadMouseValid = true;
+            var snapped2 = new Point(mx2 * _zoom + _panX, (WorkY - my2) * _zoom + _panY);
+            UpdateTextRubberBand(_textDragStart, snapped2);
+            DrawSkia?.InvalidateVisual();
             return;
         }
 
@@ -3186,6 +3738,23 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 _isZoomDragging = true;
             if (_isZoomDragging)
                 UpdateZoomRubberBand(_zoomDragStart, pos);
+            return;
+        }
+
+        // Rechteck-Werkzeug: Fadenkreuz + gerastertes Gummiband
+        if (_activeTool == CanvasTool.Rechteck && !_isPanning)
+        {
+            var rpos   = e.GetPosition(CanvasGrid);
+            double rmx = SnapX((rpos.X - _panX) / _zoom);
+            double rmy = SnapY(WorkY - (rpos.Y - _panY) / _zoom);
+            _pfadMouseMm    = (rmx, rmy);
+            _pfadMouseValid = true;
+            if (_rktDragging)
+            {
+                var snappedR = new Point(rmx * _zoom + _panX, (WorkY - rmy) * _zoom + _panY);
+                UpdateRktRubberBand(_rktDragStart, snappedR);
+            }
+            DrawSkia?.InvalidateVisual();
             return;
         }
 
@@ -3793,7 +4362,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Pfad- und Textfeld-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
             && (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen
-                || _activeTool == CanvasTool.VCarveText))
+                || _activeTool == CanvasTool.VCarveText || _activeTool == CanvasTool.Rechteck))
         {
             double sc2 = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
             float  cx2 = (float)(_topRect.Left   + _pfadMouseMm.x * sc2);
@@ -4389,6 +4958,239 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 DrawAnchor(brx, my_);
                 DrawAnchor(mx_, bry);
                 DrawAnchor(tlx, my_);
+            }
+        }
+
+        // ── Rechteck-Konturen ──
+        foreach (var entry in _history)
+        {
+            if (entry.Params is not RechteckParams rp) continue;
+            bool isSelected = HistoryList.SelectedItem == entry;
+            bool isDragged  = isSelected && _previewRktParams != null;
+            if (isDragged) rp = _previewRktParams!;
+            var (refX, refY) = GCodeGenerator.ConvertBezugspunkt(rp.Bezugspunkt, rp.XRel, rp.YRel, wx, wy);
+            var (bx, by) = rp.Bezugspunkt switch
+            {
+                "Unten links"  => (0.0,           0.0),
+                "Unten Mitte"  => (-rp.Breite/2,  0.0),
+                "Unten rechts" => (-rp.Breite,     0.0),
+                "Links Mitte"  => (0.0,            -rp.Hoehe/2),
+                "Mitte"        => (-rp.Breite/2,   -rp.Hoehe/2),
+                "Rechts Mitte" => (-rp.Breite,     -rp.Hoehe/2),
+                "Oben links"   => (0.0,            -rp.Hoehe),
+                "Oben Mitte"   => (-rp.Breite/2,   -rp.Hoehe),
+                _              => (-rp.Breite,     -rp.Hoehe)
+            };
+            double rx0 = refX + bx, ry0 = refY + by;
+            double rx1 = rx0 + rp.Breite, ry1 = ry0 + rp.Hoehe;
+
+            // Verrundungsradius auf Pixelskala begrenzen
+            double maxR = Math.Min(rp.Breite, rp.Hoehe) / 2.0;
+            double r    = Math.Min(Math.Max(0.0, rp.Verrundung), maxR);
+
+            // Hilfsfunktionen: mm → Pixel, Pixel-Radius
+            (float px, float py) P(double x, double y) => MmToPx(x, y);
+            float Rp() => (float)(r * scale);
+
+            using var rktPath = new SKPath();
+            if (r < 1e-6)
+            {
+                // Einfaches Rechteck
+                var (x0p, y1p) = P(rx0, ry1);
+                rktPath.MoveTo(x0p, y1p);
+                rktPath.LineTo(P(rx1, ry1).px, P(rx1, ry1).py);
+                rktPath.LineTo(P(rx1, ry0).px, P(rx1, ry0).py);
+                rktPath.LineTo(P(rx0, ry0).px, P(rx0, ry0).py);
+                rktPath.Close();
+            }
+            else
+            {
+                float rp2 = Rp();
+                // Gerundetes Rechteck — Bögen im Bildschirm-KS (Y-down → CCW = CW in Maschine)
+                var (bl_x, bl_y) = P(rx0,   ry0);   // unten-links  (Screen: oben-links)
+                var (br_x, br_y) = P(rx1,   ry0);   // unten-rechts (Screen: oben-rechts)
+                var (tr_x, tr_y) = P(rx1,   ry1);   // oben-rechts  (Screen: unten-rechts)
+                var (tl_x, tl_y) = P(rx0,   ry1);   // oben-links   (Screen: unten-links)
+
+                rktPath.MoveTo(bl_x + rp2, bl_y);
+                rktPath.LineTo(br_x - rp2, br_y);
+                rktPath.ArcTo(rp2, rp2, 0, SKPathArcSize.Small, SKPathDirection.CounterClockwise,     br_x, br_y - rp2);
+                rktPath.LineTo(tr_x, tr_y + rp2);
+                rktPath.ArcTo(rp2, rp2, 0, SKPathArcSize.Small, SKPathDirection.CounterClockwise,     tr_x - rp2, tr_y);
+                rktPath.LineTo(tl_x + rp2, tl_y);
+                rktPath.ArcTo(rp2, rp2, 0, SKPathArcSize.Small, SKPathDirection.CounterClockwise,     tl_x, tl_y + rp2);
+                rktPath.LineTo(bl_x, bl_y - rp2);
+                rktPath.ArcTo(rp2, rp2, 0, SKPathArcSize.Small, SKPathDirection.CounterClockwise,     bl_x + rp2, bl_y);
+                rktPath.Close();
+            }
+
+            var lineColor = isSelected ? new SKColor(0xFF, 0xA0, 0x00) : new SKColor(80, 80, 80, 200);
+            using var rktPaint = new SKPaint
+            {
+                Color = lineColor, Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)(1.0 / _zoom), IsAntialias = true
+            };
+            canvas.DrawPath(rktPath, rktPaint);
+
+            // Anker-Quadrate wenn im Verschieben-Modus und selektiert
+            if (isSelected && _activeTool == CanvasTool.Move)
+            {
+                float as_ = 8f / (float)_zoom;
+                using var anchorFill = new SKPaint { Color = new SKColor(0xFF, 0xA0, 0x00), Style = SKPaintStyle.Fill };
+                using var anchorBdr  = new SKPaint { Color = SKColors.White, Style = SKPaintStyle.Stroke, StrokeWidth = 1.2f };
+                void DrawAnchor(float ax, float ay)
+                {
+                    canvas.DrawRect(ax - as_ / 2, ay - as_ / 2, as_, as_, anchorFill);
+                    canvas.DrawRect(ax - as_ / 2, ay - as_ / 2, as_, as_, anchorBdr);
+                }
+                var (blx, bly) = P(rx0, ry0);
+                var (brx, bry) = P(rx1, ry0);
+                var (trx, trY) = P(rx1, ry1);
+                var (tlx, tly) = P(rx0, ry1);
+                float mhx = (blx + brx) / 2f, mhy = (bly + bry) / 2f; // bottom mid
+                float mvx = (blx + tlx) / 2f, mvy = (bly + tly) / 2f; // left mid
+                // 0=BL 1=BR 2=TL 3=TR 4=BM 5=RM 6=TM 7=LM
+                DrawAnchor(blx, bly); DrawAnchor(brx, bry);
+                DrawAnchor(tlx, tly); DrawAnchor(trx, trY);
+                DrawAnchor(mhx, mhy);
+                DrawAnchor((brx + trx) / 2f, (bry + trY) / 2f);
+                DrawAnchor((tlx + trx) / 2f, (tly + trY) / 2f);
+                DrawAnchor(mvx, mvy);
+            }
+        }
+
+        // ── Pfad-Konturen ──
+        {
+            var selEntry = HistoryList.SelectedItem as HistoryEntry;
+
+            // Hilfsfunktion: Bogenmittelpunkt aus PfadPunktParams (spiegelt GCodeGenerator.ResolveBogenMid)
+            (double mx, double my) ArcMid((double x, double y) p1, (double x, double y) p2, PfadPunktParams p)
+            {
+                if (p.BogenModus == "Bogenmitte")
+                    return p.Bezugspunkt == "Letzter Punkt"
+                        ? (p1.x + p.XMid, p1.y + p.YMid)
+                        : GCodeGenerator.ConvertBezugspunkt(p.Bezugspunkt, p.XMid, p.YMid, wx, wy);
+                double dx = p2.x - p1.x, dy = p2.y - p1.y;
+                double L = Math.Sqrt(dx * dx + dy * dy);
+                if (L < 1e-10) return ((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
+                double perpX = -dy / L, perpY = dx / L;
+                double mcx = (p1.x + p2.x) / 2, mcy = (p1.y + p2.y) / 2;
+                double h = p.BogenModus == "Radius"
+                    ? (Math.Max(Math.Abs(p.XMid), L / 2) - Math.Sqrt(Math.Max(0,
+                        Math.Max(p.XMid * p.XMid, L * L / 4) - L * L / 4))) * (p.XMid >= 0 ? 1 : -1)
+                    : p.XMid;
+                return (mcx + h * perpX, mcy + h * perpY);
+            }
+
+            // Bogenmittelpunkt + Radius aus 3 Punkten (inline von ArcFrom3Points)
+            static (double cx, double cy, double R, bool cw) Arc3Pts(
+                double x1, double y1, double xm, double ym, double x2, double y2)
+            {
+                double ax = (x1 + xm) / 2, ay = (y1 + ym) / 2;
+                double dax = ym - y1, day = x1 - xm;
+                double bx = (xm + x2) / 2, by = (ym + y2) / 2;
+                double dbx = y2 - ym, dby = xm - x2;
+                double det = dax * (-dby) + dbx * day;
+                if (Math.Abs(det) < 1e-12) return (0, 0, double.PositiveInfinity, false);
+                double t = ((bx - ax) * (-dby) + dbx * (by - ay)) / det;
+                double cx = ax + t * dax, cy = ay + t * day;
+                double R = Math.Sqrt((x1 - cx) * (x1 - cx) + (y1 - cy) * (y1 - cy));
+                double cross = (xm - x1) * (y2 - y1) - (ym - y1) * (x2 - x1);
+                return (cx, cy, R, cross < 0);
+            }
+
+            int hi = 0;
+            while (hi < _history.Count)
+            {
+                if (_history[hi].Params is not PfadPunktParams startP || startP.Typ != PfadPunktTyp.Start)
+                { hi++; continue; }
+
+                // Kette ab Start sammeln
+                var chain = new List<(HistoryEntry e, PfadPunktParams p)> { (_history[hi], startP) };
+                int hj = hi + 1;
+                while (hj < _history.Count
+                    && _history[hj].Params is PfadPunktParams np
+                    && np.Typ != PfadPunktTyp.Start)
+                { chain.Add((_history[hj], np)); hj++; }
+                hi = hj;
+
+                // Absolute Positionen
+                var pts = new List<(double x, double y)>();
+                foreach (var (_, p) in chain)
+                {
+                    (double x, double y) pt = p.Bezugspunkt == "Letzter Punkt" && pts.Count > 0
+                        ? (pts[^1].x + p.XRel, pts[^1].y + p.YRel)
+                        : GCodeGenerator.ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, wx, wy);
+                    pts.Add(pt);
+                }
+                if (pts.Count < 1) continue;
+
+                bool isSel = chain.Any(c => c.e == selEntry);
+                var lineCol = isSel ? new SKColor(0xFF, 0xA0, 0x00) : new SKColor(80, 80, 80, 200);
+
+                // arcMids aufbauen (null = Linie, HasValue = Bogen mit Mittelspunkt)
+                var arcMidsC = new List<(double mx, double my)?>(pts.Count);
+                arcMidsC.Add(null);
+                for (int k = 1; k < pts.Count; k++)
+                {
+                    var (_, pp) = chain[k];
+                    if (pp.Typ == PfadPunktTyp.Bogen)
+                        arcMidsC.Add(ArcMid(pts[k - 1], pts[k], pp));
+                    else
+                        arcMidsC.Add(null);
+                }
+
+                // Verrundungen pro Punkt
+                var verrC = chain.Select(c => c.p.Verrundung).ToList();
+                bool hasVerrC = verrC.Any(v => v > 1e-10);
+
+                // Verrundungs-Vorverarbeitung: Ecken einfügen
+                var drawPts  = pts;
+                var drawMids = arcMidsC;
+                if (hasVerrC)
+                    (drawPts, drawMids) = GCodeGenerator.InsertLineCornerArcs(
+                        new List<(double x, double y)>(pts), arcMidsC, verrC, closed: false);
+
+                using var pfadPath = new SKPath();
+                var sp0 = MmToPx(drawPts[0].x, drawPts[0].y);
+                pfadPath.MoveTo(sp0.px, sp0.py);
+
+                for (int k = 1; k < drawPts.Count; k++)
+                {
+                    var ep = MmToPx(drawPts[k].x, drawPts[k].y);
+                    if (drawMids[k].HasValue)
+                    {
+                        var (mx, my) = drawMids[k]!.Value;
+                        var (cx, cy, R, cw) = Arc3Pts(drawPts[k-1].x, drawPts[k-1].y, mx, my, drawPts[k].x, drawPts[k].y);
+                        if (!double.IsInfinity(R) && R > 1e-6)
+                        {
+                            var cp = MmToPx(cx, cy);
+                            float rPx2 = (float)(R * scale);
+                            var oval = new SKRect(cp.px - rPx2, cp.py - rPx2, cp.px + rPx2, cp.py + rPx2);
+                            float a1 = (float)(Math.Atan2(-(drawPts[k-1].y - cy), drawPts[k-1].x - cx) * 180 / Math.PI);
+                            float a2 = (float)(Math.Atan2(-(drawPts[k].y   - cy), drawPts[k].x   - cx) * 180 / Math.PI);
+                            float sw = a2 - a1;
+                            if ( cw && sw < 0) sw += 360;
+                            if (!cw && sw > 0) sw -= 360;
+                            pfadPath.ArcTo(oval, a1, sw, false);
+                        }
+                        else pfadPath.LineTo(ep.px, ep.py);
+                    }
+                    else pfadPath.LineTo(ep.px, ep.py);
+                }
+
+                using var pfadPaint = new SKPaint { Color = lineCol, Style = SKPaintStyle.Stroke,
+                    StrokeWidth = (float)(1.5 / _zoom), IsAntialias = true };
+                canvas.DrawPath(pfadPath, pfadPaint);
+
+                // Punkte als kleine Kreise
+                float dotR2 = 3f / (float)_zoom;
+                using var dotPaint = new SKPaint { Color = lineCol, Style = SKPaintStyle.Fill };
+                foreach (var pt in pts)
+                {
+                    var dp = MmToPx(pt.x, pt.y);
+                    canvas.DrawCircle(dp.px, dp.py, dotR2, dotPaint);
+                }
             }
         }
     }
@@ -5248,10 +6050,11 @@ public sealed class GCodeLineBackgroundRenderer : IBackgroundRenderer
         return br;
     }
 
-    private static readonly Brush BgG00 = MkBg(  0,   0,   0,   0); // kein Hintergrund für G00
-    private static readonly Brush BgM30 = MkBg(220, 100,   0,  25); // zartes Orange für M-Ende
-    private static readonly Brush BgSel = MkBg(255, 210,   0, 140); // kräftiges Gold für Werkstück-Selektion
-    private static readonly Brush BgHov = MkBg(255, 230,  60,  70); // helleres Gold für Hover
+    private static readonly Brush BgG00  = MkBg(  0,   0,   0,   0); // kein Hintergrund für G00
+    private static readonly Brush BgM30  = MkBg(220, 100,   0,  25); // zartes Orange für M-Ende
+    private static readonly Brush BgSel  = MkBg(255, 210,   0, 140); // kräftiges Gold für Werkstück-Selektion
+    private static readonly Brush BgHov  = MkBg(255, 230,  60,  70); // helleres Gold für Hover
+    private static readonly Brush BgHist = MkBg( 80, 160, 255,  55); // zartes Blau für Verlauf-Selektion
     private static readonly Pen   PenSel;
 
     static GCodeLineBackgroundRenderer()
@@ -5265,9 +6068,13 @@ public sealed class GCodeLineBackgroundRenderer : IBackgroundRenderer
     private static readonly Regex RxM30 = new(@"\bM30\b",  RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>Von Werkstück-Klick gesetzte selektierte Zeile (1-basiert, -1 = keine)</summary>
-    public int SelectedLine { get; set; } = -1;
+    public int SelectedLine   { get; set; } = -1;
     /// <summary>Maus-Hover-Zeile im Editor (1-basiert, -1 = keine)</summary>
-    public int HoverLine    { get; set; } = -1;
+    public int HoverLine      { get; set; } = -1;
+    /// <summary>Verlauf-Selektion: erster hervorgehobener Zeilenbereich (1-basiert, -1 = keine)</summary>
+    public int HistRangeStart { get; set; } = -1;
+    /// <summary>Verlauf-Selektion: letzter hervorgehobener Zeilenbereich (1-basiert, inklusiv)</summary>
+    public int HistRangeEnd   { get; set; } = -1;
 
     public KnownLayer Layer => KnownLayer.Background;
 
@@ -5297,8 +6104,13 @@ public sealed class GCodeLineBackgroundRenderer : IBackgroundRenderer
                 continue;
             }
 
+            bool inHistRange = HistRangeStart > 0
+                && docLine.LineNumber >= HistRangeStart
+                && docLine.LineNumber <= HistRangeEnd;
+
             Brush? bg = null;
-            if (RxG00.IsMatch(text)) bg = BgG00;
+            if (inHistRange)      bg = BgHist;
+            if (RxG00.IsMatch(text) && bg is null) bg = BgG00;
             if (RxM30.IsMatch(text)) bg = BgM30;  // M30 überschreibt G00
             if (bg is null) continue;
 
@@ -5990,12 +6802,46 @@ public class Werkzeug
 }
 
 public class HistoryEntry(string label, string details, object p, int level = 0)
+    : System.ComponentModel.INotifyPropertyChanged
 {
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
     public string Label   { get; } = label;
     public string Details { get; } = details;
     public object Params  { get; } = p;
     public int    Level   { get; } = level;
+
+    // Nur Pfad-Startpunkte sind aufklappbar
+    public bool IsExpandable => Params is PfadPunktParams { Typ: PfadPunktTyp.Start };
+
+    private bool _isCollapsed;
+    public bool IsCollapsed
+    {
+        get => _isCollapsed;
+        set
+        {
+            if (_isCollapsed == value) return;
+            _isCollapsed = value;
+            PropertyChanged?.Invoke(this, new(nameof(IsCollapsed)));
+        }
+    }
 }
+
+public record RechteckParams(
+    double XRel, double YRel,
+    double Breite, double Hoehe,
+    double ZTiefe,
+    double FraeserD, double Drehzahl, double Vorschub, double VorschubFz,
+    string Bezugspunkt,
+    string Fraesung,        // "Aussen" | "Innen" | "Mittig"
+    string Laufrichtung,    // "Gegenlauf" | "Gleichlauf"
+    double Verrundung,
+    int WerkzeugNr = 0,
+    bool MehrfachZustellung = false,
+    double ZZustellung = 0,
+    double Eintauchwinkel = 3,
+    bool IsTasche = false
+);
 
 public static class VisualTreeHelperExtensions
 {
