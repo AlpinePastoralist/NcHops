@@ -23,7 +23,8 @@ public record GraviereParams(
     bool   IsTasche        = false,     // true = Tasche pro Buchstabe
     double VereinfachungMm = 1.0,       // Spitzentoleranz: Umkehrpunkte kollabieren (0 = aus)
     double SampleStepMm    = 0,         // Abtastschrittweite mm (0 = auto: FontSizeMm/300, clamp 0.02–0.1)
-    int    WerkzeugNr      = 0);        // Werkzeug-Nr aus Werkzeugliste (0 = keines)
+    int    WerkzeugNr      = 0,         // Werkzeug-Nr aus Werkzeugliste (0 = keines)
+    bool   UseSkia         = false);    // true = SkiaSharp-Pfadextraktion (schneller)
 
 public partial class GravierenDialog : Window
 {

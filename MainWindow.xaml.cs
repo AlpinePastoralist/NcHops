@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -43,7 +43,7 @@ public partial class MainWindow : Window
     private Point  _panOrigin;  // _panX/_panY beim Drag-Start
 
     // ── Aktives Werkzeug ─────────────────────────────────────────
-    private enum CanvasTool { Select, Hand, Zoom, VCarveText, Move, PfadStart, PfadLinie, PfadBogen, Rechteck }
+    private enum CanvasTool { Select, Hand, Zoom, VCarveText, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, Rechteck, Kreis }
     private CanvasTool _activeTool    = CanvasTool.Select;
     private bool       _isZoomDragging = false;
     private Point      _zoomDragStart;
@@ -76,9 +76,73 @@ public partial class MainWindow : Window
     private Point            _rktDragStart;             // Canvas-Pixel
     private System.Windows.Shapes.Rectangle? _rktRubberBand;
 
+    private bool             _kreisDragging = false;
+    private Point            _kreisDragCenter;          // Canvas-Pixel (Mittelpunkt)
+    private System.Windows.Shapes.Ellipse? _kreisRubberBand;
+    private TextBox?         _kreisInputBox;
+
     // ── Pfad-Punkte verschieben (Move-Werkzeug) ──────────────
     private int              _pfadDragHistIdx = -1;       // History-Idx des gezogenen Pfad-Punkts
     private (double x, double y) _pfadDragOrigAbs;        // Ursprüngliche Absolut-Position
+
+    // ── Ganzen Pfad verschieben (Move-Werkzeug) ──
+    private int              _pfadChainDragIdx = -1;      // History-Idx des Startpunkts der Kette
+    private (double x, double y) _pfadChainDragMouse;
+    private List<(double x, double y)> _pfadChainDragOrigAbs = [];
+
+    // ── Pfad-Kette skalieren (Ankerpunkte der Bounding-Box) ──
+    private int    _pfadScaleChainIdx = -1;
+    private int    _pfadScaleAnchor   = -1;     // 0-7, s. AnchorPosMm()
+    private (double x, double y) _pfadScaleOriginMm;
+    private (double minX, double minY, double maxX, double maxY) _pfadScaleOrigBBox;
+    private List<(double x, double y)> _pfadScaleOrigAbs = [];
+
+    // ── Pfad-Segment-Mittelpunkt verschieben (Pfeil-Werkzeug) ──
+    private int              _pfadSegDragIdx = -1;        // History-Idx des Segment-Endpunkts (p2)
+    private bool             _pfadSegDragIsArc;           // true = Bogen (Pfeilhöhe ändern)
+    private (double x, double y) _pfadSegDragP1;         // Abs-Position p1 bei Drag-Start
+    private (double x, double y) _pfadSegDragP2;         // Abs-Position p2 bei Drag-Start
+    private (double x, double y) _pfadSegDragMouse;      // Maus-Abs bei Drag-Start
+
+    // ── Vermassen-Werkzeug ───────────────────────────────────────
+    private enum VermKind { Length, ParallelDist, Angle, EdgeDist, EdgeAngle, PointDist, LineToPoint, PointEdgeDist, Coincident, Perpendicular, Parallel, ParallelEdge, PerpendicularEdge, CoincidentCorner }
+    private enum GeomConstraintMode { None, Coincident, Perpendicular, Parallel }
+    private record VermEntry(
+        VermKind Kind, int P1Idx, int P2Idx, double Offset, double Value,
+        int Q1Idx = -1, int Q2Idx = -1, int Edge = 0,
+        double DirX = 0, double DirY = 0);  // normierter Richtungsvektor P1→P2 (nur Length/PointDist)
+    // Edge: 0=none, 1=left(x=0), 2=right(x=WorkX), 3=bottom(y=0), 4=top(y=WorkY)
+    // States: 0=idle, 1=seg1 gewählt (Länge-Vorschau), 2=TextBox,
+    //         3=Drag bestehende Linie, 4=Edit bestehendes Label,
+    //         5=seg2 gewählt (Parallel/Winkel-Vorschau, warte auf 3. Klick)
+    private int    _vermState  = 0;
+    private int    _vermP1Idx  = -1;
+    private int    _vermP2Idx  = -1;
+    private (double x, double y) _vermP1Abs;
+    private (double x, double y) _vermP2Abs;
+    private int    _vermQ1Idx  = -1;   // 2. Segment für ParallelDist / Angle
+    private int    _vermQ2Idx  = -1;
+    private (double x, double y) _vermQ1Abs;
+    private (double x, double y) _vermQ2Abs;
+    private VermKind _vermActiveKind = VermKind.Length;
+    private double _vermOffset = 0;
+    private (double x, double y) _vermMouseMm;
+    private TextBox? _vermTextBox;
+    private readonly List<VermEntry> _vermPlaced = new();
+    private int _vermHoverP1  = -1;   // Hover-Segment im State 0 (für Hervorhebung)
+    private int _vermHoverP2  = -1;
+    private int _vermHoverEdge  = 0;   // 0=none, 1-4: hovered workpiece edge
+    private int _vermHoverPoint = -1;  // Index eines gehoverten Pfad-Punktes
+    private int _vermActiveEdge = 0;   // edge selected for current EdgeDist placement
+    private GeomConstraintMode _geomMode       = GeomConstraintMode.None;
+    private int                _geomFirstIdx   = -1; // erster geklickter Punkt/Segment-Idx
+    private int                _geomFirstIdx2  = -1; // zweiter Punkt des ersten Segments
+    private int                _selectedGeomIdx = -1; // gewähltes Geom-Constraint-Symbol (-1 = keines)
+    private int _vermPtIdx      = -1;  // erster gewählter Punkt (PointDist / LineToPoint)
+    private int _vermEditIdx  = -1;   // Index in _vermPlaced für State 3/4
+    private double _vermDragOffset;   // Vorschau-Offset beim Ziehen (State 3)
+    private bool _vermIsHolding = false;  // Maustaste nach 1. Klick gehalten (Drag-Positionierung)
+    private (double x, double y) _vermDownMm; // Klick-Position beim Drücken (für Bewegungs-Schwellwert)
 
     // ── G-Code Zeilenmarkierung ───────────────────────────────────
     private int _highlightGCodeLine = -1;   // Caret-Zeile
@@ -140,6 +204,7 @@ public partial class MainWindow : Window
     public List<GCodeGenerator.VCarveCircle> VCarveCenters { get; private set; } = [];
     private GraviereParams?  _previewGravParams;
     private RechteckParams?  _previewRktParams;
+    private KreisParams?     _previewKreisParams;
     private static readonly string WerkzeugDatei = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "NCHops", "werkzeuge.json");
@@ -274,7 +339,14 @@ public partial class MainWindow : Window
         _historyView = System.Windows.Data.CollectionViewSource.GetDefaultView(_history);
         _historyView.Filter = IsHistoryEntryVisible;
         HistoryList.ItemsSource = _historyView;
-        _history.CollectionChanged += (_, _) => { if (!_suppressHistoryRegen) RegenerateGCodeFromHistory(); };
+        _history.CollectionChanged += (_, e) =>
+        {
+            if (!_suppressHistoryRegen) RegenerateGCodeFromHistory();
+            // Masslinien bereinigen wenn ein History-Eintrag entfernt wurde
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove
+                && e.OldStartingIndex >= 0)
+                CleanupVermAfterRemove(e.OldStartingIndex);
+        };
         WerkzeugGrid.ItemsSource = _werkzeuge;
         _werkzeuge.CollectionChanged += (_, _) => SaveWerkzeuge();
         LoadWerkzeuge();
@@ -572,7 +644,7 @@ public partial class MainWindow : Window
         );
         _suppressNextAutoFit = true;
         _history.Add(new HistoryEntry("Pfad Start",
-            $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}, {p.Bezugspunkt}", p));
+            $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}", p));
         UpdatePfadMenuState();
         HistoryList.SelectedItem    = _history[^1];
         TabEigenschaften.IsSelected = true;
@@ -602,6 +674,7 @@ public partial class MainWindow : Window
             MehrfachZustellung: wz != null,
             ZZustellung:       wz?.ZZustellung ?? 2
         );
+        _suppressNextAutoFit = true;
         _history.Add(new HistoryEntry("Rechteck",
             $"X={p.XRel} Y={p.YRel}, {p.Breite}×{p.Hoehe}, Z={p.ZTiefe}", p));
         HistoryList.SelectedItem    = _history[^1];
@@ -701,6 +774,38 @@ public partial class MainWindow : Window
         PnlRktLauf.Visibility       = vis;
     }
 
+    private string KrBezugName()
+    {
+        if (KrBezugOL.IsChecked == true) return "Oben links";
+        if (KrBezugOM.IsChecked == true) return "Oben Mitte";
+        if (KrBezugOR.IsChecked == true) return "Oben rechts";
+        if (KrBezugML.IsChecked == true) return "Links Mitte";
+        if (KrBezugMR.IsChecked == true) return "Rechts Mitte";
+        if (KrBezugUM.IsChecked == true) return "Unten Mitte";
+        if (KrBezugUR.IsChecked == true) return "Unten rechts";
+        if (KrBezugUL.IsChecked == true) return "Unten links";
+        return "Mitte"; // KrBezugMM default
+    }
+
+    private void SetKrBezugRadio(string name)
+    {
+        KrBezugOL.IsChecked = name == "Oben links";
+        KrBezugOM.IsChecked = name == "Oben Mitte";
+        KrBezugOR.IsChecked = name == "Oben rechts";
+        KrBezugML.IsChecked = name == "Links Mitte";
+        KrBezugMM.IsChecked = name == "Mitte";
+        KrBezugMR.IsChecked = name == "Rechts Mitte";
+        KrBezugUL.IsChecked = name == "Unten links";
+        KrBezugUM.IsChecked = name == "Unten Mitte";
+        KrBezugUR.IsChecked = name == "Unten rechts";
+    }
+
+    private void UpdateKrModusVisibility(bool isTasche)
+    {
+        var vis = isTasche ? Visibility.Collapsed : Visibility.Visible;
+        PnlKrFraesung.Visibility = vis;
+    }
+
     private static TascheFräsenParams RechteckToTasche(RechteckParams p) =>
         new(XRel: p.XRel, YRel: p.YRel, Breite: p.Breite, Höhe: p.Hoehe,
             ZTiefe: p.ZTiefe, ZZustellung: p.ZZustellung > 0 ? p.ZZustellung : 2,
@@ -713,36 +818,184 @@ public partial class MainWindow : Window
     private void OnRktEigTextChanged(object sender, TextChangedEventArgs e) { /* LostFocus reicht */ }
     private void OnRktEigLostFocus(object sender, RoutedEventArgs e) => ApplyRechteckEig();
     private void OnRktEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyRechteckEig(); }
+
+    private void AddKreis(double cxMm, double cyMm, double radiusMm)
+    {
+        var wz = _werkzeuge.FirstOrDefault();
+        string bezug = KrBezugName();
+        var (xRel, yRel) = AbsToRel(bezug, cxMm, cyMm, WorkX, WorkY);
+        var p = new KreisParams(
+            XRel:        Math.Round(xRel, 3),
+            YRel:        Math.Round(yRel, 3),
+            Radius:      Math.Round(radiusMm, 3),
+            ZTiefe:      wz != null ? -(Math.Abs(WorkZ)) : -5,
+            FraeserD:    wz?.Durchmesser ?? 6,
+            Drehzahl:    wz?.Drehzahl    ?? 18000,
+            Vorschub:    wz?.VorschubFxy ?? 3000,
+            VorschubFz:  wz?.VorschubFz  ?? 500,
+            Fraesung:    "Aussen",
+            Laufrichtung:"Gegenlauf",
+            WerkzeugNr:  wz?.Nr ?? 0,
+            Eintauchwinkel:    wz?.Eintauchwinkel ?? 3,
+            MehrfachZustellung: wz != null,
+            ZZustellung:       wz?.ZZustellung ?? 2,
+            Bezugspunkt:       bezug,
+            IsTasche:          false
+        );
+        _suppressNextAutoFit = true;
+        _history.Add(new HistoryEntry("Kreis",
+            $"M={p.XRel}/{p.YRel} R={p.Radius} Z={p.ZTiefe}", p));
+        HistoryList.SelectedItem    = _history[^1];
+        TabEigenschaften.IsSelected = true;
+    }
+
+    private void OnKreisTool(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.Kreis ? CanvasTool.Select : CanvasTool.Kreis);
+
+    private void ApplyKreisEig()
+    {
+        if (_eigSuppressUpdate) return;
+        int idx = HistoryList.SelectedIndex;
+        if (idx < 0 || _history[idx].Params is not KreisParams kr) return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sty = System.Globalization.NumberStyles.Float;
+        string Norm(string s) => s.Replace(',', '.');
+
+        if (!double.TryParse(Norm(KrEigX.Text),      sty, inv, out var x))  return;
+        if (!double.TryParse(Norm(KrEigY.Text),      sty, inv, out var y))  return;
+        if (!double.TryParse(Norm(KrEigRadius.Text), sty, inv, out var rad)) return;
+        if (!double.TryParse(Norm(KrEigZ.Text),      sty, inv, out var z))  return;
+        bool mehrfach = KrEigMehrfach.IsChecked == true;
+        double.TryParse(Norm(KrEigZZust.Text), sty, inv, out var zzust);
+
+        string fraesung = (KrEigFrAussen.IsChecked == true) ? "Aussen"
+                        : (KrEigFrInnen.IsChecked  == true) ? "Innen"
+                        : "Mittig";
+        string lauf = (KrEigGleich.IsChecked == true) ? "Gleichlauf" : "Gegenlauf";
+        bool isTasche = KrModusTasche.IsChecked == true;
+        string bezug  = KrBezugName();
+
+        var wz = KrEigWerkzeug.SelectedItem as Werkzeug;
+
+        // Recalculate XRel/YRel if bezugspunkt changed
+        var (oldAbsX, oldAbsY) = GCodeGenerator.ConvertBezugspunkt(kr.Bezugspunkt, kr.XRel, kr.YRel, WorkX, WorkY);
+        var (newRelX, newRelY) = kr.Bezugspunkt != bezug
+            ? AbsToRel(bezug, oldAbsX, oldAbsY, WorkX, WorkY)
+            : (x, y);
+
+        var np = kr with
+        {
+            XRel = Math.Round(newRelX, 3), YRel = Math.Round(newRelY, 3),
+            Radius = rad, ZTiefe = z,
+            FraeserD   = wz?.Durchmesser ?? kr.FraeserD,
+            Drehzahl   = wz?.Drehzahl    ?? kr.Drehzahl,
+            Vorschub   = wz?.VorschubFxy ?? kr.Vorschub,
+            VorschubFz     = wz?.VorschubFz     ?? kr.VorschubFz,
+            WerkzeugNr     = wz?.Nr             ?? kr.WerkzeugNr,
+            Eintauchwinkel = wz?.Eintauchwinkel ?? kr.Eintauchwinkel,
+            Fraesung            = fraesung,
+            Laufrichtung        = lauf,
+            MehrfachZustellung  = mehrfach,
+            ZZustellung         = zzust > 0 ? zzust : kr.ZZustellung,
+            Bezugspunkt         = bezug,
+            IsTasche            = isTasche,
+        };
+
+        _eigSuppressUpdate = true;
+        _suppressHistoryRegen = true;
+        try { _history[idx] = new HistoryEntry("Kreis",
+            $"M={np.XRel}/{np.YRel} R={np.Radius} Z={np.ZTiefe}", np); }
+        finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+        HistoryList.SelectedIndex = idx;
+        UpdateKrModusVisibility(isTasche);
+    }
+
+    private void OnKrEigChanged(object sender, RoutedEventArgs e)   => ApplyKreisEig();
+    private void OnKrEigLostFocus(object sender, RoutedEventArgs e) => ApplyKreisEig();
+    private void OnKrEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyKreisEig(); }
     private void OnPfadEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyPfadStartEig(); }
 
     private void AddPfadLinie(double mmX, double mmY)
     {
-        var last = GetLastPfadAbsPoint();
-        string bezug = last.HasValue ? "Letzter Punkt" : "Unten links";
-        double xRel  = last.HasValue ? Math.Round(mmX - last.Value.x, 3) : Math.Round(mmX, 3);
-        double yRel  = last.HasValue ? Math.Round(mmY - last.Value.y, 3) : Math.Round(mmY, 3);
+        double xRel = Math.Round(mmX, 3);
+        double yRel = Math.Round(mmY, 3);
         _suppressNextAutoFit = true;
         var p = new PfadPunktParams(
             XRel: xRel, YRel: yRel,
             ZTiefe: 0, ZZustellung: 0, FraeserD: 0, Drehzahl: 0,
             Vorschub: 0, VorschubFz: 0,
             Radiuskorrektur: "Mittig",
-            Bezugspunkt: bezug,
+            Bezugspunkt: "Unten links",
             Typ: PfadPunktTyp.Linie
         );
-        _history.Add(new HistoryEntry("Pfad Linie",
-            $"X={p.XRel} Y={p.YRel}, {p.Bezugspunkt}", p, level: 1));
+        _history.Add(new HistoryEntry($"Pfad Linie #{PfadPunktNummer(_history.Count)}",
+            $"X={p.XRel} Y={p.YRel}", p, level: 1));
+        AutoDetectGeomConstraints(_history.Count - 1);
         HistoryList.SelectedItem    = _history[^1];
         TabEigenschaften.IsSelected = true;
+    }
+
+    // Erkennt geometrische Eigenschaften automatisch nach dem Setzen eines Linienpunkts:
+    //   • Exakt horizontales Segment  → ParallelEdge zur unteren Kante (= wagerecht)
+    //   • Exakt vertikales Segment    → ParallelEdge zur linken Kante  (= senkrecht)
+    //   • Exakt rechtwinkliger Eckpunkt zwischen zwei geraden Linien → Perpendicular-Constraint
+    private void AutoDetectGeomConstraints(int newPtIdx)
+    {
+        if (_history[newPtIdx].Params is not PfadPunktParams { Typ: PfadPunktTyp.Linie }) return;
+        if (newPtIdx < 1) return;
+        if (_history[newPtIdx - 1].Params is not PfadPunktParams) return;
+
+        var abs2 = GetPfadAbsAt(newPtIdx);     if (abs2 == null) return;
+        var abs1 = GetPfadAbsAt(newPtIdx - 1); if (abs1 == null) return;
+
+        double dx1 = abs2.Value.x - abs1.Value.x;
+        double dy1 = abs2.Value.y - abs1.Value.y;
+        double L1  = Math.Sqrt(dx1 * dx1 + dy1 * dy1);
+        if (L1 < 1e-9) return;
+
+        const double eps = 1e-6;
+
+        // ── Horizontales / vertikales Segment ──────────────────────────────────────
+        // Prüfen ob bereits eine Richtungs-Constraint auf diesem Segment existiert
+        bool hasDirConstraint = _vermPlaced.Any(en =>
+            en.Kind is VermKind.EdgeAngle or VermKind.ParallelEdge or VermKind.PerpendicularEdge
+            && ((en.P1Idx == newPtIdx - 1 && en.P2Idx == newPtIdx)
+             || (en.P1Idx == newPtIdx     && en.P2Idx == newPtIdx - 1)));
+
+        if (!hasDirConstraint)
+        {
+            if (Math.Abs(dy1) < eps)
+            {
+                // Horizontal → ParallelEdge zur unteren (waagerechten) Kante
+                // Zeigt als Symbol, nicht als Masslinie
+                _vermPlaced.Add(new VermEntry(
+                    VermKind.ParallelEdge, newPtIdx - 1, newPtIdx, 0, 0.0, -1, -1, 3));
+            }
+            else if (Math.Abs(dx1) < eps)
+            {
+                // Vertikal → ParallelEdge zur linken (senkrechten) Kante
+                _vermPlaced.Add(new VermEntry(
+                    VermKind.ParallelEdge, newPtIdx - 1, newPtIdx, 0, 0.0, -1, -1, 1));
+            }
+        }
+
+        if (false) // Perpendicular-Auto-Erkennung deaktiviert
+        {
+            if (false)
+            {
+            }
+        }
     }
 
     private void AddPfadBogen((double x, double y) endAbs, (double x, double y) midAbs)
     {
         _suppressNextAutoFit = true;
         var last = GetLastPfadAbsPoint();
-        string bezug = last.HasValue ? "Letzter Punkt" : "Unten links";
-        double xRel  = last.HasValue ? Math.Round(endAbs.x - last.Value.x, 3) : Math.Round(endAbs.x, 3);
-        double yRel  = last.HasValue ? Math.Round(endAbs.y - last.Value.y, 3) : Math.Round(endAbs.y, 3);
+        double xRel = Math.Round(endAbs.x, 3);
+        double yRel = Math.Round(endAbs.y, 3);
 
         // Pfeilhöhe aus den zwei Canvas-Klicks berechnen (vorzeichenbehaftet: + = links)
         double pfeilhoehe = 0;
@@ -764,18 +1017,43 @@ public partial class MainWindow : Window
             ZTiefe: 0, ZZustellung: 0, FraeserD: 0, Drehzahl: 0,
             Vorschub: 0, VorschubFz: 0,
             Radiuskorrektur: "Mittig",
-            Bezugspunkt: bezug,
+            Bezugspunkt: "Unten links",
             Typ: PfadPunktTyp.Bogen,
             XMid: pfeilhoehe, YMid: 0,
             BogenModus: "Pfeilhöhe"
         );
-        _history.Add(new HistoryEntry("Pfad Bogen",
-            $"X={p.XRel} Y={p.YRel}, Pfeilhöhe={p.XMid}, {p.Bezugspunkt}", p, level: 1));
+        _history.Add(new HistoryEntry($"Pfad Bogen #{PfadPunktNummer(_history.Count)}",
+            $"X={p.XRel} Y={p.YRel}, Pfeilhöhe={p.XMid}", p, level: 1));
         HistoryList.SelectedItem    = _history[^1];
         TabEigenschaften.IsSelected = true;
     }
 
     // ── Pfad-Punkt Hilfsmethoden ──────────────────────────────────
+
+    private int PfadPunktNummer(int histIdx)
+    {
+        int n = 0;
+        for (int i = histIdx - 1; i >= 0; i--)
+        {
+            if (_history[i].Params is not PfadPunktParams pp) break;
+            if (pp.Typ == PfadPunktTyp.Start) break;
+            n++;
+        }
+        return n + 1;
+    }
+
+    // Liefert die Radiuskorrektur ("Links"/"Rechts"/"Mittig") der Pfad-Kette, zu der ein
+    // Segment gehört — bestimmt, auf welcher Seite der Konturlinie die tatsächliche
+    // Fräsbahn (Werkzeugradius-Versatz) verläuft.
+    private string GetRadiuskorrekturForSeg(int p1Idx, int p2Idx)
+    {
+        int idx = Math.Max(p1Idx, p2Idx);
+        if (idx < 0 || idx >= _history.Count || _history[idx].Params is not PfadPunktParams) return "Mittig";
+        int startIdx = idx;
+        while (startIdx > 0 && _history[startIdx].Params is PfadPunktParams pp && pp.Typ != PfadPunktTyp.Start)
+            startIdx--;
+        return _history[startIdx].Params is PfadPunktParams sp ? sp.Radiuskorrektur : "Mittig";
+    }
 
     // Absolute Position eines Pfad-History-Eintrags berechnen
     private (double x, double y)? GetPfadAbsAt(int histIdx)
@@ -801,6 +1079,2757 @@ public partial class MainWindow : Window
         return abs;
     }
 
+    // Treffertest: Irgendein Punkt einer Pfad-Kette. Gibt Start-History-Idx der Kette zurück.
+    // Ankerpositionen einer Chain-BBox in mm (Index 0-7, Reihenfolge: TL TM TR LM RM BL BM BR)
+    // In mm-Koordinaten: "oben" = große Y-Werte, "links" = kleine X-Werte
+    private (double x, double y)[] AnchorPosMm((double minX, double minY, double maxX, double maxY) bbox)
+    {
+        double padMm = 4.0 / _zoom;
+        double L = bbox.minX - padMm, R = bbox.maxX + padMm;
+        double B = bbox.minY - padMm, T = bbox.maxY + padMm;
+        double mH = (L + R) / 2, mV = (B + T) / 2;
+        return new[] {
+            (L, T), (mH, T), (R, T),
+            (L, mV),          (R, mV),
+            (L, B), (mH, B), (R, B)
+        };
+    }
+
+    private static Cursor ScaleAnchorCursor(int anchor) => anchor switch
+    {
+        0 or 7 => Cursors.SizeNWSE,
+        2 or 5 => Cursors.SizeNESW,
+        1 or 6 => Cursors.SizeNS,
+        _      => Cursors.SizeWE
+    };
+
+    // Trifft Cursor einen der 8 Ankerpunkte irgendeiner Kette? → (chainStart, anchor) oder (-1,-1)
+    private (int chainIdx, int anchor) HitTestPfadChainAnchor(double mmX, double mmY)
+    {
+        double tol = 6.0 / _zoom;
+        for (int i = 0; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams pp || pp.Typ != PfadPunktTyp.Start) continue;
+            var bboxOpt = GetChainBBox(i);
+            if (bboxOpt == null) continue;
+            var pts = AnchorPosMm(bboxOpt.Value);
+            for (int a = 0; a < 8; a++)
+            {
+                double dx = mmX - pts[a].x, dy = mmY - pts[a].y;
+                if (dx*dx + dy*dy <= tol*tol) return (i, a);
+            }
+        }
+        return (-1, -1);
+    }
+
+    private void StartScalePfadChain(int chainIdx, int anchor)
+    {
+        var bboxOpt = GetChainBBox(chainIdx);
+        if (bboxOpt == null) return;
+        _pfadScaleChainIdx = chainIdx;
+        _pfadScaleAnchor   = anchor;
+        _pfadScaleOrigBBox = bboxOpt.Value;
+        var pts = AnchorPosMm(bboxOpt.Value);
+        _pfadScaleOriginMm = pts[7 - anchor]; // gegenüberliegender Ankerpunkt ist fixiert
+        _pfadScaleOrigAbs.Clear();
+        for (int i = chainIdx; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams pp) break;
+            if (i > chainIdx && pp.Typ == PfadPunktTyp.Start) break;
+            _pfadScaleOrigAbs.Add(GetPfadAbsAt(i) ?? (0, 0));
+        }
+        HistoryList.SelectedItem    = _history[chainIdx];
+        TabEigenschaften.IsSelected = true;
+    }
+
+    private void UpdateScalePfadChain(double mmX, double mmY)
+    {
+        if (_pfadScaleChainIdx < 0) return;
+        var anchorPts  = AnchorPosMm(_pfadScaleOrigBBox);
+        int  anchor    = _pfadScaleAnchor;
+        bool doX       = anchor != 1 && anchor != 6; // linke/rechte Anker skalieren X
+        bool doY       = anchor != 3 && anchor != 4; // obere/untere Anker skalieren Y
+        double ox = _pfadScaleOriginMm.x, oy = _pfadScaleOriginMm.y;
+        double origAX  = anchorPts[anchor].x, origAY = anchorPts[anchor].y;
+
+        double scaleX  = (doX && Math.Abs(origAX - ox) > 1e-6) ? (mmX - ox) / (origAX - ox) : 1.0;
+        double scaleY  = (doY && Math.Abs(origAY - oy) > 1e-6) ? (mmY - oy) / (origAY - oy) : 1.0;
+        scaleX = Math.Max(0.05, scaleX);
+        scaleY = Math.Max(0.05, scaleY);
+
+        _suppressHistoryRegen = true;
+        try
+        {
+            int local = 0;
+            for (int i = _pfadScaleChainIdx; i < _history.Count && local < _pfadScaleOrigAbs.Count; i++, local++)
+            {
+                if (_history[i].Params is not PfadPunktParams p) break;
+                var (oax, oay) = _pfadScaleOrigAbs[local];
+                double newAbsX = ox + (oax - ox) * scaleX;
+                double newAbsY = oy + (oay - oy) * scaleY;
+                double xRel, yRel;
+                if (p.Bezugspunkt == "Letzter Punkt" && local > 0)
+                {
+                    var (prevOax, prevOay) = _pfadScaleOrigAbs[local - 1];
+                    xRel = Math.Round(newAbsX - (ox + (prevOax - ox) * scaleX), 3);
+                    yRel = Math.Round(newAbsY - (oy + (prevOay - oy) * scaleY), 3);
+                }
+                else
+                {
+                    (xRel, yRel) = InverseBezugspunkt(p.Bezugspunkt, newAbsX, newAbsY, WorkX, WorkY);
+                    xRel = Math.Round(xRel, 3); yRel = Math.Round(yRel, 3);
+                }
+
+                double xMid = p.XMid, yMid = p.YMid;
+                if (p.Typ == PfadPunktTyp.Bogen && p.BogenModus == "Bogenmitte" && local > 0)
+                {
+                    // Bogenmittelpunkt absolut skalieren
+                    var (prevOax, prevOay) = _pfadScaleOrigAbs[local - 1];
+                    if (p.Bezugspunkt == "Letzter Punkt")
+                    {
+                        double absMidX = prevOax + p.XMid, absMidY = prevOay + p.YMid;
+                        double prevNewX = ox + (prevOax - ox) * scaleX, prevNewY = oy + (prevOay - oy) * scaleY;
+                        xMid = Math.Round(ox + (absMidX - ox) * scaleX - prevNewX, 3);
+                        yMid = Math.Round(oy + (absMidY - oy) * scaleY - prevNewY, 3);
+                    }
+                }
+                else if (p.Typ == PfadPunktTyp.Bogen && (p.BogenModus == "Pfeilhöhe" || p.BogenModus == "Radius")
+                         && local > 0)
+                {
+                    // Sehne des ursprünglichen Bogens
+                    var (prevOax, prevOay) = _pfadScaleOrigAbs[local - 1];
+                    double cdx = oax - prevOax, cdy = oay - prevOay;
+                    double L  = Math.Sqrt(cdx * cdx + cdy * cdy);
+                    double Lp = Math.Sqrt((cdx * scaleX) * (cdx * scaleX) + (cdy * scaleY) * (cdy * scaleY));
+                    if (L > 1e-10 && Lp > 1e-10)
+                    {
+                        if (p.BogenModus == "Pfeilhöhe")
+                        {
+                            // h' = h · scaleX · scaleY · L / L'
+                            xMid = Math.Round(p.XMid * scaleX * scaleY * L / Lp, 3);
+                        }
+                        else // "Radius"
+                        {
+                            // Pfeilhöhe aus Radius + Sehne berechnen, skalieren, zurück in Radius
+                            double R = p.XMid;
+                            double a = L / 2;
+                            double absR = Math.Max(Math.Abs(R), a);
+                            double h = (absR - Math.Sqrt(Math.Max(0, absR * absR - a * a))) * Math.Sign(R != 0 ? R : 1);
+                            double hp = h * scaleX * scaleY * L / Lp;
+                            double ap = Lp / 2;
+                            double Rp = (ap * ap + hp * hp) / (2 * Math.Max(Math.Abs(hp), 1e-10)) * Math.Sign(hp);
+                            xMid = Math.Round(Rp, 3);
+                        }
+                    }
+                }
+
+                _history[i] = new HistoryEntry(_history[i].Label, _history[i].Details,
+                    p with { XRel = xRel, YRel = yRel, XMid = xMid, YMid = yMid }, _history[i].Level);
+            }
+        }
+        finally { _suppressHistoryRegen = false; }
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void CommitScalePfadChain()
+    {
+        if (_pfadScaleChainIdx < 0) return;
+        int idx = _pfadScaleChainIdx;
+        _pfadScaleChainIdx = -1;
+        _pfadScaleOrigAbs.Clear();
+        _suppressNextAutoFit = true;
+        PropagateVermConstraints();
+        CheckAndReportConstraints();
+        HistoryList.SelectedItem = _history[idx];
+        UpdateAll();
+    }
+
+    // ── Vermassen ────────────────────────────────────────────────
+
+    private static double DistPointToSegment(double px, double py,
+        double ax, double ay, double bx, double by)
+    {
+        double dx = bx - ax, dy = by - ay;
+        double lenSq = dx*dx + dy*dy;
+        if (lenSq < 1e-12) return Math.Sqrt((px-ax)*(px-ax)+(py-ay)*(py-ay));
+        double t = Math.Clamp(((px-ax)*dx + (py-ay)*dy) / lenSq, 0, 1);
+        double qx = ax + t*dx, qy = ay + t*dy;
+        return Math.Sqrt((px-qx)*(px-qx)+(py-qy)*(py-qy));
+    }
+
+    private (int p1, int p2) HitTestPfadLineSegment(double mmX, double mmY)
+    {
+        double tol = 5.0 / _zoom;
+        for (int i = 1; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams pp || pp.Typ != PfadPunktTyp.Linie) continue;
+            var abs2 = GetPfadAbsAt(i);     if (!abs2.HasValue) continue;
+            var abs1 = GetPfadAbsAt(i - 1); if (!abs1.HasValue) continue;
+            if (_history[i - 1].Params is not PfadPunktParams) continue;
+            double d = DistPointToSegment(mmX, mmY,
+                abs1.Value.x, abs1.Value.y, abs2.Value.x, abs2.Value.y);
+            if (d <= tol) return (i - 1, i);
+        }
+        return (-1, -1);
+    }
+
+    // Nächster Pfad-Punkt innerhalb der Toleranz (-1 = keiner)
+    private int HitTestPfadPoint(double mmX, double mmY)
+    {
+        double tol = 6.0 / _zoom;
+        int best = -1; double bestD = tol;
+        for (int i = 0; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams) continue;
+            var abs = GetPfadAbsAt(i); if (!abs.HasValue) continue;
+            double dx = mmX - abs.Value.x, dy = mmY - abs.Value.y;
+            double d = Math.Sqrt(dx*dx + dy*dy);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    // Returns which workpiece edge the mouse is near: 0=none,1=left,2=right,3=bottom,4=top
+    private int HitTestWorkpieceEdge(double mmX, double mmY)
+    {
+        double tol = 5.0 / _zoom;
+        if (mmX >= -tol && mmX <= WorkX + tol && mmY >= -tol && mmY <= WorkY + tol)
+        {
+            if (Math.Abs(mmX)         <= tol) return 1;
+            if (Math.Abs(mmX - WorkX) <= tol) return 2;
+            if (Math.Abs(mmY)         <= tol) return 3;
+            if (Math.Abs(mmY - WorkY) <= tol) return 4;
+        }
+        return 0;
+    }
+
+    // Gibt Eckpunkt-Index zurück: 1=unten-links(0,0) 2=unten-rechts(W,0) 3=oben-rechts(W,H) 4=oben-links(0,H)
+    private int HitTestWorkpieceCorner(double mmX, double mmY)
+    {
+        double tol = 6.0 / _zoom;
+        (double x, double y)[] corners = { (0, 0), (WorkX, 0), (WorkX, WorkY), (0, WorkY) };
+        for (int i = 0; i < corners.Length; i++)
+            if (Math.Abs(mmX - corners[i].x) <= tol && Math.Abs(mmY - corners[i].y) <= tol)
+                return i + 1;
+        return 0;
+    }
+
+    private (double x, double y) WorkpieceCornerPos(int corner) => corner switch
+    {
+        1 => (0, 0),
+        2 => (WorkX, 0),
+        3 => (WorkX, WorkY),
+        4 => (0, WorkY),
+        _ => (0, 0)
+    };
+
+    private double EdgeDistValue(double px, double py, int edge) => edge switch
+    {
+        1 => px,
+        2 => WorkX - px,
+        3 => py,
+        4 => WorkY - py,
+        _ => 0
+    };
+
+    // Hit-Test: Label einer platzierten Masslinie (Screenkoordinaten in logischen Pixeln)
+    private int HitTestVermLabel(double screenX, double screenY)
+    {
+        for (int i = 0; i < _vermPlaced.Count; i++)
+        {
+            var lmm = VermLabelPosMm(_vermPlaced[i]);
+            if (lmm == null) continue;
+            double sx = lmm.Value.x * _zoom + _panX;
+            double sy = (WorkY - lmm.Value.y) * _zoom + _panY;
+            if (Math.Abs(screenX - sx) <= 48 && Math.Abs(screenY - sy) <= 14)
+                return i;
+        }
+        return -1;
+    }
+
+    // Label-Position einer VermEntry in mm-Koordinaten
+    private (double x, double y)? VermLabelPosMm(VermEntry en)
+    {
+        var p1 = GetPfadAbsAt(en.P1Idx);
+        if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) return null;
+        var p2 = GetPfadAbsAt(en.P2Idx); if (p2 == null) return null;
+        switch (en.Kind)
+        {
+            case VermKind.Length:
+            {
+                double dx = p2.Value.x - p1.Value.x, dy = p2.Value.y - p1.Value.y;
+                double len = Math.Sqrt(dx*dx + dy*dy); if (len < 1e-9) return null;
+                double nx = -dy/len, ny = dx/len;
+                return ((p1.Value.x + p2.Value.x)/2 + nx * en.Offset,
+                        (p1.Value.y + p2.Value.y)/2 + ny * en.Offset);
+            }
+            case VermKind.ParallelDist:
+            {
+                var q1 = GetPfadAbsAt(en.Q1Idx); if (q1 == null) return null;
+                double dx1 = p2.Value.x - p1.Value.x, dy1 = p2.Value.y - p1.Value.y;
+                double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1); if (l1 < 1e-9) return null;
+                double nx = -dy1/l1, ny = dx1/l1;
+                double signedDist = (q1.Value.x - p1.Value.x)*nx + (q1.Value.y - p1.Value.y)*ny;
+                var anchor1 = (p1.Value.x + en.Offset * dx1, p1.Value.y + en.Offset * dy1);
+                var anchor2 = (anchor1.Item1 + nx * signedDist, anchor1.Item2 + ny * signedDist);
+                return ((anchor1.Item1 + anchor2.Item1)/2, (anchor1.Item2 + anchor2.Item2)/2);
+            }
+            case VermKind.Angle:
+            {
+                var q1 = GetPfadAbsAt(en.Q1Idx); if (q1 == null) return null;
+                var q2 = GetPfadAbsAt(en.Q2Idx); if (q2 == null) return null;
+                var inter = LinesIntersection(p1.Value, p2.Value, q1.Value, q2.Value);
+                if (inter == null) return null;
+                double a1 = VermSegArcAngle(inter.Value, p1.Value, p2.Value);
+                double a2 = VermSegArcAngle(inter.Value, q1.Value, q2.Value);
+                double amid = VermArcMidAngle(a1, a2);
+                // en.Offset ist t-Parameter entlang P-Segment → Radius daraus berechnen
+                double r = AngleArcRadius(en.Offset, p1.Value, p2.Value, inter.Value);
+                return (inter.Value.x + r * Math.Cos(amid), inter.Value.y + r * Math.Sin(amid));
+            }
+            case VermKind.EdgeDist:
+            case VermKind.PointEdgeDist:
+            {
+                if (en.Edge <= 0) return null;
+                if (en.Edge == 1 || en.Edge == 2)
+                    return ((p2.Value.x + (en.Edge == 1 ? 0 : WorkX)) / 2, p2.Value.y + en.Offset);
+                else
+                    return (p2.Value.x + en.Offset, (p2.Value.y + (en.Edge == 3 ? 0 : WorkY)) / 2);
+            }
+            case VermKind.EdgeAngle:
+            {
+                if (p1 == null || en.Edge <= 0) return null;
+                var inter = SegmentEdgeIntersection(p1.Value, p2.Value, en.Edge);
+                if (inter == null) return null;
+                var (e1, e2) = EdgeVirtualSegment(inter.Value, en.Edge);
+                double a1 = VermSegArcAngle(inter.Value, p1.Value, p2.Value);
+                double a2 = VermSegArcAngle(inter.Value, e1, e2);
+                double amid = VermArcMidAngle(a1, a2);
+                double r = AngleArcRadius(en.Offset, p1.Value, p2.Value, inter.Value);
+                return (inter.Value.x + r * Math.Cos(amid), inter.Value.y + r * Math.Sin(amid));
+            }
+            case VermKind.PointDist:
+            {
+                double dx = p2.Value.x - p1!.Value.x, dy = p2.Value.y - p1.Value.y;
+                double len = Math.Sqrt(dx*dx + dy*dy); if (len < 1e-9) return null;
+                double nx = -dy/len, ny = dx/len;
+                double midX = (p1.Value.x + p2.Value.x)/2 + nx * en.Offset;
+                double midY = (p1.Value.y + p2.Value.y)/2 + ny * en.Offset;
+                return (midX, midY);
+            }
+            case VermKind.LineToPoint:
+            {
+                if (p1 == null) return null;
+                var q1 = GetPfadAbsAt(en.Q1Idx); if (q1 == null) return null;
+                double dx1 = p2.Value.x - p1.Value.x, dy1 = p2.Value.y - p1.Value.y;
+                double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1); if (l1 < 1e-9) return null;
+                double nx = -dy1/l1, ny = dx1/l1;
+                double sD = (q1.Value.x - p1.Value.x)*nx + (q1.Value.y - p1.Value.y)*ny;
+                double ax = p1.Value.x + en.Offset * dx1, ay = p1.Value.y + en.Offset * dy1;
+                return (ax + nx * sD / 2, ay + ny * sD / 2);
+            }
+            default: return null;
+        }
+    }
+
+    // Hit-Test: Masslinie (Dimensionslinie) einer platzierten Masslinie (mm-Koordinaten)
+    private int HitTestVermLine(double mmX, double mmY)
+    {
+        double tol = 4.0 / _zoom;
+        for (int i = 0; i < _vermPlaced.Count; i++)
+        {
+            var en = _vermPlaced[i];
+            var p1 = GetPfadAbsAt(en.P1Idx);
+            if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) continue;
+            var p2 = GetPfadAbsAt(en.P2Idx); if (p2 == null) continue;
+            if (en.Kind == VermKind.EdgeDist || en.Kind == VermKind.PointEdgeDist)
+            {
+                if (en.Edge <= 0) continue;
+                bool isHoriz = (en.Edge == 1 || en.Edge == 2);
+                double xEdge = en.Edge == 1 ? 0 : WorkX;
+                double yEdge = en.Edge == 3 ? 0 : WorkY;
+                if (isHoriz)
+                {
+                    double lineY = p2.Value.y + en.Offset;
+                    double lineX1 = Math.Min(p2.Value.x, xEdge);
+                    double lineX2 = Math.Max(p2.Value.x, xEdge);
+                    if (DistPointToSegment(mmX, mmY, lineX1, lineY, lineX2, lineY) <= tol) return i;
+                }
+                else
+                {
+                    double lineX = p2.Value.x + en.Offset;
+                    double lineY1 = Math.Min(p2.Value.y, yEdge);
+                    double lineY2 = Math.Max(p2.Value.y, yEdge);
+                    if (DistPointToSegment(mmX, mmY, lineX, lineY1, lineX, lineY2) <= tol) return i;
+                }
+                continue;
+            }
+            if (en.Kind == VermKind.Length)
+            {
+                double dx = p2.Value.x - p1.Value.x, dy = p2.Value.y - p1.Value.y;
+                double len = Math.Sqrt(dx*dx + dy*dy); if (len < 1e-9) continue;
+                double nx = -dy/len, ny = dx/len;
+                double d1x = p1.Value.x + nx * en.Offset, d1y = p1.Value.y + ny * en.Offset;
+                double d2x = p2.Value.x + nx * en.Offset, d2y = p2.Value.y + ny * en.Offset;
+                if (DistPointToSegment(mmX, mmY, d1x, d1y, d2x, d2y) <= tol) return i;
+            }
+            else if (en.Kind == VermKind.ParallelDist)
+            {
+                var q1 = GetPfadAbsAt(en.Q1Idx); if (q1 == null) continue;
+                double dx1 = p2.Value.x - p1.Value.x, dy1 = p2.Value.y - p1.Value.y;
+                double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1); if (l1 < 1e-9) continue;
+                double nx = -dy1/l1, ny = dx1/l1;
+                double sD = (q1.Value.x - p1.Value.x)*nx + (q1.Value.y - p1.Value.y)*ny;
+                double ax = p1.Value.x + en.Offset * dx1, ay = p1.Value.y + en.Offset * dy1;
+                if (DistPointToSegment(mmX, mmY, ax, ay, ax + nx*sD, ay + ny*sD) <= tol) return i;
+            }
+            else if (en.Kind == VermKind.Angle)
+            {
+                var q1 = GetPfadAbsAt(en.Q1Idx); if (q1 == null) continue;
+                var q2 = GetPfadAbsAt(en.Q2Idx); if (q2 == null) continue;
+                var inter = LinesIntersection(p1.Value, p2.Value, q1.Value, q2.Value);
+                if (inter == null) continue;
+                // Approx: hit if within arc band ±2*tol of arc
+                double r = en.Offset;
+                double dist = Math.Sqrt(Math.Pow(mmX - inter.Value.x, 2) + Math.Pow(mmY - inter.Value.y, 2));
+                if (Math.Abs(dist - r) <= tol * 2)
+                {
+                    double a1 = VermSegArcAngle(inter.Value, p1.Value, p2.Value);
+                    double a2 = VermSegArcAngle(inter.Value, q1.Value, q2.Value);
+                    double clickAng = Math.Atan2(mmY - inter.Value.y, mmX - inter.Value.x);
+                    if (VermAngleInArc(clickAng, a1, a2)) return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    // Aktueller tatsächlicher Bogenwinkel (0–180°) einer Angle/EdgeAngle-Masslinie, live aus der
+    // Geometrie berechnet — wird für Anzeige/Bearbeitung verwendet statt des gespeicherten
+    // en.Value, damit das Editieren auch dann korrekt bleibt, wenn der Sollwinkel (bewusst,
+    // siehe PropagateVermConstraintsLive) nicht mehr automatisch an die Geometrie angepasst wird.
+    // Ohne das kann der gespeicherte Wert veralten (z.B. durch eine Parallel-Bemassung, die die
+    // Linie mitdreht) und beim Bearbeiten wird der falsche Sektor (spitz/stumpf) gewählt, was zu
+    // einer stark falschen Zieldrehung führt.
+    private double? GetCurrentActualAngle(VermEntry en)
+    {
+        var p1 = GetPfadAbsAt(en.P1Idx); var p2 = GetPfadAbsAt(en.P2Idx);
+        if (p1 == null || p2 == null) return null;
+        if (en.Kind == VermKind.Angle)
+        {
+            var q1 = GetPfadAbsAt(en.Q1Idx); var q2 = GetPfadAbsAt(en.Q2Idx);
+            if (q1 == null || q2 == null) return null;
+            return VermArcSpanActual(p1.Value, p2.Value, q1.Value, q2.Value);
+        }
+        if (en.Kind == VermKind.EdgeAngle)
+        {
+            var inter = SegmentEdgeIntersection(p1.Value, p2.Value, en.Edge);
+            if (inter == null) return null;
+            var (e1, e2) = EdgeVirtualSegment(inter.Value, en.Edge);
+            return VermArcSpanActual(p1.Value, p2.Value, e1, e2);
+        }
+        return null;
+    }
+
+    // TextBox für das Bearbeiten einer bestehenden Masslinie (State 4)
+    private void ShowVermEditTextBox(int idx)
+    {
+        CloseVermTextBox();
+        var en = _vermPlaced[idx];
+        var lmm = VermLabelPosMm(en); if (lmm == null) return;
+        double sx = lmm.Value.x * _zoom + _panX;
+        double sy = (WorkY - lmm.Value.y) * _zoom + _panY;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        string txt;
+        if (en.Kind == VermKind.Angle || en.Kind == VermKind.EdgeAngle)
+        {
+            // Anzeigewert = spitzer Winkel (wie im Label) — live berechnet, damit die Box
+            // immer den tatsächlich sichtbaren Winkel zeigt.
+            double actualNow = GetCurrentActualAngle(en) ?? en.Value;
+            double display = actualNow > 90.0 ? 180.0 - actualNow : actualNow;
+            txt = display.ToString("F2", inv);
+        }
+        else
+            txt = en.Value.ToString("F3", inv);
+
+        _vermTextBox = new TextBox
+        {
+            Text        = txt,
+            Width       = 80, FontSize = 13,
+            Background  = System.Windows.Media.Brushes.White,
+            BorderBrush = new System.Windows.Media.SolidColorBrush(
+                              System.Windows.Media.Color.FromRgb(220, 100, 20)),
+            BorderThickness = new Thickness(2),
+            Padding     = new Thickness(3, 2, 3, 2),
+            HorizontalContentAlignment = HorizontalAlignment.Center
+        };
+        _vermTextBox.KeyDown += OnVermTextBoxKeyDown;
+        System.Windows.Controls.Canvas.SetLeft(_vermTextBox, sx - 40);
+        System.Windows.Controls.Canvas.SetTop (_vermTextBox, sy - 28);
+        VermOverlayCanvas.Children.Add(_vermTextBox);
+        _vermTextBox.SelectAll();
+        _vermTextBox.Focus();
+    }
+
+    // Senkrechten Abstand Maus→Segment berechnen (vorzeichenbehaftet, links=positiv)
+    private double VermSignedOffset(double mmX, double mmY,
+        (double x, double y) p1, (double x, double y) p2)
+    {
+        double dx = p2.x - p1.x, dy = p2.y - p1.y;
+        double len = Math.Sqrt(dx*dx + dy*dy);
+        if (len < 1e-6) return 0;
+        double nx = -dy/len, ny = dx/len; // linke Normale
+        double mx = (p1.x + p2.x)/2, my = (p1.y + p2.y)/2;
+        return (mmX - mx)*nx + (mmY - my)*ny;
+    }
+
+    // Sind zwei Segmente parallel? (Winkeltoleranz tolDeg°)
+    private static bool AreSegmentsParallel(
+        (double x, double y) p1, (double x, double y) p2,
+        (double x, double y) q1, (double x, double y) q2,
+        double tolDeg = 6.0)
+    {
+        double dx1 = p2.x - p1.x, dy1 = p2.y - p1.y;
+        double dx2 = q2.x - q1.x, dy2 = q2.y - q1.y;
+        double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1);
+        double l2 = Math.Sqrt(dx2*dx2 + dy2*dy2);
+        if (l1 < 1e-9 || l2 < 1e-9) return false;
+        double cross = Math.Abs(dx1*dy2 - dy1*dx2) / (l1*l2);
+        return cross < Math.Sin(tolDeg * Math.PI / 180.0);
+    }
+
+    // Ist ein Segment parallel zur angegebenen Werkstückkante?
+    private bool IsSegmentParallelToEdge((double x, double y) p1, (double x, double y) p2, int edge)
+    {
+        // Kantenrichtung: links/rechts → vertikal (0,1), oben/unten → horizontal (1,0)
+        var q1 = (0.0, 0.0);
+        var q2 = (edge <= 2) ? (0.0, 1.0) : (1.0, 0.0);
+        return AreSegmentsParallel(p1, p2, q1, q2, tolDeg: 0.1);
+    }
+
+    // Virtuelle Kantenpunkte für DrawAngleLine / VermArcSpanDeg
+    private ((double x, double y) e1, (double x, double y) e2) EdgeVirtualSegment(
+        (double x, double y) inter, int edge)
+    {
+        double ex = edge <= 2 ? 0 : 1, ey = edge <= 2 ? 1 : 0;
+        return ((inter.x - ex * 100, inter.y - ey * 100),
+                (inter.x + ex * 100, inter.y + ey * 100));
+    }
+
+    // Schnittpunkt Segment mit Kante (verlängert)
+    private (double x, double y)? SegmentEdgeIntersection(
+        (double x, double y) p1, (double x, double y) p2, int edge)
+    {
+        var e1 = edge == 1 ? (0.0, 0.0)    : edge == 2 ? (WorkX, 0.0)
+               : edge == 3 ? (0.0, 0.0)    : (0.0, WorkY);
+        var e2 = edge == 1 ? (0.0, WorkY)  : edge == 2 ? (WorkX, WorkY)
+               : edge == 3 ? (WorkX, 0.0)  : (WorkX, WorkY);
+        return LinesIntersection(p1, p2, e1, e2);
+    }
+
+    // Winkel zwischen zwei Segmenten in Grad (0–90°, Spitzwinkel)
+    private static double AngleBetweenSegments(
+        (double x, double y) p1, (double x, double y) p2,
+        (double x, double y) q1, (double x, double y) q2)
+    {
+        double dx1 = p2.x - p1.x, dy1 = p2.y - p1.y;
+        double dx2 = q2.x - q1.x, dy2 = q2.y - q1.y;
+        double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1);
+        double l2 = Math.Sqrt(dx2*dx2 + dy2*dy2);
+        if (l1 < 1e-9 || l2 < 1e-9) return 0;
+        double dot = (dx1*dx2 + dy1*dy2) / (l1*l2);
+        return Math.Acos(Math.Clamp(Math.Abs(dot), 0.0, 1.0)) * 180.0 / Math.PI;
+    }
+
+    // Tatsächlicher Winkel des gezeichneten Bogens (0–180°).
+    // Verwendet VermSegArcAngle (Richtung vom Schnittpunkt zur Segmentmitte),
+    // damit der angezeigte Wert exakt dem sichtbaren Bogen entspricht:
+    // kleinerer Wert = spitzerer Bogen, größerer Wert = stumpferer Bogen.
+    // Echter Bogenwinkel (0–180°) — wird gespeichert, damit ApplyAngleConstraint den Bogen
+    // nicht in einen anderen Sektor verschiebt.
+    private static double VermArcSpanActual(
+        (double x, double y) p1, (double x, double y) p2,
+        (double x, double y) q1, (double x, double y) q2)
+    {
+        var inter = LinesIntersection(p1, p2, q1, q2);
+        if (inter == null) return AngleBetweenSegments(p1, p2, q1, q2);
+        double a1 = VermSegArcAngle(inter.Value, p1, p2);
+        double a2 = VermSegArcAngle(inter.Value, q1, q2);
+        double diff = a2 - a1;
+        while (diff >  Math.PI) diff -= 2*Math.PI;
+        while (diff < -Math.PI) diff += 2*Math.PI;
+        return Math.Abs(diff) * 180.0 / Math.PI; // 0–180°, kein Flip
+    }
+
+    // Anzeigewert: spitzer Winkel (0–90°) — 0°=parallel, 90°=rechtwinklig.
+    private static double VermArcSpanDeg(
+        (double x, double y) p1, (double x, double y) p2,
+        (double x, double y) q1, (double x, double y) q2)
+    {
+        double span = VermArcSpanActual(p1, p2, q1, q2);
+        return span > 90.0 ? 180.0 - span : span;
+    }
+
+    // Schnittpunkt zweier Geraden (null wenn parallel)
+    private static (double x, double y)? LinesIntersection(
+        (double x, double y) p1, (double x, double y) p2,
+        (double x, double y) q1, (double x, double y) q2)
+    {
+        double dx1 = p2.x - p1.x, dy1 = p2.y - p1.y;
+        double dx2 = q2.x - q1.x, dy2 = q2.y - q1.y;
+        double det = dx1 * dy2 - dy1 * dx2;
+        if (Math.Abs(det) < 1e-12) return null;
+        double t = ((q1.x - p1.x)*dy2 - (q1.y - p1.y)*dx2) / det;
+        return (p1.x + t*dx1, p1.y + t*dy1);
+    }
+
+    // Winkel des Bogenstrichs für Winkelbemaßung: Richtung von inter zum "aktiven" Ende des Segments
+    private static double VermSegArcAngle(
+        (double x, double y) inter,
+        (double x, double y) segP1, (double x, double y) segP2)
+    {
+        // Wähle die Richtung, die vom Schnittpunkt weg zeigt (zur Mitte des Segments)
+        double mx = (segP1.x + segP2.x)/2 - inter.x;
+        double my = (segP1.y + segP2.y)/2 - inter.y;
+        if (Math.Sqrt(mx*mx + my*my) < 1e-9) mx = segP2.x - segP1.x;
+        return Math.Atan2(my, mx);
+    }
+
+    // Mitte des kürzeren Bogens zwischen Winkel a1 und a2 (in Radiant)
+    private static double VermArcMidAngle(double a1, double a2)
+    {
+        double diff = a2 - a1;
+        while (diff > Math.PI)  diff -= 2*Math.PI;
+        while (diff < -Math.PI) diff += 2*Math.PI;
+        return a1 + diff / 2.0;
+    }
+
+    // Liegt clickAng innerhalb des kürzeren Bogens von a1 nach a2?
+    private static bool VermAngleInArc(double clickAng, double a1, double a2)
+    {
+        double amid = VermArcMidAngle(a1, a2);
+        // Check if click is within the arc half-angle
+        double halfSpan = Math.Abs(a2 - a1) / 2.0;
+        while (halfSpan > Math.PI) halfSpan -= Math.PI;
+        double diffC = clickAng - amid;
+        while (diffC >  Math.PI) diffC -= 2*Math.PI;
+        while (diffC < -Math.PI) diffC += 2*Math.PI;
+        return Math.Abs(diffC) <= halfSpan + 0.3; // 0.3 rad tolerance
+    }
+
+    // t-Parameter entlang Seg1 (P1→P2) für den Mausklick-Punkt berechnen.
+    // Für Winkel-Masslinien wird dieser t-Wert als Offset gespeichert (statt Radius vom
+    // Schnittpunkt), damit der Bogen bei fast-parallelen Linien stabil bleibt.
+    private static double AngleTParam(double mmX, double mmY,
+        (double x, double y) p1, (double x, double y) p2)
+    {
+        double dx = p2.x - p1.x, dy = p2.y - p1.y;
+        double l2 = dx*dx + dy*dy;
+        if (l2 < 1e-9) return 0.5;
+        return ((mmX - p1.x)*dx + (mmY - p1.y)*dy) / l2;
+    }
+
+    // Bogradius = Abstand vom t-Punkt auf Seg1 zum Schnittpunkt.
+    // Damit bleibt der Bogen immer an derselben Stelle auf Seg1 verankert.
+    private static double AngleArcRadius(double t,
+        (double x, double y) p1, (double x, double y) p2,
+        (double x, double y) inter)
+    {
+        double px = p1.x + t * (p2.x - p1.x);
+        double py = p1.y + t * (p2.y - p1.y);
+        return Math.Max(Math.Sqrt(Math.Pow(px - inter.x, 2) + Math.Pow(py - inter.y, 2)), 1.0);
+    }
+
+    // Berechne neuen Drag-Offset für eine bestehende VermEntry
+    private double VermComputeNewOffset(double mmX, double mmY, VermEntry en)
+    {
+        switch (en.Kind)
+        {
+            case VermKind.Length:
+            {
+                var a1 = GetPfadAbsAt(en.P1Idx);
+                var a2 = GetPfadAbsAt(en.P2Idx);
+                if (a1 == null || a2 == null) return en.Offset;
+                return VermSignedOffset(mmX, mmY, a1.Value, a2.Value);
+            }
+            case VermKind.ParallelDist:
+            {
+                var p1 = GetPfadAbsAt(en.P1Idx);
+                var p2 = GetPfadAbsAt(en.P2Idx);
+                if (p1 == null || p2 == null) return en.Offset;
+                double dx = p2.Value.x - p1.Value.x, dy = p2.Value.y - p1.Value.y;
+                double l2 = dx*dx + dy*dy;
+                if (l2 < 1e-9) return en.Offset;
+                return ((mmX - p1.Value.x)*dx + (mmY - p1.Value.y)*dy) / l2;
+            }
+            case VermKind.Angle:
+            {
+                var p1 = GetPfadAbsAt(en.P1Idx);
+                var p2 = GetPfadAbsAt(en.P2Idx);
+                if (p1 == null || p2 == null) return en.Offset;
+                return AngleTParam(mmX, mmY, p1.Value, p2.Value);
+            }
+            case VermKind.EdgeDist:
+            {
+                var p2 = GetPfadAbsAt(en.P2Idx);
+                if (p2 == null) return en.Offset;
+                return (en.Edge == 1 || en.Edge == 2)
+                    ? mmY - p2.Value.y
+                    : mmX - p2.Value.x;
+            }
+            case VermKind.EdgeAngle:
+            {
+                var p1e = GetPfadAbsAt(en.P1Idx); var p2e = GetPfadAbsAt(en.P2Idx);
+                if (p1e == null || p2e == null) return en.Offset;
+                return AngleTParam(mmX, mmY, p1e.Value, p2e.Value);
+            }
+            default: return en.Offset;
+        }
+    }
+
+    // Konflikterkennung: Wird einer der zu bewegenden Punkte bereits durch eine
+    // andere Masslinie als deren *bewegter* Endpunkt gebunden?
+    // (Anker-/Referenzpunkte P1/Q1 zählen NICHT als Konflikt.)
+    private bool VermHasConflict(int skipEntryIdx, VermKind newKind, params int[] movedIndices)
+    {
+        foreach (int mi in movedIndices)
+        {
+            if (mi < 0) continue;
+            for (int i = 0; i < _vermPlaced.Count; i++)
+            {
+                if (i == skipEntryIdx) continue;
+                var en = _vermPlaced[i];
+                // Länge + Winkel am selben Punkt sind kompatibel:
+                //   Länge verschiebt P2 entlang der Richtung → Winkel bleibt erhalten
+                //   Winkel dreht Q2 um Q1 → Abstand (Länge) bleibt erhalten
+                // Konflikt = zwei Constraints bewegen DENSELBEN Endpunkt.
+                // Referenz-/Ankerpunkte (P1/P2 des ersten Segments bei Angle) sind frei beweglich:
+                //   die Propagation zieht das zweite Segment automatisch nach.
+                //
+                // Kompatible Kombinationen (kein Konflikt):
+                //   Length   + Angle/EdgeDist/EdgeAngle : verschiedene bewegte Punkte
+                //   Angle    + Angle (andere Q):          PropagateVermConstraints löst die Kette
+                //   Angle    + EdgeDist/EdgeAngle:        P-Segment darf verschoben werden
+                //   EdgeDist + Length/Angle
+                //   EdgeAngle + Length/Angle
+                // Legende: "erlaubt" = kein Konflikt, auch wenn derselbe Punkt betroffen ist
+                //
+                //  EdgeAngle / ParallelEdge / PerpendicularEdge  →  Richtung relativ zur Werkstückkante
+                //  Perpendicular / Parallel                       →  Winkel zwischen zwei Pfad-Segmenten
+                //
+                // Diese beiden Gruppen sind ORTHOGONAL: ein Segment kann gleichzeitig
+                // „parallel zur unteren Kante" (EdgeAngle) und „rechtwinklig zum Nachbarsegment"
+                // (Perpendicular) sein → kein Konflikt zwischen den Gruppen.
+                //
+                // Innerhalb einer Gruppe gilt: gleiche Eigenschaft zweimal setzen = Konflikt
+                // (außer bei Ketten wie Angle+Angle oder Perp+Perp).
+                // ── Globale Kurzschluss-Regel ───────────────────────────────────────
+                // Richtungs-Constraints (Perpendicular / Parallel / ParallelEdge /
+                // PerpendicularEdge) fixieren nur den Winkel eines Segments, nie dessen
+                // Position oder Länge.  Reine Positions-/Längen-Constraints (Length,
+                // EdgeDist, PointEdgeDist, Coincident, CoincidentCorner, ParallelDist)
+                // fixieren Position/Länge, nie den Winkel.
+                // → Diese beiden Gruppen sind orthogonal: kein Konflikt zwischen ihnen.
+                bool newIsDir = newKind is VermKind.Perpendicular or VermKind.Parallel
+                                or VermKind.ParallelEdge or VermKind.PerpendicularEdge;
+                bool enIsPos  = en.Kind is VermKind.Length or VermKind.EdgeDist
+                                or VermKind.PointEdgeDist or VermKind.Coincident
+                                or VermKind.CoincidentCorner or VermKind.ParallelDist;
+                if (newIsDir && enIsPos) continue;  // Richtung ↔ Position: immer OK
+
+                bool clash = en.Kind switch
+                {
+                    VermKind.Length       => en.P2Idx == mi
+                                            && newKind != VermKind.Angle
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.EdgeAngle
+                                            && newKind != VermKind.PointEdgeDist,
+                    VermKind.ParallelDist => en.Q1Idx == mi || en.Q2Idx == mi,
+                    VermKind.Angle        => (en.Q1Idx == mi || en.Q2Idx == mi)
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.EdgeAngle
+                                            && newKind != VermKind.PointEdgeDist
+                                            && newKind != VermKind.Angle,
+                    // EdgeDist fixiert NUR eine Achse (X oder Y abhängig von der Kante).
+                    // Eine zweite EdgeDist kann die andere Achse fixieren → kein Konflikt.
+                    // Ausserdem kompatibel mit Length (fixiert Länge, nicht Position) und
+                    // EdgeAngle/PointEdgeDist (andere DOFs).
+                    VermKind.EdgeDist     => en.P2Idx == mi
+                                            && newKind != VermKind.Angle
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.EdgeAngle
+                                            && newKind != VermKind.PointEdgeDist,
+                    // EdgeAngle: absolute Richtung → erlaubt alle anderen Richtungs-Constraints
+                    // sowie Positions-Constraints (EdgeDist/PointEdgeDist verschieben den
+                    // Punkt entlang der bereits fixierten Richtung, kein Konflikt).
+                    VermKind.EdgeAngle    => (en.P1Idx == mi || en.P2Idx == mi)
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.Angle
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.PointEdgeDist
+                                            && newKind != VermKind.Perpendicular
+                                            && newKind != VermKind.Parallel
+                                            && newKind != VermKind.ParallelEdge
+                                            && newKind != VermKind.PerpendicularEdge,
+                    // PointEdgeDist: wie EdgeDist, aber mit Segment-Referenz
+                    VermKind.PointEdgeDist => en.P2Idx == mi
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.Angle
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.EdgeAngle
+                                            && newKind != VermKind.PointEdgeDist,
+                    // Coincident: fixiert Positions-Gleichheit zweier Punkte, kein Winkelkonflikt.
+                    // EdgeDist/PointEdgeDist (absolute Kanten-Position) sind erlaubt.
+                    VermKind.Coincident       => en.P2Idx == mi
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.PointEdgeDist
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.EdgeAngle,
+                    // CoincidentCorner: Punkt an Werkstück-Ecke → bereits voll fixiert.
+                    // Weitere Constraints auf demselben Punkt erlauben (geometrisch redundant,
+                    // aber kein echter Konflikt).
+                    VermKind.CoincidentCorner => en.P2Idx == mi
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.PointEdgeDist
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.EdgeAngle,
+                    // ParallelEdge / PerpendicularEdge: nur gleiche Gruppe blockieren
+                    VermKind.ParallelEdge      => (en.P1Idx == mi || en.P2Idx == mi)
+                                                && newKind != VermKind.Length
+                                                && newKind != VermKind.Angle
+                                                && newKind != VermKind.EdgeDist
+                                                && newKind != VermKind.PointEdgeDist
+                                                && newKind != VermKind.Perpendicular
+                                                && newKind != VermKind.Parallel
+                                                && newKind != VermKind.ParallelEdge
+                                                && newKind != VermKind.PerpendicularEdge,
+                    VermKind.PerpendicularEdge => (en.P1Idx == mi || en.P2Idx == mi)
+                                                && newKind != VermKind.Length
+                                                && newKind != VermKind.Angle
+                                                && newKind != VermKind.EdgeDist
+                                                && newKind != VermKind.PointEdgeDist
+                                                && newKind != VermKind.Perpendicular
+                                                && newKind != VermKind.Parallel
+                                                && newKind != VermKind.ParallelEdge
+                                                && newKind != VermKind.PerpendicularEdge,
+                    // Perpendicular / Parallel: Q-Segment schützen, Richtungs-Constraints OK
+                    VermKind.Perpendicular => (en.Q1Idx == mi || en.Q2Idx == mi)
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.EdgeAngle
+                                            && newKind != VermKind.PointEdgeDist
+                                            && newKind != VermKind.Angle
+                                            && newKind != VermKind.Perpendicular
+                                            && newKind != VermKind.Parallel
+                                            && newKind != VermKind.ParallelEdge
+                                            && newKind != VermKind.PerpendicularEdge,
+                    VermKind.Parallel      => (en.Q1Idx == mi || en.Q2Idx == mi)
+                                            && newKind != VermKind.Length
+                                            && newKind != VermKind.EdgeDist
+                                            && newKind != VermKind.EdgeAngle
+                                            && newKind != VermKind.PointEdgeDist
+                                            && newKind != VermKind.Angle
+                                            && newKind != VermKind.Perpendicular
+                                            && newKind != VermKind.Parallel
+                                            && newKind != VermKind.ParallelEdge
+                                            && newKind != VermKind.PerpendicularEdge,
+                    _                     => false
+                };
+                if (clash) return true;
+            }
+        }
+        return false;
+    }
+
+    private void PlaceVermassungAt(double mmX, double mmY)
+    {
+        _vermOffset      = VermSignedOffset(mmX, mmY, _vermP1Abs, _vermP2Abs);
+        _vermActiveKind  = VermKind.Length;
+        _vermState       = 2;
+        double len       = Math.Round(VermSegmentLength(), 3);
+        ShowVermTextBox(len, "F3");
+    }
+
+    // 3. Klick für Zwei-Segment-Modus: ParallelDist, Angle, EdgeDist, PointDist, LineToPoint positionieren
+    private void PlaceTwoSegmentVermAt(double mmX, double mmY)
+    {
+        if (_vermActiveKind == VermKind.PointDist)
+        {
+            double dx = _vermP2Abs.x - _vermP1Abs.x, dy = _vermP2Abs.y - _vermP1Abs.y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            if (len < 1e-9) { _vermState = 0; return; }
+            double nx = -dy/len, ny = dx/len;
+            _vermOffset = (mmX - (_vermP1Abs.x + _vermP2Abs.x)/2) * nx
+                        + (mmY - (_vermP1Abs.y + _vermP2Abs.y)/2) * ny;
+            _vermState = 2;
+            ShowVermTextBox(Math.Round(len, 3), "F3");
+            return;
+        }
+        if (_vermActiveKind == VermKind.LineToPoint)
+        {
+            double dx1 = _vermP2Abs.x - _vermP1Abs.x, dy1 = _vermP2Abs.y - _vermP1Abs.y;
+            double l2  = dx1*dx1 + dy1*dy1;
+            double t   = l2 < 1e-9 ? 0.5
+                : Math.Clamp(((mmX - _vermP1Abs.x)*dx1 + (mmY - _vermP1Abs.y)*dy1) / l2, -2.0, 3.0);
+            _vermOffset = t;
+            double l1  = Math.Sqrt(l2);
+            double nx  = -dy1/l1, ny = dx1/l1;
+            double dist = Math.Abs((_vermQ1Abs.x - _vermP1Abs.x)*nx + (_vermQ1Abs.y - _vermP1Abs.y)*ny);
+            _vermState  = 2;
+            ShowVermTextBox(Math.Round(dist, 3), "F3");
+            return;
+        }
+        if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist)
+            && _vermActiveEdge > 0)
+        {
+            // Offset = Versatz der Masslinie senkrecht zur Kante (Y für links/rechts, X für oben/unten)
+            bool isHoriz = (_vermActiveEdge == 1 || _vermActiveEdge == 2);
+            _vermOffset = isHoriz ? mmY - _vermP2Abs.y : mmX - _vermP2Abs.x;
+            double dist = EdgeDistValue(_vermP2Abs.x, _vermP2Abs.y, _vermActiveEdge);
+            _vermState  = 2;
+            ShowVermTextBox(Math.Round(dist, 3), "F3");
+            return;
+        }
+        if (_vermActiveKind == VermKind.EdgeAngle && _vermActiveEdge > 0)
+        {
+            var inter = SegmentEdgeIntersection(_vermP1Abs, _vermP2Abs, _vermActiveEdge);
+            if (inter == null) { _vermState = 0; return; }
+            _vermOffset = AngleTParam(mmX, mmY, _vermP1Abs, _vermP2Abs);
+            var (e1, e2) = EdgeVirtualSegment(inter.Value, _vermActiveEdge);
+            double ang = VermArcSpanActual(_vermP1Abs, _vermP2Abs, e1, e2);
+            _vermState  = 2;
+            ShowVermTextBox(Math.Round(ang, 2), "F2");
+            return;
+        }
+        if (_vermActiveKind == VermKind.ParallelDist)
+        {
+            double dx1 = _vermP2Abs.x - _vermP1Abs.x, dy1 = _vermP2Abs.y - _vermP1Abs.y;
+            double l2  = dx1*dx1 + dy1*dy1;
+            double t   = l2 < 1e-9 ? 0.5
+                : Math.Clamp(((mmX - _vermP1Abs.x)*dx1 + (mmY - _vermP1Abs.y)*dy1) / l2, -2.0, 3.0);
+            _vermOffset = t;
+            // Perpendicular distance
+            double l1  = Math.Sqrt(l2);
+            double nx  = -dy1/l1, ny = dx1/l1;
+            double dist = Math.Abs(((_vermQ1Abs.x - _vermP1Abs.x)*nx + (_vermQ1Abs.y - _vermP1Abs.y)*ny));
+            _vermState  = 2;
+            ShowVermTextBox(Math.Round(dist, 3), "F3");
+        }
+        else // Angle
+        {
+            var inter = LinesIntersection(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs);
+            if (inter == null) { _vermState = 0; return; }
+            _vermOffset = AngleTParam(mmX, mmY, _vermP1Abs, _vermP2Abs);
+            double ang  = VermArcSpanActual(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs);
+            _vermState  = 2;
+            ShowVermTextBox(Math.Round(ang, 2), "F2");
+        }
+    }
+
+    private double VermSegmentLength()
+    {
+        double dx = _vermP2Abs.x - _vermP1Abs.x, dy = _vermP2Abs.y - _vermP1Abs.y;
+        return Math.Sqrt(dx*dx + dy*dy);
+    }
+
+    private Point VermLabelScreenPos()
+    {
+        if (_vermActiveKind == VermKind.ParallelDist)
+        {
+            double dx1 = _vermP2Abs.x - _vermP1Abs.x, dy1 = _vermP2Abs.y - _vermP1Abs.y;
+            double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1);
+            if (l1 < 1e-9) return new Point(0, 0);
+            double nx = -dy1/l1, ny = dx1/l1;
+            double sD = (_vermQ1Abs.x - _vermP1Abs.x)*nx + (_vermQ1Abs.y - _vermP1Abs.y)*ny;
+            double ax  = _vermP1Abs.x + _vermOffset * dx1, ay = _vermP1Abs.y + _vermOffset * dy1;
+            double midX = ax + nx * sD / 2, midY = ay + ny * sD / 2;
+            return new Point(midX * _zoom + _panX, (WorkY - midY) * _zoom + _panY);
+        }
+        else if (_vermActiveKind == VermKind.Angle)
+        {
+            var inter = LinesIntersection(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs);
+            if (inter == null) return new Point(0, 0);
+            double a1 = VermSegArcAngle(inter.Value, _vermP1Abs, _vermP2Abs);
+            double a2 = VermSegArcAngle(inter.Value, _vermQ1Abs, _vermQ2Abs);
+            double amid = VermArcMidAngle(a1, a2);
+            double r = AngleArcRadius(_vermOffset, _vermP1Abs, _vermP2Abs, inter.Value);
+            double mx = inter.Value.x + r * Math.Cos(amid);
+            double my = inter.Value.y + r * Math.Sin(amid);
+            return new Point(mx * _zoom + _panX, (WorkY - my) * _zoom + _panY);
+        }
+        else if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist)
+                 && _vermActiveEdge > 0)
+        {
+            bool isHoriz = (_vermActiveEdge == 1 || _vermActiveEdge == 2);
+            double xEdge = _vermActiveEdge == 1 ? 0 : WorkX;
+            double yEdge = _vermActiveEdge == 3 ? 0 : WorkY;
+            double midX, midY;
+            if (isHoriz) { midX = (_vermP2Abs.x + xEdge) / 2; midY = _vermP2Abs.y + _vermOffset; }
+            else         { midX = _vermP2Abs.x + _vermOffset; midY = (_vermP2Abs.y + yEdge) / 2; }
+            return new Point(midX * _zoom + _panX, (WorkY - midY) * _zoom + _panY);
+        }
+        else
+        {
+            double dx = _vermP2Abs.x - _vermP1Abs.x, dy = _vermP2Abs.y - _vermP1Abs.y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            if (len < 1e-6) return new Point(0, 0);
+            double nx = -dy/len, ny = dx/len;
+            double midX = (_vermP1Abs.x + _vermP2Abs.x)/2 + nx * _vermOffset;
+            double midY = (_vermP1Abs.y + _vermP2Abs.y)/2 + ny * _vermOffset;
+            return new Point(midX * _zoom + _panX, (WorkY - midY) * _zoom + _panY);
+        }
+    }
+
+    private void ShowVermTextBox(double value, string fmt = "F3")
+    {
+        CloseVermTextBox();
+        _vermTextBox = new TextBox
+        {
+            Text              = value.ToString(fmt, System.Globalization.CultureInfo.InvariantCulture),
+            Width             = 80,
+            FontSize          = 13,
+            Background        = System.Windows.Media.Brushes.White,
+            BorderBrush       = new System.Windows.Media.SolidColorBrush(
+                                    System.Windows.Media.Color.FromRgb(30, 120, 220)),
+            BorderThickness   = new Thickness(2),
+            Padding           = new Thickness(3, 2, 3, 2),
+            HorizontalContentAlignment = HorizontalAlignment.Center
+        };
+        _vermTextBox.KeyDown += OnVermTextBoxKeyDown;
+        var screenPos = VermLabelScreenPos();
+        System.Windows.Controls.Canvas.SetLeft(_vermTextBox, screenPos.X - 40);
+        System.Windows.Controls.Canvas.SetTop (_vermTextBox, screenPos.Y - 28);
+        VermOverlayCanvas.Children.Add(_vermTextBox);
+        _vermTextBox.SelectAll();
+        _vermTextBox.Focus();
+    }
+
+    private void CloseVermTextBox()
+    {
+        if (_vermTextBox == null) return;
+        VermOverlayCanvas.Children.Remove(_vermTextBox);
+        _vermTextBox = null;
+    }
+
+    private void OnVermTextBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Return)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            string raw = _vermTextBox!.Text.Replace(',', '.');
+            bool isAngleKind = _vermActiveKind == VermKind.Angle || _vermActiveKind == VermKind.EdgeAngle
+                || (_vermState == 4 && _vermEditIdx >= 0
+                    && (_vermPlaced[_vermEditIdx].Kind == VermKind.Angle
+                     || _vermPlaced[_vermEditIdx].Kind == VermKind.EdgeAngle));
+            if (double.TryParse(raw, System.Globalization.NumberStyles.Float, inv, out double newVal)
+                && (isAngleKind ? newVal >= 0.0 : newVal > 0.001))
+            {
+                if (_vermState == 4 && _vermEditIdx >= 0)
+                {
+                    // Bestehende Masslinie bearbeiten
+                    var en = _vermPlaced[_vermEditIdx];
+                    bool conflict = en.Kind switch {
+                        VermKind.Length       => VermHasConflict(_vermEditIdx, VermKind.Length, en.P2Idx),
+                        VermKind.ParallelDist => VermHasConflict(_vermEditIdx, VermKind.ParallelDist, en.Q1Idx, en.Q2Idx),
+                        VermKind.Angle        => VermHasConflict(_vermEditIdx, VermKind.Angle, en.Q1Idx, en.Q2Idx),
+                        VermKind.EdgeDist      => VermHasConflict(_vermEditIdx, VermKind.EdgeDist, en.P2Idx),
+                        VermKind.EdgeAngle     => VermHasConflict(_vermEditIdx, VermKind.EdgeAngle, en.P1Idx, en.P2Idx),
+                        VermKind.PointEdgeDist => VermHasConflict(_vermEditIdx, VermKind.PointEdgeDist, en.P2Idx),
+                        _                     => false
+                    };
+                    if (conflict)
+                    {
+                        MessageBox.Show(this,
+                            "Ein oder mehrere referenzierte Punkte werden bereits durch eine andere Masslinie gebunden.\nDas Maß kann nicht geändert werden.",
+                            "Konflikt", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        e.Handled = true; return;
+                    }
+                    // Winkel: Eingabe ist spitzer Wert → in Actual-Span umrechnen
+                    // (wenn die Linie aktuell stumpf steht, bleibt sie stumpf). Ob aktuell stumpf
+                    // oder spitz wird live aus der Geometrie ermittelt statt aus en.Value, das
+                    // durch andere Vermassungen nicht mehr automatisch nachgeführt wird.
+                    double storeVal = newVal;
+                    if (en.Kind == VermKind.Angle || en.Kind == VermKind.EdgeAngle)
+                    {
+                        double actualNow = GetCurrentActualAngle(en) ?? en.Value;
+                        storeVal = actualNow > 90.0 ? 180.0 - newVal : newVal;
+                    }
+                    ApplyVermConstraint(_vermEditIdx, storeVal);
+                    _vermPlaced[_vermEditIdx] = _vermPlaced[_vermEditIdx] with { Value = storeVal };
+                    PropagateVermConstraints();
+                    ShowVermDiagIfViolated();
+                    CloseVermTextBox();
+                    _vermState = 0; _vermEditIdx = -1;
+                }
+                else
+                {
+                    // Explizite Winkelbemaßung (Angle/EdgeAngle) auf einem Segment, das bereits
+                    // eine automatisch erkannte Rechtwinklig/Parallel-zur-Kante-Markierung trägt
+                    // (grünes Symbol), ersetzt diese Markierung, statt einen Konflikt zu melden —
+                    // so kann der Nutzer das Segment bewusst schräg stellen.
+                    // Bei EdgeAngle ist P1/P2 selbst das betroffene Segment (direkter Ersatz).
+                    // Bei Angle (zwei Segmente) ist P1/P2 nur die feste Referenz, die von
+                    // ApplyAngleConstraint NIE bewegt wird — dort muss stattdessen das
+                    // Q-Segment geprüft werden, denn nur das wird tatsächlich gedreht und
+                    // könnte mit dessen eigener Kanten-Markierung in Konflikt stehen.
+                    if (_vermActiveKind == VermKind.EdgeAngle)
+                    {
+                        _vermPlaced.RemoveAll(en =>
+                            (en.Kind == VermKind.PerpendicularEdge || en.Kind == VermKind.ParallelEdge)
+                            && en.P1Idx == _vermP1Idx && en.P2Idx == _vermP2Idx);
+                    }
+                    else if (_vermActiveKind == VermKind.Angle)
+                    {
+                        _vermPlaced.RemoveAll(en =>
+                            (en.Kind == VermKind.PerpendicularEdge || en.Kind == VermKind.ParallelEdge)
+                            && en.P1Idx == _vermQ1Idx && en.P2Idx == _vermQ2Idx);
+                    }
+                    // Neue Masslinie bestätigen
+                    bool conflict = _vermActiveKind switch {
+                        VermKind.Length       => VermHasConflict(-1, VermKind.Length, _vermP2Idx),
+                        VermKind.ParallelDist => VermHasConflict(-1, VermKind.ParallelDist, _vermQ1Idx, _vermQ2Idx),
+                        VermKind.Angle        => VermHasConflict(-1, VermKind.Angle, _vermQ1Idx, _vermQ2Idx),
+                        VermKind.EdgeDist      => VermHasConflict(-1, VermKind.EdgeDist, _vermP2Idx),
+                        VermKind.EdgeAngle     => VermHasConflict(-1, VermKind.EdgeAngle, _vermP1Idx, _vermP2Idx),
+                        VermKind.PointEdgeDist => VermHasConflict(-1, VermKind.PointEdgeDist, _vermP2Idx),
+                        _                     => false
+                    };
+                    if (conflict)
+                    {
+                        MessageBox.Show(this,
+                            "Ein oder mehrere referenzierte Punkte werden bereits durch eine andere Masslinie gebunden.\nDie Masslinie kann nicht hinzugefügt werden.",
+                            "Konflikt", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        e.Handled = true; return;
+                    }
+                    // Werte vor Apply einfrieren (Apply verändert History)
+                    double eDirX = 0, eDirY = 0;
+                    if (_vermActiveKind is VermKind.Length or VermKind.PointDist
+                        && _vermP1Idx >= 0 && _vermP2Idx >= 0)
+                    {
+                        var ep1 = GetPfadAbsAt(_vermP1Idx); var ep2 = GetPfadAbsAt(_vermP2Idx);
+                        if (ep1 != null && ep2 != null)
+                        {
+                            double edx = ep2.Value.x - ep1.Value.x, edy = ep2.Value.y - ep1.Value.y;
+                            double eLen = Math.Sqrt(edx*edx + edy*edy);
+                            if (eLen > 1e-9) { eDirX = edx/eLen; eDirY = edy/eLen; }
+                        }
+                    }
+                    var newEntry = new VermEntry(_vermActiveKind,
+                        _vermP1Idx, _vermP2Idx, _vermOffset, newVal,
+                        _vermQ1Idx, _vermQ2Idx, _vermActiveEdge, eDirX, eDirY);
+                    ApplyVermNewEntry(newEntry, newVal);
+                    _vermPlaced.Add(newEntry with { Value = newVal });
+                    PropagateVermConstraints();
+                    ShowVermDiagIfViolated();
+                    CloseVermTextBox();
+                    _vermState = 0; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermPtIdx = -1;
+                }
+            }
+            else
+            {
+                CloseVermTextBox();
+                _vermState = 0; _vermEditIdx = -1; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0;
+            }
+            DrawSkia?.InvalidateVisual();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            CloseVermTextBox();
+            _vermEditIdx = -1;
+            _vermState   = _vermState == 4 ? 0 : (_vermActiveKind == VermKind.ParallelDist || _vermActiveKind == VermKind.Angle ? 5 : 1);
+            DrawSkia?.InvalidateVisual();
+            e.Handled = true;
+        }
+    }
+
+    // Wendet eine neue VermEntry auf die Geometrie an (neue Masslinie)
+    private void ApplyVermNewEntry(VermEntry en, double newVal)
+    {
+        switch (en.Kind)
+        {
+            case VermKind.Length:
+                ApplyLengthConstraint(en.P1Idx, en.P2Idx, newVal, en.DirX, en.DirY);
+                break;
+            case VermKind.ParallelDist:
+                ApplyParallelDistConstraint(en.P1Idx, en.P2Idx, en.Q1Idx, en.Q2Idx, newVal);
+                break;
+            case VermKind.Angle:
+                ApplyAngleConstraint(en.P1Idx, en.P2Idx, en.Q1Idx, en.Q2Idx, newVal);
+                break;
+            case VermKind.EdgeDist:
+                ApplyEdgeDistConstraint(en.P1Idx, en.P2Idx, en.Edge, newVal, en);
+                break;
+            case VermKind.EdgeAngle:
+                ApplyEdgeAngleConstraint(en.P1Idx, en.P2Idx, en.Edge, newVal);
+                break;
+            case VermKind.PointDist:
+                ApplyLengthConstraint(en.P1Idx, en.P2Idx, newVal, en.DirX, en.DirY);  // verschiebt P2 entlang gespeicherter Richtung
+                break;
+            case VermKind.LineToPoint:
+                ApplyLineToPointConstraint(en.P1Idx, en.P2Idx, en.Q1Idx, newVal);
+                break;
+            case VermKind.PointEdgeDist:
+                ApplyPointEdgeDistConstraint(en.P2Idx, en.Edge, newVal, en);
+                break;
+            case VermKind.ParallelEdge:
+                ApplyEdgeAngleConstraint(en.P1Idx, en.P2Idx, en.Edge, 0.0);
+                break;
+            case VermKind.PerpendicularEdge:
+                ApplyEdgeAngleConstraint(en.P1Idx, en.P2Idx, en.Edge, 90.0);
+                break;
+            case VermKind.Coincident:
+                ApplyCoincidentConstraint(en.P1Idx, en.P2Idx);
+                break;
+            case VermKind.CoincidentCorner:
+                ApplyCoincidentCornerConstraint(en.P2Idx, en.Edge);
+                break;
+            case VermKind.Perpendicular:
+                ApplyAngleConstraint(en.P1Idx, en.P2Idx, en.Q1Idx, en.Q2Idx, 90.0);
+                break;
+            case VermKind.Parallel:
+                ApplyAngleConstraint(en.P1Idx, en.P2Idx, en.Q1Idx, en.Q2Idx, 0.0);
+                break;
+        }
+    }
+
+    // Bereinigt _vermPlaced nach dem Entfernen eines History-Eintrags bei removedIdx.
+    // Entfernt alle Masslinien die den gelöschten Index referenzieren,
+    // und dekrementiert alle Indizes > removedIdx.
+    private void CleanupVermAfterRemove(int removedIdx)
+    {
+        _vermPlaced.RemoveAll(en =>
+            en.P1Idx == removedIdx || en.P2Idx == removedIdx ||
+            en.Q1Idx == removedIdx || en.Q2Idx == removedIdx);
+
+        for (int i = 0; i < _vermPlaced.Count; i++)
+        {
+            var en = _vermPlaced[i];
+            int Adj(int idx) => idx > removedIdx ? idx - 1 : idx;
+            _vermPlaced[i] = en with {
+                P1Idx = Adj(en.P1Idx),
+                P2Idx = Adj(en.P2Idx),
+                Q1Idx = en.Q1Idx >= 0 ? Adj(en.Q1Idx) : -1,
+                Q2Idx = en.Q2Idx >= 0 ? Adj(en.Q2Idx) : -1,
+            };
+        }
+    }
+
+    // Wendet eine bestehende VermEntry (bei Bearbeitung) auf die Geometrie an
+    private void ApplyVermConstraint(int idx, double newVal)
+    {
+        var en = _vermPlaced[idx];
+        ApplyVermNewEntry(en, newVal);
+    }
+
+    // Nach dem Anwenden eines Masses alle anderen Masse iterativ erneut durchsetzen,
+    // damit kein bestehendes Mass durch die Änderung verletzt wird.
+    // Constraints anwenden ohne G-Code neu zu generieren (für Live-Drag)
+    private void PropagateVermConstraintsLive(int maxIter = 25)
+    {
+        if (_vermPlaced.Count < 1) return;
+        _suppressHistoryRegen = true;
+        try
+        {
+            // Punkte, die über EdgeDist/PointEdgeDist an eine Werkstückkante gebunden sind,
+            // sollen sich rein rechtwinklig zur Kante bewegen — auch wenn derselbe Punkt
+            // zusätzlich über Länge/Winkel an eine andere Linie gebunden ist. Ohne diese
+            // Priorisierung "kämpfen" beide Masse bei jeder Iteration gegeneinander (Winkel/
+            // Länge dreht bzw. verschiebt den Punkt wieder von der Senkrechten weg, Kantenmass
+            // korrigiert ihn zurück), wodurch der Punkt am Ende schräg statt senkrecht zur
+            // Kante zu liegen kommt. Das Kantenmass hat daher Vorrang: Länge/Winkel wird für
+            // den betroffenen Punkt während der Propagation nicht mehr aktiv durchgesetzt.
+            // Ausnahme: Parallel/Rechtwinklig-Eigenschaften (fix auf 0°/90°) werden NIE
+            // übersteuert — anders als Länge/Winkel können sie sich nicht auf den aktuellen Wert
+            // "nachziehen" (siehe Zeichen-Code, der bei Length/Angle/ParallelDist einfach den
+            // gespeicherten Wert an die aktuelle Geometrie anpasst). Ohne feste Priorität würde
+            // eine später hinzugefügte Kanten-/Längenbemaßung eine bereits als parallel markierte
+            // Linie schräg ziehen können, ohne dass sie je zurückkorrigiert wird.
+            var edgeLocked = new HashSet<int>();
+            foreach (var e in _vermPlaced)
+            {
+                if (e.Kind == VermKind.EdgeDist) { edgeLocked.Add(e.P1Idx); edgeLocked.Add(e.P2Idx); }
+                else if (e.Kind == VermKind.PointEdgeDist) edgeLocked.Add(e.P2Idx);
+            }
+
+            bool IsEdgeOverridden(VermEntry e) => e.Kind switch
+            {
+                VermKind.Length or VermKind.PointDist
+                                                        => edgeLocked.Contains(e.P2Idx),
+                VermKind.Angle or VermKind.ParallelDist
+                    or VermKind.LineToPoint             => edgeLocked.Contains(e.Q1Idx) || edgeLocked.Contains(e.Q2Idx),
+                VermKind.EdgeAngle                       => edgeLocked.Contains(e.P1Idx) || edgeLocked.Contains(e.P2Idx),
+                _                                        => false
+            };
+
+            bool IsDirectionConstraint(VermKind k) => k is VermKind.ParallelEdge or VermKind.PerpendicularEdge
+                                                          or VermKind.Parallel     or VermKind.Perpendicular;
+
+            var ordered = _vermPlaced
+                .OrderBy(e => IsDirectionConstraint(e.Kind) ? 1 : 0)
+                .ThenBy(e => Math.Min(e.P1Idx < 0 ? int.MaxValue : e.P1Idx,
+                                      e.Q1Idx < 0 ? int.MaxValue : e.Q1Idx))
+                .ToList();
+            for (int iter = 0; iter < maxIter; iter++)
+                foreach (var en in ordered)
+                {
+                    if (!IsDirectionConstraint(en.Kind) && IsEdgeOverridden(en)) continue;
+                    ApplyVermNewEntry(en, en.Value);
+                }
+        }
+        finally { _suppressHistoryRegen = false; }
+    }
+
+    private void PropagateVermConstraints(int maxIter = 25)
+    {
+        if (_vermPlaced.Count < 1) return;
+        PropagateVermConstraintsLive(maxIter);
+        RegenerateGCodeFromHistory();
+    }
+
+    // Prüft ob alle Constraints innerhalb der Toleranz eingehalten werden.
+    // Gibt null zurück wenn alles stimmt, sonst eine Fehlerbeschreibung.
+    private string? VerifyVermConstraints()
+    {
+        const double tolMm  = 0.05;   // mm
+        const double tolDeg = 0.2;    // Grad
+
+        foreach (var en in _vermPlaced)
+        {
+            var p1 = GetPfadAbsAt(en.P1Idx);
+            var p2 = GetPfadAbsAt(en.P2Idx);
+
+            switch (en.Kind)
+            {
+                case VermKind.Length:
+                case VermKind.PointDist:
+                {
+                    if (p1 == null || p2 == null) break;
+                    double dx = p2.Value.x - p1.Value.x, dy = p2.Value.y - p1.Value.y;
+                    double dist = Math.Sqrt(dx*dx + dy*dy);
+                    if (Math.Abs(dist - en.Value) > tolMm)
+                        return $"Länge: Ist {dist:F2} mm, Soll {en.Value:F2} mm (P1={en.P1Idx}, P2={en.P2Idx}, DirX={en.DirX:F3}, DirY={en.DirY:F3})";
+                    break;
+                }
+                case VermKind.Angle:
+                case VermKind.Perpendicular:
+                case VermKind.Parallel:
+                {
+                    if (p1 == null || p2 == null) break;
+                    var q1 = GetPfadAbsAt(en.Q1Idx); var q2 = GetPfadAbsAt(en.Q2Idx);
+                    if (q1 == null || q2 == null) break;
+                    double actual = VermArcSpanActual(p1.Value, p2.Value, q1.Value, q2.Value);
+                    double display = actual > 90.0 ? 180.0 - actual : actual;
+                    double expected = en.Value > 90.0 ? 180.0 - en.Value : en.Value;
+                    if (Math.Abs(display - expected) > tolDeg)
+                        return $"{(en.Kind == VermKind.Perpendicular ? "Rechtwinklig" : en.Kind == VermKind.Parallel ? "Parallel" : "Winkel")}: "
+                             + $"Ist {display:F1}°, Soll {expected:F1}°";
+                    break;
+                }
+                case VermKind.EdgeDist:
+                {
+                    if (p2 == null) break;
+                    double actual = EdgeDistValue(p2.Value.x, p2.Value.y, en.Edge);
+                    if (Math.Abs(actual - en.Value) > tolMm)
+                        return $"Kantendistanz: Ist {actual:F2} mm, Soll {en.Value:F2} mm";
+                    break;
+                }
+                case VermKind.PointEdgeDist:
+                {
+                    if (p2 == null) break;
+                    double actual = EdgeDistValue(p2.Value.x, p2.Value.y, en.Edge);
+                    if (Math.Abs(actual - en.Value) > tolMm)
+                        return $"Punkt-Kantendistanz: Ist {actual:F2} mm, Soll {en.Value:F2} mm";
+                    break;
+                }
+                case VermKind.Coincident:
+                {
+                    if (p1 == null || p2 == null) break;
+                    double dx = p2.Value.x - p1.Value.x, dy = p2.Value.y - p1.Value.y;
+                    if (Math.Sqrt(dx*dx + dy*dy) > tolMm)
+                        return "Koinzident: Punkte nicht mehr am gleichen Ort";
+                    break;
+                }
+                case VermKind.CoincidentCorner:
+                {
+                    if (p2 == null) break;
+                    var (cpx, cpy) = WorkpieceCornerPos(en.Edge);
+                    double dx = p2.Value.x - cpx, dy = p2.Value.y - cpy;
+                    if (Math.Sqrt(dx*dx + dy*dy) > tolMm)
+                        return "Koinzident zur Ecke: Punkt nicht mehr an Werkstück-Ecke";
+                    break;
+                }
+                case VermKind.ParallelEdge:
+                case VermKind.PerpendicularEdge:
+                {
+                    if (p1 == null || p2 == null) break;
+                    // Direkt über die Richtungsvektoren prüfen statt über den Schnittpunkt mit
+                    // der (verlängerten) Kante: ist das Segment bereits (fast) parallel bzw.
+                    // rechtwinklig zur Kante — genau der Zustand, den wir hier verifizieren —
+                    // liegt dieser Schnittpunkt extrem weit entfernt bzw. gar nicht vor, was die
+                    // darauf basierende Winkelberechnung numerisch instabil macht und einen
+                    // falschen Abweichungswert liefern kann, obwohl das Segment korrekt
+                    // ausgerichtet ist.
+                    bool isVerticalEdge = en.Edge == 1 || en.Edge == 2;
+                    var edgeQ1 = (0.0, 0.0);
+                    var edgeQ2 = isVerticalEdge ? (0.0, 1.0) : (1.0, 0.0);
+                    double display = AngleBetweenSegments(p1.Value, p2.Value, edgeQ1, edgeQ2);
+                    double expected = en.Kind == VermKind.ParallelEdge ? 0.0 : 90.0;
+                    if (Math.Abs(display - expected) > tolDeg)
+                        return $"{(en.Kind == VermKind.ParallelEdge ? "Parallel zur Kante" : "Rechtwinklig zur Kante")}: "
+                             + $"Ist {display:F1}°, Soll {expected:F1}°";
+                    break;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void CheckAndReportConstraints()
+    {
+        string? err = VerifyVermConstraints();
+        if (err != null)
+            MessageBox.Show(this, "Constraint kann nicht eingehalten werden:\n" + err + "\n\n" + VermDiagDump(),
+                "Constraint-Konflikt", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    // TEMPORÄRE Diagnose-Hilfsfunktion: zeigt bei einer Constraint-Verletzung sofort einen
+    // vollständigen Dump aller platzierten Vermassungen + aller aktuellen Pfad-Punktkoordinaten,
+    // damit sich Ursachen ohne erneutes Rätselraten anhand von Nutzer-Screenshots lokalisieren
+    // lassen. Nach vollständiger Behebung der zugrunde liegenden Constraint-Solver-Bugs entfernen.
+    private string VermDiagDump()
+    {
+        var dump = string.Join("\n", _vermPlaced.Select((e2, i2) =>
+            $"[{i2}] {e2.Kind} P1={e2.P1Idx} P2={e2.P2Idx} Q1={e2.Q1Idx} Q2={e2.Q2Idx} Edge={e2.Edge} Val={e2.Value:F2} Dir=({e2.DirX:F3},{e2.DirY:F3})"));
+        var pts = new List<string>();
+        for (int i = 0; i < _history.Count; i++)
+        {
+            var a = GetPfadAbsAt(i);
+            if (a != null) pts.Add($"pt{i}=({a.Value.x:F2},{a.Value.y:F2})");
+        }
+        return dump + "\n\n" + string.Join(" ", pts);
+    }
+
+    private void ShowVermDiagIfViolated()
+    {
+        string? diag = VerifyVermConstraints();
+        if (diag != null)
+            MessageBox.Show(this, "DIAG: " + diag + "\n\n" + VermDiagDump(), "Diagnose",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    // Gibt die Menge aller History-Indizes zurück, deren Position vollständig
+    // durch Constraints festgelegt ist (X und Y je fixiert).
+    private HashSet<int> GetFullyConstrainedPoints()
+    {
+        if (_vermPlaced.Count == 0) return [];
+
+        var xFixed = new HashSet<int>();
+        var yFixed = new HashSet<int>();
+
+        // Direkte Positions-Constraints
+        foreach (var en in _vermPlaced)
+        {
+            switch (en.Kind)
+            {
+                case VermKind.CoincidentCorner:
+                    xFixed.Add(en.P2Idx);
+                    yFixed.Add(en.P2Idx);
+                    break;
+                case VermKind.PointEdgeDist:
+                case VermKind.EdgeDist:
+                    // Kante 1=links, 2=rechts → X; Kante 3=unten, 4=oben → Y
+                    if (en.Edge == 1 || en.Edge == 2) xFixed.Add(en.P2Idx);
+                    else if (en.Edge == 3 || en.Edge == 4) yFixed.Add(en.P2Idx);
+                    break;
+            }
+        }
+
+        // Segmente mit bekannter Richtung (EdgeAngle / ParallelEdge / PerpendicularEdge)
+        // und bekannter Länge (Length) → wenn ein Endpunkt 2D-fixiert ist, ist der andere auch fixiert.
+        var segDirFixed = new HashSet<(int, int)>();
+        var segLenFixed = new HashSet<(int, int)>();
+        foreach (var en in _vermPlaced)
+        {
+            switch (en.Kind)
+            {
+                case VermKind.EdgeAngle:
+                case VermKind.ParallelEdge:
+                case VermKind.PerpendicularEdge:
+                    segDirFixed.Add((en.P1Idx, en.P2Idx));
+                    segDirFixed.Add((en.P2Idx, en.P1Idx));
+                    break;
+                case VermKind.Length:
+                    segLenFixed.Add((en.P1Idx, en.P2Idx));
+                    segLenFixed.Add((en.P2Idx, en.P1Idx));
+                    break;
+            }
+        }
+        // Schnittmenge: Segmente die sowohl Richtung als auch Länge kennen
+        var segBothFixed = new HashSet<(int, int)>(segDirFixed);
+        segBothFixed.IntersectWith(segLenFixed);
+
+        // Iterative Ausbreitung
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+
+            // Coincident: Ankerpunkt-Fixierung auf verschobenen Punkt übertragen
+            foreach (var en in _vermPlaced)
+            {
+                if (en.Kind != VermKind.Coincident) continue;
+                if (xFixed.Contains(en.P1Idx) && xFixed.Add(en.P2Idx)) changed = true;
+                if (yFixed.Contains(en.P1Idx) && yFixed.Add(en.P2Idx)) changed = true;
+            }
+
+            // Segment mit Richtung+Länge: ein fixierter Endpunkt fixiert den anderen
+            foreach (var (a, b) in segBothFixed)
+            {
+                bool aFix = xFixed.Contains(a) && yFixed.Contains(a);
+                bool bFix = xFixed.Contains(b) && yFixed.Contains(b);
+                if (aFix && !bFix)
+                {
+                    if (xFixed.Add(b)) changed = true;
+                    if (yFixed.Add(b)) changed = true;
+                }
+                else if (bFix && !aFix)
+                {
+                    if (xFixed.Add(a)) changed = true;
+                    if (yFixed.Add(a)) changed = true;
+                }
+            }
+        }
+
+        // Nur Punkte, die in X und Y fixiert sind
+        var result = new HashSet<int>(xFixed);
+        result.IntersectWith(yFixed);
+        return result;
+    }
+
+    private void ApplyLengthConstraint(int p1Idx, int p2Idx, double newLen, double dirX = 0, double dirY = 0)
+    {
+        var p1 = GetPfadAbsAt(p1Idx); var p2v = GetPfadAbsAt(p2Idx);
+        if (p1 == null || p2v == null) return;
+        double dx, dy;
+        if (Math.Abs(dirX) > 1e-9 || Math.Abs(dirY) > 1e-9)
+        {
+            // Gespeicherten Normalvektor verwenden → Winkel bleibt immer erhalten
+            dx = dirX; dy = dirY;
+        }
+        else
+        {
+            dx = p2v.Value.x - p1.Value.x; dy = p2v.Value.y - p1.Value.y;
+            double curLen = Math.Sqrt(dx*dx + dy*dy);
+            if (curLen < 1e-9) return;
+            dx /= curLen; dy /= curLen;
+        }
+        // Normalerweise bleibt P1 fix und P2 wird verschoben. Ist P2 aber der Start- oder
+        // Endpunkt einer geschlossenen Kette (IsClosedChainEndpoint), würde das Verschieben
+        // über den "Partner-Punkt"-Mechanismus in UpdatePfadPunktPos unbemerkt auch den
+        // jeweils anderen (spatial identischen) Index mitverschieben — den eigentlichen
+        // Anker des Pfades, auf den sich andere Vermassungen verlassen. In diesem Fall
+        // stattdessen P1 verschieben und P2 (den Anker) fix lassen.
+        bool p2IsAnchor = IsClosedChainEndpoint(p2Idx);
+        bool p1IsAnchor = IsClosedChainEndpoint(p1Idx);
+        double movedX, movedY; int movedIdx;
+        if (p2IsAnchor && !p1IsAnchor)
+        {
+            movedIdx = p1Idx;
+            movedX = p2v.Value.x - dx*newLen; movedY = p2v.Value.y - dy*newLen;
+            // preserveFollowers=false verschiebt nachfolgende Pfad-Punkte starr mit P1 mit.
+            // Liegt P2 (Anker) vor P1 im Pfad, wäre P2 selbst ein "Folge-Punkt" von P1 und
+            // würde fälschlich mitverschoben — dann einfrieren, damit P2/der Anker fix bleibt.
+            UpdatePfadPunktPos(movedIdx, movedX, movedY, preserveFollowers: p1Idx <= p2Idx);
+        }
+        else
+        {
+            movedIdx = p2Idx;
+            movedX = p1.Value.x + dx*newLen; movedY = p1.Value.y + dy*newLen;
+            // preserveFollowers=false verschiebt nachfolgende Pfad-Punkte starr mit P2 mit.
+            // Bei PointDist kann P2 (2. Klick) aber vor P1 (1. Klick) im Pfad liegen — dann wäre
+            // P1 selbst ein "Folge-Punkt" von P2 und würde fälschlich mitverschoben. In diesem
+            // Fall einfrieren (preserveFollowers=true), damit der Anker P1 fix bleibt.
+            UpdatePfadPunktPos(movedIdx, movedX, movedY, preserveFollowers: p2Idx <= p1Idx);
+        }
+        // Aktive Abs-Referenz für Label-Repositionierung aktualisieren
+        if (movedIdx == _vermP2Idx)
+            _vermP2Abs = (movedX, movedY);
+        if (_vermTextBox != null)
+        {
+            var pos = VermLabelScreenPos();
+            System.Windows.Controls.Canvas.SetLeft(_vermTextBox, pos.X - 40);
+            System.Windows.Controls.Canvas.SetTop (_vermTextBox, pos.Y - 28);
+        }
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void ApplyParallelDistConstraint(int p1Idx, int p2Idx, int q1Idx, int q2Idx, double newDist)
+    {
+        var p1 = GetPfadAbsAt(p1Idx); var p2 = GetPfadAbsAt(p2Idx);
+        var q1 = GetPfadAbsAt(q1Idx); var q2 = GetPfadAbsAt(q2Idx);
+        if (p1 == null || p2 == null || q1 == null || q2 == null) return;
+        double dx = p2.Value.x - p1.Value.x, dy = p2.Value.y - p1.Value.y;
+        double l = Math.Sqrt(dx*dx + dy*dy);
+        if (l < 1e-9) return;
+        double nx = -dy/l, ny = dx/l;
+        double curSigned = (q1.Value.x - p1.Value.x)*nx + (q1.Value.y - p1.Value.y)*ny;
+        if (Math.Abs(curSigned) < 1e-9) return;
+        double delta = Math.Sign(curSigned)*newDist - curSigned;
+        UpdatePfadPunktPos(q1Idx, q1.Value.x + nx*delta, q1.Value.y + ny*delta, preserveFollowers: false);
+        UpdatePfadPunktPos(q2Idx, q2.Value.x + nx*delta, q2.Value.y + ny*delta, preserveFollowers: false);
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void ApplyAngleConstraint(int p1Idx, int p2Idx, int q1Idx, int q2Idx, double newAngleDeg)
+    {
+        var p1 = GetPfadAbsAt(p1Idx); var p2 = GetPfadAbsAt(p2Idx);
+        var q1 = GetPfadAbsAt(q1Idx); var q2 = GetPfadAbsAt(q2Idx);
+        if (p1 == null || p2 == null || q1 == null || q2 == null) return;
+
+        if (Math.Abs(newAngleDeg) < 0.5 || Math.Abs(newAngleDeg - 90.0) < 0.5)
+        {
+            // Parallel (0°) / Rechtwinklig (90°) zu einer anderen Linie: direkt über die
+            // Richtungsvektoren lösen statt über den Schnittpunkt der beiden Geraden (wie unten).
+            // Der Schnittpunkt liegt bei (fast) paralleler Ausrichtung im Unendlichen bzw. wird
+            // numerisch instabil — genau der Zustand, den diese Bedingung halten soll. Ohne diesen
+            // Sonderfall bricht die Korrektur in exakt diesem Fall ab (LinesIntersection == null),
+            // wodurch eine als "parallel" markierte Linie durch andere, gleichzeitig wirkende
+            // Constraints schräg gezogen werden kann, ohne dass sie zurückkorrigiert wird.
+            bool q1IsSharedPar = SamePathCorner(q1Idx, p1Idx) || SamePathCorner(q1Idx, p2Idx);
+            bool q2IsSharedPar = SamePathCorner(q2Idx, p1Idx) || SamePathCorner(q2Idx, p2Idx);
+            bool pivotIsQ1Par = !(q2IsSharedPar && !q1IsSharedPar); // gemeinsamer Eckpunkt fix, sonst Q1 als Konvention
+
+            var pivotPar     = pivotIsQ1Par ? q1.Value : q2.Value;
+            var movePointPar = pivotIsQ1Par ? q2.Value : q1.Value;
+            int moveIdxPar   = pivotIsQ1Par ? q2Idx    : q1Idx;
+            int pivotIdxPar  = pivotIsQ1Par ? q1Idx    : q2Idx;
+
+            double segLenPar = Math.Sqrt(Math.Pow(movePointPar.x - pivotPar.x, 2) + Math.Pow(movePointPar.y - pivotPar.y, 2));
+            double refLenChk = Math.Sqrt(Math.Pow(p2.Value.x - p1.Value.x, 2) + Math.Pow(p2.Value.y - p1.Value.y, 2));
+            if (segLenPar < 1e-9 || refLenChk < 1e-9) return;
+
+            double urx = (p2.Value.x - p1.Value.x) / refLenChk, ury = (p2.Value.y - p1.Value.y) / refLenChk;
+            double targetRad = newAngleDeg * Math.PI / 180.0;
+            (double x, double y) Rot(double vx, double vy, double rad)
+            {
+                double c = Math.Cos(rad), s = Math.Sin(rad);
+                return (vx * c - vy * s, vx * s + vy * c);
+            }
+            var d1 = Rot(urx, ury, targetRad);
+            var d2 = Rot(urx, ury, -targetRad);
+            var candidates = new (double x, double y)[] { d1, (-d1.x, -d1.y), d2, (-d2.x, -d2.y) };
+
+            double curDx = movePointPar.x - pivotPar.x, curDy = movePointPar.y - pivotPar.y;
+            double curLen = Math.Sqrt(curDx*curDx + curDy*curDy);
+            double cux = curDx / curLen, cuy = curDy / curLen;
+
+            var best = candidates[0];
+            double bestDot = double.NegativeInfinity;
+            foreach (var c in candidates)
+            {
+                double dot = c.x * cux + c.y * cuy;
+                if (dot > bestDot) { bestDot = dot; best = c; }
+            }
+
+            double nxPar = pivotPar.x + best.x * segLenPar, nyPar = pivotPar.y + best.y * segLenPar;
+            if (Math.Abs(nxPar - movePointPar.x) > 1e-6 || Math.Abs(nyPar - movePointPar.y) > 1e-6)
+                UpdatePfadPunktPos(moveIdxPar, nxPar, nyPar, preserveFollowers: moveIdxPar <= pivotIdxPar);
+            DrawSkia?.InvalidateVisual();
+            return;
+        }
+
+        // Bestimme Pivot und bewegten Endpunkt des Q-Segments:
+        // Der Pivot ist der Q-Endpunkt der näher am Schnittpunkt liegt (das gemeinsame Eck).
+        // Der andere (weiter entfernte) wird gedreht — so bleibt die erste Linie unverändert
+        // auch wenn P und Q einen gemeinsamen Punkt teilen.
+        var inter = LinesIntersection(p1.Value, p2.Value, q1.Value, q2.Value);
+        if (inter == null) return;
+
+        // Pivot = gemeinsamer Eckpunkt der beiden Segmente (P und Q teilen ihn).
+        // Wenn kein gemeinsamer Eckpunkt: Punkt näher am Schnittpunkt.
+        // Das verhindert, dass beim Propagieren rückwärts der falsche Punkt bewegt wird.
+        bool q1IsShared = SamePathCorner(q1Idx, p1Idx) || SamePathCorner(q1Idx, p2Idx);
+        bool q2IsShared = SamePathCorner(q2Idx, p1Idx) || SamePathCorner(q2Idx, p2Idx);
+        bool pivotIsQ1;
+        if (q1IsShared && !q2IsShared)
+            pivotIsQ1 = true;   // Q1 = gemeinsamer Eckpunkt → pivot Q1, move Q2
+        else if (q2IsShared && !q1IsShared)
+            pivotIsQ1 = false;  // Q2 = gemeinsamer Eckpunkt → pivot Q2, move Q1
+        else
+        {
+            // Kein eindeutiger gemeinsamer Punkt → näher am Schnittpunkt
+            double d1 = Math.Pow(q1.Value.x - inter.Value.x, 2) + Math.Pow(q1.Value.y - inter.Value.y, 2);
+            double d2 = Math.Pow(q2.Value.x - inter.Value.x, 2) + Math.Pow(q2.Value.y - inter.Value.y, 2);
+            pivotIsQ1 = d1 <= d2;
+        }
+        var pivot     = pivotIsQ1 ? q1.Value : q2.Value;
+        var movePoint = pivotIsQ1 ? q2.Value : q1.Value;
+        int moveIdx   = pivotIsQ1 ? q2Idx    : q1Idx;
+        int pivotIdx  = pivotIsQ1 ? q1Idx    : q2Idx;
+
+        double dxM = movePoint.x - pivot.x, dyM = movePoint.y - pivot.y;
+        if (Math.Sqrt(dxM*dxM + dyM*dyM) < 1e-9) return;
+        double a1 = VermSegArcAngle(inter.Value, p1.Value, p2.Value);
+        double a2 = VermSegArcAngle(inter.Value, q1.Value, q2.Value);
+        double diff = a2 - a1;
+        while (diff >  Math.PI) diff -= 2*Math.PI;
+        while (diff < -Math.PI) diff += 2*Math.PI;
+
+        double newAngleRad = newAngleDeg * Math.PI / 180.0;
+        // 0° = parallel: rotate to make diff = 0 (same direction), keeping rotation sign
+        double rotDelta = (diff != 0 ? Math.Sign(diff) : 1) * newAngleRad - diff;
+        while (rotDelta >  Math.PI) rotDelta -= 2*Math.PI;
+        while (rotDelta < -Math.PI) rotDelta += 2*Math.PI;
+
+        double cosR = Math.Cos(rotDelta), sinR = Math.Sin(rotDelta);
+        double nx = pivot.x + dxM*cosR - dyM*sinR;
+        double ny = pivot.y + dxM*sinR + dyM*cosR;
+        // preserveFollowers=false: der bewegte Punkt dreht sich um den Pivot, alle
+        // nachfolgenden Pfad-Punkte folgen ihm dabei starr (gleiche Verschiebung), statt
+        // eingefroren zu werden — sonst würde der Pfad danach verzerrt/verkürzt.
+        // Ausnahme: liegt moveIdx im Pfad VOR dem Pivot, wäre der Pivot selbst ein
+        // "Folge-Punkt" von moveIdx — dann muss eingefroren werden (preserveFollowers=true),
+        // sonst würde sich der eigentlich fixe Pivot mitverschieben.
+        UpdatePfadPunktPos(moveIdx, nx, ny, preserveFollowers: moveIdx <= pivotIdx);
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void ApplyEdgeDistConstraint(int p1Idx, int p2Idx, int edge, double value, VermEntry? self = null)
+    {
+        var p2 = GetPfadAbsAt(p2Idx); if (p2 == null) return;
+        // Delta berechnen damit P2 den Zielabstand zur Kante hat
+        double dx = 0, dy = 0;
+        switch (edge) {
+            case 1: dx = value           - p2.Value.x; break;
+            case 2: dx = (WorkX - value) - p2.Value.x; break;
+            case 3: dy = value           - p2.Value.y; break;
+            case 4: dy = (WorkY - value) - p2.Value.y; break;
+        }
+        // Die komplette Kette (nicht nur den referenzierten Punkt) starr verschieben, damit
+        // alle Segmentlängen erhalten bleiben. Frisch gezeichnete Pfadpunkte sind standardmäßig
+        // absolut ("Unten links") statt relativ ("Letzter Punkt") referenziert — ShiftPfadChain
+        // verschiebt daher jeden Punkt der Kette einzeln um dasselbe Delta.
+        // Punkte, die bereits durch eine ANDERE platzierte Masslinie fixiert sind, dürfen dabei
+        // nicht mitverschoben werden (siehe LockedPfadIndices) — die Verschiebung bricht dort ab,
+        // sodass die dazwischenliegende unvermasste Pfadlinie die Längendifferenz aufnimmt.
+        var locked = LockedPfadIndices(self);
+        var (chainSt1, chainEn1) = FindChainBounds(p1Idx);
+        var (chainSt2, chainEn2) = FindChainBounds(p2Idx);
+        if (chainSt1 == chainSt2)
+        {
+            int coreLo = Math.Min(p1Idx, p2Idx), coreHi = Math.Max(p1Idx, p2Idx);
+            ShiftPfadChain(chainSt1, chainEn1, dx, dy, coreLo, coreHi, locked);
+        }
+        else
+        {
+            ShiftPfadChain(chainSt1, chainEn1, dx, dy, p1Idx, p1Idx, locked);
+            ShiftPfadChain(chainSt2, chainEn2, dx, dy, p2Idx, p2Idx, locked);
+        }
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void ApplyPointEdgeDistConstraint(int ptIdx, int edge, double value, VermEntry? self = null)
+    {
+        var pt = GetPfadAbsAt(ptIdx); if (pt == null) return;
+        double dx = 0, dy = 0;
+        switch (edge) {
+            case 1: dx = value           - pt.Value.x; break;
+            case 2: dx = (WorkX - value) - pt.Value.x; break;
+            case 3: dy = value           - pt.Value.y; break;
+            case 4: dy = (WorkY - value) - pt.Value.y; break;
+        }
+        // Wie bei ApplyEdgeDistConstraint: die komplette Kette verschieben statt nur den
+        // vermassten Punkt, aber an bereits anderweitig fixierten Punkten abbrechen (s.u.).
+        var (chainSt, chainEn) = FindChainBounds(ptIdx);
+        ShiftPfadChain(chainSt, chainEn, dx, dy, ptIdx, ptIdx, LockedPfadIndices(self));
+        DrawSkia?.InvalidateVisual();
+    }
+
+    // Punkte, die bereits durch eine platzierte Positions-Masslinie (Länge, Kantendistanz,
+    // Koinzident, ...) fixiert sind. exclude ist die gerade angewendete Masslinie selbst
+    // (bei erneutem Anwenden/Propagieren) und wird von der Sperre ausgenommen.
+    //
+    // Grund: Wird eine unvermasste Pfadlinie auf BEIDEN Seiten zur Werkstückkante vermasst,
+    // legt die zweite Bemassung sonst die komplette Kette (inkl. des bereits über die erste
+    // Bemassung fixierten Punkts) starr neu fest — das bereits gesetzte Maß würde dadurch
+    // bei jeder Propagation verändert statt die dazwischenliegende, unvermasste Linie
+    // anzupassen. LockedPfadIndices lässt ShiftPfadChain an solchen Punkten anhalten.
+    private HashSet<int> LockedPfadIndices(VermEntry? exclude)
+    {
+        var locked = new HashSet<int>();
+        foreach (var en in _vermPlaced)
+        {
+            if (exclude != null && en == exclude) continue;
+            switch (en.Kind)
+            {
+                case VermKind.EdgeDist:
+                    locked.Add(en.P1Idx); locked.Add(en.P2Idx);
+                    break;
+                case VermKind.PointEdgeDist:
+                case VermKind.Length:
+                case VermKind.PointDist:
+                case VermKind.Coincident:
+                case VermKind.CoincidentCorner:
+                    locked.Add(en.P2Idx);
+                    break;
+            }
+        }
+        return locked;
+    }
+
+    // Verschiebt jeden Punkt einer Pfad-Kette einzeln um dasselbe (dx,dy) — unabhängig vom
+    // jeweiligen Bezugspunkt (absolut z.B. "Unten links" oder relativ "Letzter Punkt").
+    // Dadurch bleiben alle Segmentlängen/-winkel exakt erhalten, auch bei frisch gezeichneten,
+    // noch unvermassten Pfaden (deren Punkte standardmäßig absolut referenziert sind und daher
+    // NICHT automatisch über "Letzter Punkt" mitwandern würden).
+    // coreLo/coreHi: der/die eigentlich bemasste(n) Punkt(e), die auf jeden Fall verschoben
+    // werden. Von dort aus wird die Verschiebung in beide Richtungen ausgedehnt, bis entweder
+    // das Kettenende oder ein in "locked" enthaltener (anderweitig fixierter) Punkt erreicht
+    // wird — an dem wird abgebrochen, sodass das dortige Segment die Längendifferenz aufnimmt.
+    private void ShiftPfadChain(int chainSt, int chainEn, double dx, double dy,
+                                 int coreLo, int coreHi, HashSet<int>? locked = null)
+    {
+        if (Math.Abs(dx) < 1e-9 && Math.Abs(dy) < 1e-9) return;
+        int effSt = chainSt, effEn = chainEn;
+        if (locked != null)
+        {
+            for (int i = coreLo - 1; i >= chainSt; i--)
+                if (locked.Contains(i)) { effSt = i + 1; break; }
+            for (int i = coreHi + 1; i <= chainEn; i++)
+                if (locked.Contains(i)) { effEn = i - 1; break; }
+        }
+        var orig = new (double x, double y)?[effEn - effSt + 1];
+        for (int i = effSt; i <= effEn; i++)
+            orig[i - effSt] = GetPfadAbsAt(i);
+        for (int i = effSt; i <= effEn; i++)
+        {
+            var a = orig[i - effSt];
+            if (a == null) continue;
+            UpdatePfadPunktPos(i, a.Value.x + dx, a.Value.y + dy, preserveFollowers: false, onlyThisPoint: true);
+        }
+    }
+
+    private void ApplyCoincidentConstraint(int p1Idx, int p2Idx)
+    {
+        var p1 = GetPfadAbsAt(p1Idx); var p2 = GetPfadAbsAt(p2Idx);
+        if (p1 == null || p2 == null) return;
+        // Ist P2 der Start-/Endpunkt einer geschlossenen Kette, würde ihn zu verschieben über
+        // den Partner-Punkt-Mechanismus unbemerkt auch den andererorts als Anker genutzten
+        // Zwillings-Index mitverschieben (siehe IsClosedChainEndpoint) — dann stattdessen P1
+        // verschieben und P2/den Anker fix lassen.
+        if (IsClosedChainEndpoint(p2Idx) && !IsClosedChainEndpoint(p1Idx))
+        {
+            UpdatePfadPunktPos(p1Idx, p2.Value.x, p2.Value.y, preserveFollowers: p1Idx <= p2Idx);
+            DrawSkia?.InvalidateVisual();
+            return;
+        }
+        // P1/P2 werden per Klick-Reihenfolge gewählt, nicht nach Pfad-Reihenfolge — P2 kann
+        // also vor P1 im Pfad liegen. Dann wäre P1 ein "Folge-Punkt" von P2 und preserveFollowers
+        // =false würde ihn fälschlich mitverschieben. Nur verschieben lassen, wenn P2 wirklich
+        // nach P1 im Pfad liegt; sonst einfrieren, damit der andere Punkt (P1) fix bleibt.
+        UpdatePfadPunktPos(p2Idx, p1.Value.x, p1.Value.y, preserveFollowers: p2Idx <= p1Idx);
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void ApplyCoincidentCornerConstraint(int ptIdx, int corner)
+    {
+        var (cx, cy) = WorkpieceCornerPos(corner);
+        UpdatePfadPunktPos(ptIdx, cx, cy, preserveFollowers: false);
+        DrawSkia?.InvalidateVisual();
+    }
+
+    // ── Geometrie-Constraint-Toolbar: Klick-Ablauf für Koinzident/Rechtwinklig/Parallel ──
+    // Diese 3 Modi verzichten (anders als Länge/Winkel) auf die TextBox-Eingabe, weil der
+    // Zielwert bereits feststeht (0 mm / 0° / 90°). Ein Klick auf das erste Element merkt
+    // sich dieses in _geomFirstIdx/_geomFirstIdx2, der zweite Klick löst die Berechnung aus.
+    private void HandleGeomModeClick(double vmx, double vmy)
+    {
+        if (_geomMode == GeomConstraintMode.Coincident)
+        {
+            if (_geomFirstIdx < 0)
+            {
+                int ptHit = HitTestPfadPoint(vmx, vmy);
+                if (ptHit >= 0) { _geomFirstIdx = ptHit; DrawSkia?.InvalidateVisual(); }
+                return;
+            }
+            int ptHit2 = HitTestPfadPoint(vmx, vmy);
+            if (ptHit2 >= 0 && ptHit2 != _geomFirstIdx)
+            {
+                FinalizeGeomConstraint(VermKind.Coincident, _geomFirstIdx, ptHit2, -1, -1, 0, 0.0);
+                return;
+            }
+            int cornerHit = HitTestWorkpieceCorner(vmx, vmy);
+            if (cornerHit > 0)
+            {
+                FinalizeGeomConstraint(VermKind.CoincidentCorner, -1, _geomFirstIdx, -1, -1, cornerHit, 0.0);
+                return;
+            }
+            // Klick ins Leere → Auswahl zurücksetzen, von vorne beginnen
+            ResetGeomSelection();
+        }
+        else // Perpendicular / Parallel
+        {
+            if (_geomFirstIdx < 0)
+            {
+                var hit = HitTestPfadLineSegment(vmx, vmy);
+                if (hit.p1 >= 0) { _geomFirstIdx = hit.p1; _geomFirstIdx2 = hit.p2; DrawSkia?.InvalidateVisual(); }
+                return;
+            }
+            // 2. Klick: entweder ein zweites Segment ODER eine Werkstückkante
+            int edgeHit = HitTestWorkpieceEdge(vmx, vmy);
+            if (edgeHit > 0)
+            {
+                var edgeKind  = _geomMode == GeomConstraintMode.Perpendicular ? VermKind.PerpendicularEdge : VermKind.ParallelEdge;
+                double edgeVal = _geomMode == GeomConstraintMode.Perpendicular ? 90.0 : 0.0;
+                FinalizeGeomConstraint(edgeKind, _geomFirstIdx, _geomFirstIdx2, -1, -1, edgeHit, edgeVal);
+                return;
+            }
+            var hit2 = HitTestPfadLineSegment(vmx, vmy);
+            if (hit2.p1 >= 0 && !(hit2.p1 == _geomFirstIdx && hit2.p2 == _geomFirstIdx2))
+            {
+                var kind  = _geomMode == GeomConstraintMode.Perpendicular ? VermKind.Perpendicular : VermKind.Parallel;
+                double val = _geomMode == GeomConstraintMode.Perpendicular ? 90.0 : 0.0;
+                FinalizeGeomConstraint(kind, _geomFirstIdx, _geomFirstIdx2, hit2.p1, hit2.p2, 0, val);
+                return;
+            }
+            // Klick ins Leere → Auswahl zurücksetzen, von vorne beginnen
+            ResetGeomSelection();
+        }
+    }
+
+    // Prüft auf Konflikte, legt bei Erfolg die neue Geometrie-Constraint an und wendet sie
+    // sofort an (kein TextBox-Zwischenschritt, da der Zielwert schon feststeht).
+    private void FinalizeGeomConstraint(VermKind kind, int p1Idx, int p2Idx, int q1Idx, int q2Idx, int edge, double value)
+    {
+        bool conflict = kind switch
+        {
+            VermKind.Coincident        => VermHasConflict(-1, VermKind.Coincident, p2Idx),
+            VermKind.CoincidentCorner  => VermHasConflict(-1, VermKind.CoincidentCorner, p2Idx),
+            VermKind.Perpendicular     => VermHasConflict(-1, VermKind.Perpendicular, q1Idx, q2Idx),
+            VermKind.Parallel          => VermHasConflict(-1, VermKind.Parallel, q1Idx, q2Idx),
+            VermKind.PerpendicularEdge => VermHasConflict(-1, VermKind.PerpendicularEdge, p1Idx, p2Idx),
+            VermKind.ParallelEdge      => VermHasConflict(-1, VermKind.ParallelEdge, p1Idx, p2Idx),
+            _                          => false
+        };
+        if (conflict)
+        {
+            MessageBox.Show(this,
+                "Ein oder mehrere referenzierte Punkte werden bereits durch eine andere Bedingung gebunden.\nDie Bedingung kann nicht hinzugefügt werden.",
+                "Konflikt", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ResetGeomSelection();
+            return;
+        }
+        var newEntry = new VermEntry(kind, p1Idx, p2Idx, 0, value, q1Idx, q2Idx, edge);
+        ApplyVermNewEntry(newEntry, value);
+        _vermPlaced.Add(newEntry);
+        PropagateVermConstraints();
+        CheckAndReportConstraints();
+        ResetGeomSelection();
+    }
+
+    private void ResetGeomSelection()
+    {
+        _geomFirstIdx = -1; _geomFirstIdx2 = -1;
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void ApplyEdgeAngleConstraint(int p1Idx, int p2Idx, int edge, double newAngleDeg)
+    {
+        var p1 = GetPfadAbsAt(p1Idx); var p2 = GetPfadAbsAt(p2Idx);
+        if (p1 == null || p2 == null) return;
+
+        // Sonderfall 0° / 90°: P2 auf die Zielachse drehen (P1 = fester Ankerpunkt), NICHT nur
+        // auf sie projizieren — sonst würde sich die gezeichnete Segmentlänge ändern (die
+        // Projektion nimmt ja nur eine der beiden Koordinaten der Zielachse, die andere bleibt
+        // unverändert stehen). Stattdessen wird die ursprüngliche Länge |P1P2| beibehalten und
+        // P2 entlang der Zielachse (in dieselbe Richtung wie vorher) auf diesen Radius gesetzt.
+        // Eine echte Rotation um einen von der Segment-Lage abhängigen Pivot (wie im allgemeinen
+        // Fall unten) wäre hier instabil, weil dieser Pivot bei schrägen Zwischenzuständen
+        // (während der Propagation) am falschen Ende liegen kann — die direkte Berechnung über
+        // die bekannte Länge und das Vorzeichen der bisherigen Richtung braucht dagegen keinen
+        // Schnittpunkt und bleibt daher stabil.
+        bool isVerticalEdge = (edge == 1 || edge == 2);
+        double dx0 = p2.Value.x - p1.Value.x, dy0 = p2.Value.y - p1.Value.y;
+        double segLen = Math.Sqrt(dx0*dx0 + dy0*dy0);
+        if (segLen < 1e-9) return;
+        if (Math.Abs(newAngleDeg - 90.0) < 0.5)      // PerpendicularEdge
+        {
+            // senkrecht zur Kante → horizontal wenn Kante vertikal, sonst vertikal
+            double nx2 = isVerticalEdge ? p1.Value.x + (dx0 >= 0 ? segLen : -segLen) : p1.Value.x;
+            double ny2 = isVerticalEdge ? p1.Value.y : p1.Value.y + (dy0 >= 0 ? segLen : -segLen);
+            // P1 < P2 im Pfad (Segment aus zwei aufeinanderfolgenden Punkten) → P1 ist nie
+            // ein Folge-Punkt von P2, preserveFollowers=false verschiebt daher nur echte
+            // nachfolgende Pfad-Punkte, nicht den fixen Anker P1.
+            if (Math.Abs(nx2 - p2.Value.x) > 1e-6 || Math.Abs(ny2 - p2.Value.y) > 1e-6)
+                UpdatePfadPunktPos(p2Idx, nx2, ny2, preserveFollowers: false);
+            DrawSkia?.InvalidateVisual();
+            return;
+        }
+        if (Math.Abs(newAngleDeg) < 0.5)              // ParallelEdge
+        {
+            // parallel zur Kante → vertikal wenn Kante vertikal, sonst horizontal
+            double nx2 = isVerticalEdge ? p1.Value.x : p1.Value.x + (dx0 >= 0 ? segLen : -segLen);
+            double ny2 = isVerticalEdge ? p1.Value.y + (dy0 >= 0 ? segLen : -segLen) : p1.Value.y;
+            if (Math.Abs(nx2 - p2.Value.x) > 1e-6 || Math.Abs(ny2 - p2.Value.y) > 1e-6)
+                UpdatePfadPunktPos(p2Idx, nx2, ny2, preserveFollowers: false);
+            DrawSkia?.InvalidateVisual();
+            return;
+        }
+
+        var inter = SegmentEdgeIntersection(p1.Value, p2.Value, edge);
+        if (inter == null) return;
+        var (e1, e2) = EdgeVirtualSegment(inter.Value, edge);
+
+        // Pivot = Endpunkt näher am Schnittpunkt; der andere dreht sich
+        double d1 = Math.Pow(p1.Value.x - inter.Value.x, 2) + Math.Pow(p1.Value.y - inter.Value.y, 2);
+        double d2 = Math.Pow(p2.Value.x - inter.Value.x, 2) + Math.Pow(p2.Value.y - inter.Value.y, 2);
+        var pivot     = d1 <= d2 ? p1.Value : p2.Value;
+        var movePoint = d1 <= d2 ? p2.Value : p1.Value;
+        int moveIdx   = d1 <= d2 ? p2Idx    : p1Idx;
+        int pivotIdx  = d1 <= d2 ? p1Idx    : p2Idx;
+
+        double dxM = movePoint.x - pivot.x, dyM = movePoint.y - pivot.y;
+        if (Math.Sqrt(dxM*dxM + dyM*dyM) < 1e-9) return;
+
+        double a1 = VermSegArcAngle(inter.Value, p1.Value, p2.Value);
+        double a2 = VermSegArcAngle(inter.Value, e1, e2);
+        double diff = a1 - a2;  // Segment relativ zur Kante
+        while (diff >  Math.PI) diff -= 2*Math.PI;
+        while (diff < -Math.PI) diff += 2*Math.PI;
+
+        double newAngleRad = newAngleDeg * Math.PI / 180.0;
+        double rotDelta = (diff != 0 ? Math.Sign(diff) : 1) * newAngleRad - diff;
+        while (rotDelta >  Math.PI) rotDelta -= 2*Math.PI;
+        while (rotDelta < -Math.PI) rotDelta += 2*Math.PI;
+        // Wenn movePoint == p1 dreht es in Gegenrichtung
+        if (d1 > d2) rotDelta = -rotDelta;
+
+        double cosR = Math.Cos(rotDelta), sinR = Math.Sin(rotDelta);
+        double nx = pivot.x + dxM*cosR - dyM*sinR;
+        double ny = pivot.y + dxM*sinR + dyM*cosR;
+        // preserveFollowers=false: nachfolgende Pfad-Punkte drehen/verschieben sich starr mit,
+        // statt eingefroren zu werden. Ausnahme: liegt moveIdx im Pfad VOR dem Pivot, wäre der
+        // Pivot selbst ein "Folge-Punkt" von moveIdx — dann einfrieren, damit der eigentlich
+        // fixe Pivot nicht mitverschoben wird.
+        UpdatePfadPunktPos(moveIdx, nx, ny, preserveFollowers: moveIdx <= pivotIdx);
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void ApplyLineToPointConstraint(int p1Idx, int p2Idx, int q1Idx, double newDist)
+    {
+        var p1 = GetPfadAbsAt(p1Idx); var p2 = GetPfadAbsAt(p2Idx);
+        var q1 = GetPfadAbsAt(q1Idx);
+        if (p1 == null || p2 == null || q1 == null) return;
+        double dx = p2.Value.x - p1.Value.x, dy = p2.Value.y - p1.Value.y;
+        double l = Math.Sqrt(dx*dx + dy*dy); if (l < 1e-9) return;
+        double nx = -dy/l, ny = dx/l;
+        double curSigned = (q1.Value.x - p1.Value.x)*nx + (q1.Value.y - p1.Value.y)*ny;
+        if (Math.Abs(curSigned) < 1e-9) return;
+        double delta = Math.Sign(curSigned)*newDist - curSigned;
+        UpdatePfadPunktPos(q1Idx, q1.Value.x + nx*delta, q1.Value.y + ny*delta, preserveFollowers: false);
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void DrawVermassungOverlay(SKCanvas canvas)
+    {
+        if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
+        bool hasActive = (_vermState == 1 || _vermState == 2 || _vermState == 5) && (_vermP1Idx >= 0 || _vermPtIdx >= 0);
+        bool hasHover  = _activeTool == CanvasTool.Vermassen && (_vermHoverP1 >= 0 || _vermHoverEdge > 0 || _vermHoverPoint >= 0);
+        if (!hasActive && !hasHover && _vermPlaced.Count == 0) return;
+
+        // Gemeinsame Paint-Objekte
+        float sw = (float)(1.2 / _zoom);
+        using var linePaint = new SKPaint { Color = new SKColor(20, 100, 200), Style = SKPaintStyle.Stroke,
+            StrokeWidth = sw, IsAntialias = true };
+        using var textPaint = new SKPaint { Color = new SKColor(20, 100, 200), IsAntialias = true,
+            TextSize = (float)(11.0 / _zoom), Typeface = SKTypeface.FromFamilyName("Arial") };
+        using var bgPaint   = new SKPaint { Color = new SKColor(255, 255, 255, 200), Style = SKPaintStyle.Fill };
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        (float sx, float sy) Px(double x, double y) => ((float)x, (float)(WorkY - y));
+        float gap = (float)(2.0 / _zoom);
+        float as_ = (float)(5.0 / _zoom);
+
+        void DrawLabel(float msx, float msy, string text)
+        {
+            float tw = textPaint.MeasureText(text);
+            float fh = textPaint.TextSize;
+            canvas.DrawRect(msx - tw/2 - 3, msy - fh - 2, tw + 6, fh + 6, bgPaint);
+            canvas.DrawText(text, msx - tw/2, msy, textPaint);
+        }
+
+        void DrawArrowTip(float tx, float ty, float toDx, float toDy)
+        {
+            float tLen = (float)Math.Sqrt(toDx*toDx + toDy*toDy);
+            if (tLen < 1e-6f) return;
+            float tdx = toDx/tLen, tdy = toDy/tLen;
+            using var path = new SKPath();
+            path.MoveTo(tx, ty);
+            path.LineTo(tx + tdx*as_ + tdy*as_*0.35f, ty + tdy*as_ - tdx*as_*0.35f);
+            path.LineTo(tx + tdx*as_ - tdy*as_*0.35f, ty + tdy*as_ + tdx*as_*0.35f);
+            path.Close();
+            using var fill = new SKPaint { Color = new SKColor(20, 100, 200), Style = SKPaintStyle.Fill, IsAntialias = true };
+            canvas.DrawPath(path, fill);
+        }
+
+        // Längen-Masslinie (ein Segment)
+        void DrawOneLine(double p1x, double p1y, double p2x, double p2y,
+                         double offset, string? labelText)
+        {
+            double dx = p2x - p1x, dy = p2y - p1y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            if (len < 1e-6) return;
+            double nx = -dy/len, ny = dx/len;
+            double d1x = p1x + nx*offset, d1y = p1y + ny*offset;
+            double d2x = p2x + nx*offset, d2y = p2y + ny*offset;
+            var (p1sx, p1sy) = Px(p1x, p1y);
+            var (p2sx, p2sy) = Px(p2x, p2y);
+            var (d1sx, d1sy) = Px(d1x, d1y);
+            var (d2sx, d2sy) = Px(d2x, d2y);
+            float eNx = d1sx - p1sx, eNy = d1sy - p1sy;
+            float eLen = (float)Math.Sqrt(eNx*eNx + eNy*eNy);
+            if (eLen > gap * 4)
+            {
+                float gapF = gap * 2 / eLen;
+                canvas.DrawLine(p1sx + eNx*gapF, p1sy + eNy*gapF, d1sx + eNx*gap, d1sy + eNy*gap, linePaint);
+                canvas.DrawLine(p2sx + eNx*gapF, p2sy + eNy*gapF, d2sx + eNx*gap, d2sy + eNy*gap, linePaint);
+            }
+            canvas.DrawLine(d1sx, d1sy, d2sx, d2sy, linePaint);
+            DrawArrowTip(d1sx, d1sy, d2sx - d1sx, d2sy - d1sy);
+            DrawArrowTip(d2sx, d2sy, d1sx - d2sx, d1sy - d2sy);
+            if (labelText != null) DrawLabel((d1sx+d2sx)/2f, (d1sy+d2sy)/2f, labelText);
+        }
+
+        // Parallel-Abstand Masslinie (zwei parallele Segmente)
+        void DrawParallelLine(
+            double p1x, double p1y, double p2x, double p2y,
+            double q1x, double q1y,
+            double offset, string? labelText)
+        {
+            double dx = p2x - p1x, dy = p2y - p1y;
+            double l = Math.Sqrt(dx*dx + dy*dy); if (l < 1e-9) return;
+            double nx = -dy/l, ny = dx/l;
+            double sD = (q1x - p1x)*nx + (q1y - p1y)*ny; // signed dist seg1→seg2
+            double ax = p1x + offset*dx, ay = p1y + offset*dy; // anchor on seg1
+            double bx = ax + nx*sD,     by = ay + ny*sD;       // anchor on seg2
+            var (asx, asy) = Px(ax, ay);
+            var (bsx, bsy) = Px(bx, by);
+            // Extension tick from seg1 and seg2
+            var (p1sx, p1sy) = Px(p1x, p1y); var (p2sx, p2sy) = Px(p2x, p2y);
+            double q2x = q1x + dx, q2y = q1y + dy; // parallel extended
+            var (q1sx, q1sy) = Px(q1x, q1y); var (q2sx, q2sy) = Px(q2x, q2y);
+            // Small extension ticks
+            float exLen = (float)(3.0/_zoom);
+            float enxF = (float)nx, enyF = (float)ny; // extension direction
+            canvas.DrawLine(asx - enxF*gap, asy - enyF*gap, asx + enxF*exLen, asy + enyF*exLen, linePaint);
+            canvas.DrawLine(bsx - enxF*gap, bsy - enyF*gap, bsx + enxF*exLen, bsy + enyF*exLen, linePaint);
+            // Main dim line
+            canvas.DrawLine(asx, asy, bsx, bsy, linePaint);
+            DrawArrowTip(asx, asy, bsx - asx, bsy - asy);
+            DrawArrowTip(bsx, bsy, asx - bsx, asy - bsy);
+            if (labelText != null) DrawLabel((asx+bsx)/2f, (asy+bsy)/2f, labelText);
+        }
+
+        // Winkel-Masslinie (zwei nicht-parallele Segmente)
+        void DrawAngleLine(
+            (double x, double y) p1, (double x, double y) p2,
+            (double x, double y) q1, (double x, double y) q2,
+            double radius, string? labelText)
+        {
+            var inter = LinesIntersection(p1, p2, q1, q2);
+            if (inter == null) return;
+            double a1 = VermSegArcAngle(inter.Value, p1, p2);
+            double a2 = VermSegArcAngle(inter.Value, q1, q2);
+            double diff = a2 - a1;
+            while (diff >  Math.PI) diff -= 2*Math.PI;
+            while (diff < -Math.PI) diff += 2*Math.PI;
+            // Always draw arc in the interior sector (between the two lines, not outside the corner).
+            // The label uses VermArcSpanDeg which returns the acute value (0°=parallel, 90°=perp).
+            // Arc in SKCanvas: angles are clockwise (Y flipped), convert
+            float ix = (float)inter.Value.x, iy = (float)(WorkY - inter.Value.y);
+            float r  = (float)radius;
+            // SKCanvas Arc: start/sweepAngle in degrees, clockwise
+            float startDeg = (float)(-a1 * 180.0 / Math.PI); // negate for Y-flip
+            float sweepDeg = (float)(-diff * 180.0 / Math.PI);
+            var arcRect = new SKRect(ix - r, iy - r, ix + r, iy + r);
+            canvas.DrawArc(arcRect, startDeg, sweepDeg, false, linePaint);
+            // Arrows at arc ends
+            double a1End = a1, a2End = a1 + diff;
+            float ax1 = ix + r*(float)Math.Cos(a1End), ay1 = iy - r*(float)Math.Sin(a1End);
+            float ax2 = ix + r*(float)Math.Cos(a2End), ay2 = iy - r*(float)Math.Sin(a2End);
+            // Arrow tangent directions (perpendicular to radius, in sweep direction)
+            float t1dx = (float)(Math.Sin(a1End) * Math.Sign(diff)), t1dy = (float)(Math.Cos(a1End) * Math.Sign(diff));
+            float t2dx = -(float)(Math.Sin(a2End) * Math.Sign(diff)), t2dy = -(float)(Math.Cos(a2End) * Math.Sign(diff));
+            DrawArrowTip(ax1, ay1, t1dx, t1dy);
+            DrawArrowTip(ax2, ay2, t2dx, t2dy);
+            // Extension lines to intersection
+            var (i1sx, i1sy) = Px(inter.Value.x, inter.Value.y);
+            float l1x = i1sx + r*(float)Math.Cos(a1End)*1.1f, l1y = i1sy - r*(float)Math.Sin(a1End)*1.1f;
+            float l2x = i1sx + r*(float)Math.Cos(a2End)*1.1f, l2y = i1sy - r*(float)Math.Sin(a2End)*1.1f;
+            // No radial "pizza slice" lines — arc only
+            if (labelText != null)
+            {
+                // Place label directly on the arc (not scaled from far intersection)
+                double amid = VermArcMidAngle(a1, a2);
+                float lmx = ix + r*(float)Math.Cos(amid);
+                float lmy = iy - r*(float)Math.Sin(amid);
+                DrawLabel(lmx, lmy, labelText);
+            }
+        }
+
+        void DrawEdgeDist(double p2x, double p2y, int edge, double offset, string? labelText)
+        {
+            if (edge <= 0) return;
+            bool isHoriz = (edge == 1 || edge == 2);
+            if (isHoriz)
+            {
+                double lineY = p2y + offset;
+                double xEdge = edge == 1 ? 0 : WorkX;
+                double lineX1 = Math.Min(p2x, xEdge);
+                double lineX2 = Math.Max(p2x, xEdge);
+                var (ls1x, ls1y) = Px(lineX1, lineY);
+                var (ls2x, ls2y) = Px(lineX2, lineY);
+                var (p2sx, p2sy) = Px(p2x, p2y);
+                var (essx, essy) = Px(xEdge, lineY);
+                // Extension line from P2 to dim line
+                if (Math.Abs(p2sy - ls1y) > gap)
+                    canvas.DrawLine(p2sx, p2sy + (p2sy > ls1y ? gap : -gap), p2sx, ls1y + (p2sy > ls1y ? -gap : gap), linePaint);
+                // Extension tick at edge
+                float tk = (float)(3.0 / _zoom);
+                canvas.DrawLine(essx, essy - tk, essx, essy + tk, linePaint);
+                // Main dim line
+                canvas.DrawLine(ls1x, ls1y, ls2x, ls2y, linePaint);
+                DrawArrowTip(ls1x, ls1y, ls2x - ls1x, ls2y - ls1y);
+                DrawArrowTip(ls2x, ls2y, ls1x - ls2x, ls1y - ls2y);
+                if (labelText != null) DrawLabel((ls1x + ls2x) / 2f, ls1y - gap * 2, labelText);
+            }
+            else
+            {
+                double lineX = p2x + offset;
+                double yEdge = edge == 3 ? 0 : WorkY;
+                double lineY1 = Math.Min(p2y, yEdge);
+                double lineY2 = Math.Max(p2y, yEdge);
+                var (ls1x, ls1y) = Px(lineX, lineY1);
+                var (ls2x, ls2y) = Px(lineX, lineY2);
+                var (p2sx, p2sy) = Px(p2x, p2y);
+                var (essx, essy) = Px(lineX, yEdge);
+                // Extension line from P2 to dim line
+                if (Math.Abs(p2sx - ls1x) > gap)
+                    canvas.DrawLine(p2sx + (p2sx > ls1x ? gap : -gap), p2sy, ls1x + (p2sx > ls1x ? -gap : gap), p2sy, linePaint);
+                // Extension tick at edge
+                float tk = (float)(3.0 / _zoom);
+                canvas.DrawLine(essx - tk, essy, essx + tk, essy, linePaint);
+                // Main dim line
+                canvas.DrawLine(ls1x, ls1y, ls2x, ls2y, linePaint);
+                DrawArrowTip(ls1x, ls1y, ls2x - ls1x, ls2y - ls1y);
+                DrawArrowTip(ls2x, ls2y, ls1x - ls2x, ls1y - ls2y);
+                if (labelText != null) DrawLabel(ls1x + gap * 2, (ls1y + ls2y) / 2f, labelText);
+            }
+        }
+
+        void DrawEdgeHighlight(int edgeId, SKColor col)
+        {
+            if (edgeId <= 0) return;
+            float hw2 = (float)(3.5 / _zoom);
+            using var ep = new SKPaint { Color = col, Style = SKPaintStyle.Stroke,
+                StrokeWidth = hw2, IsAntialias = true };
+            var (ax, ay) = edgeId == 1 ? Px(0, 0) : edgeId == 2 ? Px(WorkX, 0) : edgeId == 3 ? Px(0, 0) : Px(0, WorkY);
+            var (bx, by) = edgeId == 1 ? Px(0, WorkY) : edgeId == 2 ? Px(WorkX, WorkY) : edgeId == 3 ? Px(WorkX, 0) : Px(WorkX, WorkY);
+            canvas.DrawLine(ax, ay, bx, by, ep);
+        }
+
+        // Segment-Hervorhebungsfarbe
+        void DrawSegHighlight(int hp1, int hp2, SKColor col)
+        {
+            var ha1 = GetPfadAbsAt(hp1); var ha2 = GetPfadAbsAt(hp2);
+            if (ha1 == null || ha2 == null) return;
+            float hw = (float)(3.5 / _zoom);
+            using var hp = new SKPaint { Color = col, Style = SKPaintStyle.Stroke,
+                StrokeWidth = hw, IsAntialias = true, StrokeCap = SKStrokeCap.Round };
+            var (hx1, hy1) = Px(ha1.Value.x, ha1.Value.y);
+            var (hx2, hy2) = Px(ha2.Value.x, ha2.Value.y);
+            canvas.DrawLine(hx1, hy1, hx2, hy2, hp);
+        }
+
+        bool isVermActive = _activeTool == CanvasTool.Vermassen;
+
+        // ── Hover-Hervorhebung (Werkzeug aktiv) ─────────────────────────────
+        if (isVermActive)
+        {
+            // Erstes gewähltes Segment (state 1 / 5)
+            if (_vermState >= 1 && _vermState <= 5 && _vermP1Idx >= 0)
+                DrawSegHighlight(_vermP1Idx, _vermP2Idx, new SKColor(30, 120, 220, 200));
+            // Zweites gewähltes Segment (state 5)
+            if (_vermState == 5 && _vermQ1Idx >= 0)
+                DrawSegHighlight(_vermQ1Idx, _vermQ2Idx, new SKColor(30, 180, 80, 200));
+            // Hover-Segment (state 0)
+            if ((_vermState == 0 || _vermState == 1) && _vermHoverP1 >= 0)
+                DrawSegHighlight(_vermHoverP1, _vermHoverP2, new SKColor(255, 160, 0, 220));
+            // Hover-Kante (state 0 oder 1)
+            if ((_vermState == 0 || _vermState == 1) && _vermHoverEdge > 0)
+                DrawEdgeHighlight(_vermHoverEdge, new SKColor(255, 160, 0, 220));
+            // Aktive Kante (state 1)
+            if (_vermState == 1 && _vermActiveEdge > 0)
+                DrawEdgeHighlight(_vermActiveEdge, new SKColor(30, 120, 220, 200));
+            // Hover-Punkt (state 0 oder 1)
+            if ((_vermState == 0 || _vermState == 1) && _vermHoverPoint >= 0)
+            {
+                var hpa = GetPfadAbsAt(_vermHoverPoint);
+                if (hpa != null) {
+                    var (hpx, hpy) = Px(hpa.Value.x, hpa.Value.y);
+                    float hr = (float)(5.0 / _zoom);
+                    using var hpp = new SKPaint { Color = new SKColor(255, 160, 0, 220), Style = SKPaintStyle.Fill, IsAntialias = true };
+                    canvas.DrawCircle(hpx, hpy, hr, hpp);
+                }
+            }
+            // Aktiver Punkt (state 1, Punkt-Modus)
+            if (_vermState == 1 && _vermPtIdx >= 0)
+            {
+                var apa = GetPfadAbsAt(_vermPtIdx);
+                if (apa != null) {
+                    var (apx, apy) = Px(apa.Value.x, apa.Value.y);
+                    float ar = (float)(5.0 / _zoom);
+                    using var app = new SKPaint { Color = new SKColor(30, 120, 220, 200), Style = SKPaintStyle.Fill, IsAntialias = true };
+                    canvas.DrawCircle(apx, apy, ar, app);
+                }
+            }
+        }
+
+        // ── Platzierte Masslinien – immer sichtbar ───────────────────────────
+        for (int ei = 0; ei < _vermPlaced.Count; ei++)
+        {
+            var en = _vermPlaced[ei];
+            // Geometrie-Constraints werden separat durch DrawGeomConstraintSymbols gezeichnet
+            if (en.Kind == VermKind.Coincident || en.Kind == VermKind.Perpendicular || en.Kind == VermKind.Parallel
+             || en.Kind == VermKind.ParallelEdge || en.Kind == VermKind.PerpendicularEdge
+             || en.Kind == VermKind.CoincidentCorner) continue;
+
+            var p1abs = GetPfadAbsAt(en.P1Idx);
+            if (p1abs == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) continue;
+            var p2abs = GetPfadAbsAt(en.P2Idx); if (p2abs == null) continue;
+
+            bool hideLabel = isVermActive && ei == _vermEditIdx && (_vermState == 3 || _vermState == 4);
+            double drawOffset = (isVermActive && _vermState == 3 && ei == _vermEditIdx)
+                ? _vermDragOffset : en.Offset;
+
+            if (en.Kind == VermKind.Length)
+            {
+                double dx = p2abs.Value.x - p1abs.Value.x, dy = p2abs.Value.y - p1abs.Value.y;
+                double curLen = Math.Round(Math.Sqrt(dx*dx + dy*dy), 3);
+                // Der gespeicherte Sollwert (en.Value) wird hier NICHT mehr an die aktuelle
+                // Geometrie angepasst — sonst könnte eine andere Vermassung/Constraint die
+                // Länge verändern und der Sollwert würde stillschweigend auf den (falschen)
+                // Ist-Wert überschrieben. PropagateVermConstraintsLive/ApplyLengthConstraint
+                // setzt die Geometrie ohnehin anhand des unveränderten en.Value durch.
+                string? lbl = hideLabel ? null : curLen.ToString("F2", inv) + " mm";
+                DrawOneLine(p1abs.Value.x, p1abs.Value.y, p2abs.Value.x, p2abs.Value.y, drawOffset, lbl);
+            }
+            else if (en.Kind == VermKind.ParallelDist)
+            {
+                var q1abs = GetPfadAbsAt(en.Q1Idx); if (q1abs == null) continue;
+                double l = Math.Sqrt(Math.Pow(p2abs.Value.x - p1abs.Value.x, 2) + Math.Pow(p2abs.Value.y - p1abs.Value.y, 2));
+                if (l < 1e-9) continue;
+                double nx = -(p2abs.Value.y - p1abs.Value.y)/l, ny = (p2abs.Value.x - p1abs.Value.x)/l;
+                double curDist = Math.Round(Math.Abs((q1abs.Value.x - p1abs.Value.x)*nx + (q1abs.Value.y - p1abs.Value.y)*ny), 3);
+                if (Math.Abs(curDist - en.Value) > 0.0005)
+                    _vermPlaced[ei] = en = en with { Value = curDist };
+                string? lbl = hideLabel ? null : curDist.ToString("F2", inv) + " mm";
+                DrawParallelLine(p1abs.Value.x, p1abs.Value.y, p2abs.Value.x, p2abs.Value.y,
+                                 q1abs.Value.x, q1abs.Value.y, drawOffset, lbl);
+            }
+            else if (en.Kind == VermKind.Angle)
+            {
+                var q1abs = GetPfadAbsAt(en.Q1Idx); if (q1abs == null) continue;
+                var q2abs = GetPfadAbsAt(en.Q2Idx); if (q2abs == null) continue;
+                // Der gespeicherte Sollwinkel (en.Value) wird hier NICHT mehr an die aktuelle
+                // Geometrie angepasst — anders als z.B. bei Länge, die sich bewusst nachzieht.
+                // Eine Winkelbemaßung ist ein fester Sollwert: ändert eine andere Bemaßung die
+                // Geometrie, muss PropagateVermConstraintsLive/ApplyAngleConstraint den Winkel
+                // anhand des unveränderten en.Value zurückkorrigieren, statt dass der Sollwert
+                // hier im Zeichen-Code stillschweigend auf den (falschen) Ist-Winkel überschrieben
+                // wird — genau das führte dazu, dass sich Winkelwerte durch andere Vermassungen
+                // verändern konnten.
+                double curActual = Math.Round(VermArcSpanActual(p1abs.Value, p2abs.Value, q1abs.Value, q2abs.Value), 2);
+                // Anzeige als spitzer Winkel (0°=parallel, 90°=rechtwinklig)
+                double curDisplay = curActual > 90.0 ? 180.0 - curActual : curActual;
+                string? lbl = hideLabel ? null : curDisplay.ToString("F2", inv) + "°";
+                var interA = LinesIntersection(p1abs.Value, p2abs.Value, q1abs.Value, q2abs.Value);
+                double arcR = interA.HasValue ? AngleArcRadius(drawOffset, p1abs.Value, p2abs.Value, interA.Value) : 20;
+                DrawAngleLine(p1abs.Value, p2abs.Value, q1abs.Value, q2abs.Value, arcR, lbl);
+            }
+            else if ((en.Kind == VermKind.EdgeDist || en.Kind == VermKind.PointEdgeDist) && en.Edge > 0)
+            {
+                double curDist = Math.Round(EdgeDistValue(p2abs.Value.x, p2abs.Value.y, en.Edge), 3);
+                if (Math.Abs(curDist - en.Value) > 0.0005)
+                    _vermPlaced[ei] = en = en with { Value = curDist };
+                string? lbl = hideLabel ? null : curDist.ToString("F2", inv) + " mm";
+                DrawEdgeDist(p2abs.Value.x, p2abs.Value.y, en.Edge, drawOffset, lbl);
+            }
+            else if (en.Kind == VermKind.EdgeAngle && en.Edge > 0 && p1abs != null)
+            {
+                var inter = SegmentEdgeIntersection(p1abs.Value, p2abs.Value, en.Edge);
+                if (inter == null) continue;
+                var (e1, e2) = EdgeVirtualSegment(inter.Value, en.Edge);
+                double curActual = Math.Round(VermArcSpanActual(p1abs.Value, p2abs.Value, e1, e2), 2);
+                if (Math.Abs(curActual - en.Value) > 0.005)
+                    _vermPlaced[ei] = en = en with { Value = curActual };
+                double curDisplay = curActual > 90.0 ? 180.0 - curActual : curActual;
+                string? lbl = hideLabel ? null : curDisplay.ToString("F2", inv) + "°";
+                double arcREA = AngleArcRadius(drawOffset, p1abs.Value, p2abs.Value, inter.Value);
+                DrawAngleLine(p1abs.Value, p2abs.Value, e1, e2, arcREA, lbl);
+            }
+            else if (en.Kind == VermKind.PointDist && p1abs != null)
+            {
+                double dx = p2abs.Value.x - p1abs.Value.x, dy = p2abs.Value.y - p1abs.Value.y;
+                double curLen = Math.Round(Math.Sqrt(dx*dx + dy*dy), 3);
+                if (Math.Abs(curLen - en.Value) > 0.0005)
+                    _vermPlaced[ei] = en = en with { Value = curLen };
+                string? lbl = hideLabel ? null : curLen.ToString("F2", inv) + " mm";
+                DrawOneLine(p1abs.Value.x, p1abs.Value.y, p2abs.Value.x, p2abs.Value.y, drawOffset, lbl);
+            }
+            else if (en.Kind == VermKind.LineToPoint && p1abs != null)
+            {
+                var q1abs2 = GetPfadAbsAt(en.Q1Idx); if (q1abs2 == null) continue;
+                double dx1 = p2abs.Value.x - p1abs.Value.x, dy1 = p2abs.Value.y - p1abs.Value.y;
+                double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1); if (l1 < 1e-9) continue;
+                double nx = -dy1/l1, ny = dx1/l1;
+                double curDist2 = Math.Round(Math.Abs((q1abs2.Value.x - p1abs.Value.x)*nx + (q1abs2.Value.y - p1abs.Value.y)*ny), 3);
+                if (Math.Abs(curDist2 - en.Value) > 0.0005)
+                    _vermPlaced[ei] = en = en with { Value = curDist2 };
+                string? lbl = hideLabel ? null : curDist2.ToString("F2", inv) + " mm";
+                DrawParallelLine(p1abs.Value.x, p1abs.Value.y, p2abs.Value.x, p2abs.Value.y,
+                                 q1abs2.Value.x, q1abs2.Value.y, drawOffset, lbl);
+            }
+        }
+
+        // ── Geometrie-Constraint-Symbole ─────────────────────────────────────
+        DrawGeomConstraintSymbols(canvas);
+
+        // ── Aktive Vorschau (nur wenn Werkzeug aktiv) ────────────────────────
+        if (!isVermActive) goto repositionTextBox;
+
+        if (_vermState == 1 && _vermIsHolding && _vermP1Idx >= 0)
+        {
+            double previewOff = VermSignedOffset(_vermMouseMm.x, _vermMouseMm.y, _vermP1Abs, _vermP2Abs);
+            double dl = VermSegmentLength();
+            DrawOneLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y,
+                previewOff, dl.ToString("F2", inv) + " mm");
+        }
+        else if (_vermState == 5
+            && (_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist)
+            && _vermActiveEdge > 0 && _vermP2Idx >= 0)
+        {
+            // EdgeDist/PointEdgeDist-Vorschau: Masslinie folgt der Maus
+            bool isHoriz = (_vermActiveEdge == 1 || _vermActiveEdge == 2);
+            double previewOff = isHoriz ? _vermMouseMm.y - _vermP2Abs.y : _vermMouseMm.x - _vermP2Abs.x;
+            double dist = EdgeDistValue(_vermP2Abs.x, _vermP2Abs.y, _vermActiveEdge);
+            DrawEdgeDist(_vermP2Abs.x, _vermP2Abs.y, _vermActiveEdge, previewOff, dist.ToString("F2", inv) + " mm");
+        }
+        else if (_vermState == 5 && _vermActiveKind == VermKind.EdgeAngle && _vermActiveEdge > 0 && _vermP1Idx >= 0)
+        {
+            // EdgeAngle-Vorschau: Bogenlinie folgt der Maus
+            var inter = SegmentEdgeIntersection(_vermP1Abs, _vermP2Abs, _vermActiveEdge);
+            if (inter != null)
+            {
+                double tEA = AngleTParam(_vermMouseMm.x, _vermMouseMm.y, _vermP1Abs, _vermP2Abs);
+                double rEA = AngleArcRadius(tEA, _vermP1Abs, _vermP2Abs, inter.Value);
+                var (e1, e2) = EdgeVirtualSegment(inter.Value, _vermActiveEdge);
+                double angA = VermArcSpanActual(_vermP1Abs, _vermP2Abs, e1, e2);
+                double angD = angA > 90 ? 180 - angA : angA;
+                DrawAngleLine(_vermP1Abs, _vermP2Abs, e1, e2, rEA, angD.ToString("F2", inv) + "°");
+            }
+        }
+        else if (_vermState == 5 && _vermActiveKind == VermKind.PointDist && _vermP1Idx >= 0)
+        {
+            double dx = _vermP2Abs.x - _vermP1Abs.x, dy = _vermP2Abs.y - _vermP1Abs.y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            if (len > 1e-9) {
+                double nx = -dy/len, ny = dx/len;
+                double off = (_vermMouseMm.x - (_vermP1Abs.x+_vermP2Abs.x)/2)*nx
+                           + (_vermMouseMm.y - (_vermP1Abs.y+_vermP2Abs.y)/2)*ny;
+                DrawOneLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y,
+                    off, len.ToString("F2", inv) + " mm");
+            }
+        }
+        else if (_vermState == 5 && _vermActiveKind == VermKind.LineToPoint && _vermP1Idx >= 0 && _vermQ1Idx >= 0)
+        {
+            double dx1 = _vermP2Abs.x - _vermP1Abs.x, dy1 = _vermP2Abs.y - _vermP1Abs.y;
+            double l2  = dx1*dx1 + dy1*dy1;
+            double t   = l2 < 1e-9 ? 0.5
+                : Math.Clamp((_vermMouseMm.x - _vermP1Abs.x)*dx1/l2 + (_vermMouseMm.y - _vermP1Abs.y)*dy1/l2, -2.0, 3.0);
+            double l1  = Math.Sqrt(l2);
+            double nx  = -dy1/l1, ny = dx1/l1;
+            double dist = Math.Abs((_vermQ1Abs.x - _vermP1Abs.x)*nx + (_vermQ1Abs.y - _vermP1Abs.y)*ny);
+            DrawParallelLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y,
+                _vermQ1Abs.x, _vermQ1Abs.y, t, dist.ToString("F2", inv) + " mm");
+        }
+        else if (_vermState == 5 && _vermP1Idx >= 0 && _vermQ1Idx >= 0)
+        {
+            if (_vermActiveKind == VermKind.ParallelDist)
+            {
+                double dx1 = _vermP2Abs.x - _vermP1Abs.x, dy1 = _vermP2Abs.y - _vermP1Abs.y;
+                double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1); if (l1 > 1e-9)
+                {
+                    double nx = -dy1/l1, ny = dx1/l1;
+                    double l2 = dx1*dx1 + dy1*dy1;
+                    double t = l2 < 1e-9 ? 0.5
+                        : Math.Clamp((_vermMouseMm.x - _vermP1Abs.x)*dx1/l2 + (_vermMouseMm.y - _vermP1Abs.y)*dy1/l2, -2.0, 3.0);
+                    double dist = Math.Abs((_vermQ1Abs.x - _vermP1Abs.x)*nx + (_vermQ1Abs.y - _vermP1Abs.y)*ny);
+                    DrawParallelLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y,
+                        _vermQ1Abs.x, _vermQ1Abs.y, t, dist.ToString("F2", inv) + " mm");
+                }
+            }
+            else // Angle
+            {
+                var inter = LinesIntersection(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs);
+                if (inter != null)
+                {
+                    double tPrev = AngleTParam(_vermMouseMm.x, _vermMouseMm.y, _vermP1Abs, _vermP2Abs);
+                    double rPrev = AngleArcRadius(tPrev, _vermP1Abs, _vermP2Abs, inter.Value);
+                    double angA2 = VermArcSpanActual(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs);
+                    double angD2 = angA2 > 90 ? 180 - angA2 : angA2;
+                    DrawAngleLine(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs,
+                        rPrev, angD2.ToString("F2", inv) + "°");
+                }
+            }
+        }
+        else if (_vermState == 2 && _vermP1Idx >= 0)
+        {
+            // State 2: TextBox offen, zeige Masslinie ohne Label (TextBox übernimmt)
+            if (_vermActiveKind == VermKind.Length)
+                DrawOneLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y, _vermOffset, null);
+            else if (_vermActiveKind == VermKind.ParallelDist)
+                DrawParallelLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y,
+                    _vermQ1Abs.x, _vermQ1Abs.y, _vermOffset, null);
+            else if (_vermActiveKind == VermKind.Angle && _vermQ1Idx >= 0)
+            {
+                var interS2 = LinesIntersection(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs);
+                if (interS2.HasValue) {
+                    double rS2 = AngleArcRadius(_vermOffset, _vermP1Abs, _vermP2Abs, interS2.Value);
+                    DrawAngleLine(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs, rS2, null);
+                }
+            }
+            else if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist)
+                     && _vermActiveEdge > 0 && _vermP2Idx >= 0)
+                DrawEdgeDist(_vermP2Abs.x, _vermP2Abs.y, _vermActiveEdge, _vermOffset, null);
+            else if (_vermActiveKind == VermKind.EdgeAngle && _vermActiveEdge > 0 && _vermP1Idx >= 0)
+            {
+                var inter = SegmentEdgeIntersection(_vermP1Abs, _vermP2Abs, _vermActiveEdge);
+                if (inter != null) {
+                    var (e1,e2) = EdgeVirtualSegment(inter.Value, _vermActiveEdge);
+                    double rEA2 = AngleArcRadius(_vermOffset, _vermP1Abs, _vermP2Abs, inter.Value);
+                    DrawAngleLine(_vermP1Abs, _vermP2Abs, e1, e2, rEA2, null);
+                }
+            }
+        }
+
+        repositionTextBox:
+        if (_vermState == 2 && _vermTextBox != null)
+        {
+            var pos = VermLabelScreenPos();
+            System.Windows.Controls.Canvas.SetLeft(_vermTextBox, pos.X - 40);
+            System.Windows.Controls.Canvas.SetTop (_vermTextBox, pos.Y - 28);
+        }
+    }
+
+    // Bounding Box einer Pfad-Kette in mm
+    // Erweitert bbox mit einem Punkt
+    private static void ExpandBBox(ref double minX, ref double minY, ref double maxX, ref double maxY,
+        double x, double y)
+    {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+    }
+
+    // Erweitert bbox mit dem exakten Bogen zwischen p1 und p2 mit Mittelpunkt midAbs
+    private static void ExpandBBoxForArc(ref double minX, ref double minY, ref double maxX, ref double maxY,
+        (double x, double y) p1, (double x, double y) p2, (double x, double y) midAbs)
+    {
+        // Sehne
+        double dx = p2.x - p1.x, dy = p2.y - p1.y;
+        double L = Math.Sqrt(dx * dx + dy * dy);
+        if (L < 1e-10) return;
+
+        // Pfeilhöhe h (vorzeichenbehaftet, links-positiv)
+        double perpX = -dy / L, perpY = dx / L;
+        double mcx = (p1.x + p2.x) / 2, mcy = (p1.y + p2.y) / 2;
+        double h = (midAbs.x - mcx) * perpX + (midAbs.y - mcy) * perpY;
+        if (Math.Abs(h) < 1e-10) return; // Gerade
+
+        // Kreisradius und Zentrum
+        double half = L / 2;
+        double R = (half * half + h * h) / (2 * Math.Abs(h));
+        // Zentrum liegt auf der Gegenseite der Sehne (von midAbs aus gesehen)
+        double cx = mcx - (R - Math.Abs(h)) * Math.Sign(h) * perpX;
+        double cy = mcy - (R - Math.Abs(h)) * Math.Sign(h) * perpY;
+
+        // Start- und Endwinkel
+        double a1 = Math.Atan2(p1.y - cy, p1.x - cx);
+        double a2 = Math.Atan2(p2.y - cy, p2.x - cx);
+        double am = Math.Atan2(midAbs.y - cy, midAbs.x - cx); // Bogenmitte-Winkel
+
+        // Sweep-Richtung: CCW wenn h > 0 (Bogenmitte links), CW sonst
+        bool ccw = h > 0;
+        // Normalisierung: a2 muss nach a1 in der Sweep-Richtung liegen
+        if (ccw && a2 < a1) a2 += 2 * Math.PI;
+        if (!ccw && a2 > a1) a2 -= 2 * Math.PI;
+
+        // Prüfe ob Bogenmitte zwischen a1 und a2 liegt (Sanity-Check für Richtung)
+        double amAdj = am;
+        if (ccw && amAdj < a1) amAdj += 2 * Math.PI;
+        if (!ccw && amAdj > a1) amAdj -= 2 * Math.PI;
+        if ((ccw && amAdj > a2) || (!ccw && amAdj < a2))
+        {
+            // Richtung umkehren
+            ccw = !ccw;
+            a2 = Math.Atan2(p2.y - cy, p2.x - cx);
+            if (ccw && a2 < a1) a2 += 2 * Math.PI;
+            if (!ccw && a2 > a1) a2 -= 2 * Math.PI;
+        }
+
+        // Kardinalwinkel prüfen (0°, 90°, 180°, 270°)
+        double[] cardinals = { 0, Math.PI / 2, Math.PI, 3 * Math.PI / 2 };
+        foreach (double card in cardinals)
+        {
+            // Normalisiere card relativ zu a1
+            double ca = card;
+            if (ccw) { while (ca < a1) ca += 2 * Math.PI; }
+            else      { while (ca > a1) ca -= 2 * Math.PI; }
+            bool inArc = ccw ? (ca >= a1 && ca <= a2) : (ca <= a1 && ca >= a2);
+            if (inArc)
+                ExpandBBox(ref minX, ref minY, ref maxX, ref maxY,
+                    cx + R * Math.Cos(card), cy + R * Math.Sin(card));
+        }
+    }
+
+    private (double minX, double minY, double maxX, double maxY)? GetChainBBox(int startIdx)
+    {
+        double minX = double.MaxValue, minY = double.MaxValue;
+        double maxX = double.MinValue, maxY = double.MinValue;
+        bool any = false;
+        for (int i = startIdx; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams pp) break;
+            if (i > startIdx && pp.Typ == PfadPunktTyp.Start) break;
+            var abs = GetPfadAbsAt(i);
+            if (abs == null) continue;
+            ExpandBBox(ref minX, ref minY, ref maxX, ref maxY, abs.Value.x, abs.Value.y);
+            any = true;
+
+            // Für Bogen-Segmente: exakte Arc-BBox einbeziehen
+            if (pp.Typ == PfadPunktTyp.Bogen && i > startIdx)
+            {
+                var p1abs = GetPfadAbsAt(i - 1);
+                if (p1abs.HasValue)
+                {
+                    if (pp.BogenModus == "Bogenmitte")
+                    {
+                        // Kreiszentrum aus gespeichertem Offset berechnen
+                        (double cx, double cy) arcCtr;
+                        if (pp.Bezugspunkt == "Letzter Punkt")
+                            arcCtr = (p1abs.Value.x + pp.XMid, p1abs.Value.y + pp.YMid);
+                        else
+                            arcCtr = GCodeGenerator.ConvertBezugspunkt(pp.Bezugspunkt, pp.XMid, pp.YMid, WorkX, WorkY);
+                        double R = Math.Sqrt(Math.Pow(p1abs.Value.x - arcCtr.cx, 2) + Math.Pow(p1abs.Value.y - arcCtr.cy, 2));
+                        if (R > 1e-10)
+                        {
+                            // Bogenmitte-Punkt: auf Arc zwischen p1 und p2, auf der gegenüberliegenden Seite vom Zentrum zur Sehne
+                            double mcx = (p1abs.Value.x + abs.Value.x) / 2, mcy = (p1abs.Value.y + abs.Value.y) / 2;
+                            double dcx = mcx - arcCtr.cx, dcy = mcy - arcCtr.cy;
+                            double dcLen = Math.Sqrt(dcx * dcx + dcy * dcy);
+                            (double x, double y) arcApex = dcLen > 1e-10
+                                ? (arcCtr.cx + R * dcx / dcLen, arcCtr.cy + R * dcy / dcLen)
+                                : (arcCtr.cx + R, arcCtr.cy);
+                            ExpandBBoxForArc(ref minX, ref minY, ref maxX, ref maxY,
+                                p1abs.Value, abs.Value, arcApex);
+                        }
+                    }
+                    else
+                    {
+                        var midAbs = GetPfadSegMidAbs(i);
+                        if (midAbs.HasValue)
+                            ExpandBBoxForArc(ref minX, ref minY, ref maxX, ref maxY,
+                                p1abs.Value, abs.Value, midAbs.Value);
+                    }
+                }
+            }
+        }
+        if (!any) return null;
+        return (minX, minY, maxX, maxY);
+    }
+
+    // Trifft Cursor eine Pfad-Kette (Cursor innerhalb Bounding Box)?
+    private int HitTestPfadChainBBox(double mmX, double mmY)
+    {
+        double padMm = 4.0 / _zoom;
+        for (int i = 0; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams pp || pp.Typ != PfadPunktTyp.Start) continue;
+            var bbox = GetChainBBox(i);
+            if (bbox == null) continue;
+            if (mmX >= bbox.Value.minX - padMm && mmX <= bbox.Value.maxX + padMm &&
+                mmY >= bbox.Value.minY - padMm && mmY <= bbox.Value.maxY + padMm)
+                return i;
+        }
+        return -1;
+    }
+
+    private void StartMovePfadChain(int startIdx, double mmX, double mmY)
+    {
+        _pfadChainDragIdx   = startIdx;
+        _pfadChainDragMouse = (mmX, mmY);
+        _pfadChainDragOrigAbs.Clear();
+        for (int i = startIdx; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams pp) break;
+            if (i > startIdx && pp.Typ == PfadPunktTyp.Start) break;
+            _pfadChainDragOrigAbs.Add(GetPfadAbsAt(i) ?? (0, 0));
+        }
+        HistoryList.SelectedItem    = _history[startIdx];
+        TabEigenschaften.IsSelected = true;
+    }
+
+    private void UpdateMovePfadChain(double mmX, double mmY)
+    {
+        if (_pfadChainDragIdx < 0) return;
+        double dx = SnapX(mmX) - SnapX(_pfadChainDragMouse.x);
+        double dy = SnapY(mmY) - SnapY(_pfadChainDragMouse.y);
+        _suppressHistoryRegen = true;
+        try
+        {
+            int local = 0;
+            for (int i = _pfadChainDragIdx; i < _history.Count && local < _pfadChainDragOrigAbs.Count; i++, local++)
+            {
+                if (_history[i].Params is not PfadPunktParams p) break;
+                if (p.Bezugspunkt == "Letzter Punkt" && local > 0) continue; // relative bleibt gleich
+                var orig = _pfadChainDragOrigAbs[local];
+                var (newX, newY) = AbsToRel(p.Bezugspunkt, orig.x + dx, orig.y + dy, WorkX, WorkY);
+                _history[i] = new HistoryEntry(_history[i].Label, _history[i].Details,
+                    p with { XRel = Math.Round(newX, 3), YRel = Math.Round(newY, 3) }, _history[i].Level);
+            }
+        }
+        finally { _suppressHistoryRegen = false; }
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void CommitMovePfadChain()
+    {
+        if (_pfadChainDragIdx < 0) return;
+        int idx = _pfadChainDragIdx;
+        _pfadChainDragIdx = -1;
+        _pfadChainDragOrigAbs.Clear();
+        _suppressNextAutoFit = true;
+        PropagateVermConstraints();
+        CheckAndReportConstraints();
+        HistoryList.SelectedItem = _history[idx];
+        UpdateAll();
+    }
+
     // Treffertest: Pfad-Punkt in der Nähe von (mmX, mmY)? Gibt History-Index zurück.
     private int HitTestPfadPunkt(double mmX, double mmY)
     {
@@ -814,6 +3843,47 @@ public partial class MainWindow : Window
             if (abs == null) continue;
             double dx = abs.Value.x - mmX, dy = abs.Value.y - mmY;
             double dist = Math.Sqrt(dx * dx + dy * dy);
+            if (dist < tol && dist < bestDist) { bestDist = dist; best = i; }
+        }
+        return best;
+    }
+
+    // Midpoint des Segments, das bei p2Idx endet
+    private (double x, double y)? GetPfadSegMidAbs(int p2Idx)
+    {
+        if (p2Idx <= 0 || p2Idx >= _history.Count) return null;
+        if (_history[p2Idx].Params is not PfadPunktParams p2) return null;
+        var p2abs = GetPfadAbsAt(p2Idx);
+        var p1abs = GetPfadAbsAt(p2Idx - 1);
+        if (!p2abs.HasValue || !p1abs.HasValue) return null;
+
+        if (p2.Typ == PfadPunktTyp.Bogen && p2.BogenModus == "Pfeilhöhe")
+        {
+            double ddx = p2abs.Value.x - p1abs.Value.x, ddy = p2abs.Value.y - p1abs.Value.y;
+            double len = Math.Sqrt(ddx*ddx + ddy*ddy);
+            if (len > 1e-10)
+            {
+                double px = -ddy / len, py = ddx / len;
+                return ((p1abs.Value.x + p2abs.Value.x) / 2 + p2.XMid * px,
+                        (p1abs.Value.y + p2abs.Value.y) / 2 + p2.XMid * py);
+            }
+        }
+        return ((p1abs.Value.x + p2abs.Value.x) / 2, (p1abs.Value.y + p2abs.Value.y) / 2);
+    }
+
+    // Treffertest: Segment-Mittelpunkt
+    private int HitTestPfadSegMid(double mmX, double mmY)
+    {
+        double tol = 6.0 / _zoom;
+        int best = -1; double bestDist = double.MaxValue;
+        for (int i = 1; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams p2) continue;
+            if (p2.Typ == PfadPunktTyp.Start) continue;
+            var mid = GetPfadSegMidAbs(i);
+            if (mid == null) continue;
+            double dx = mid.Value.x - mmX, dy = mid.Value.y - mmY;
+            double dist = Math.Sqrt(dx*dx + dy*dy);
             if (dist < tol && dist < bestDist) { bestDist = dist; best = i; }
         }
         return best;
@@ -836,8 +3906,79 @@ public partial class MainWindow : Window
             _              => (absX,         absY)
         };
 
+    // Grenzen der Pfad-Kette, die idx enthält (Start-Idx, letzter Idx)
+    private (int startIdx, int endIdx) FindChainBounds(int idx)
+    {
+        int start = idx;
+        for (int i = idx; i >= 0; i--)
+        {
+            if (_history[i].Params is PfadPunktParams p) { if (p.Typ == PfadPunktTyp.Start) { start = i; break; } }
+            else break;
+        }
+        int end = start;
+        for (int i = start + 1; i < _history.Count; i++)
+        {
+            if (_history[i].Params is PfadPunktParams np && np.Typ != PfadPunktTyp.Start) end = i;
+            else break;
+        }
+        return (start, end);
+    }
+
+    // True wenn Start- und Endpunkt der Kette am selben Ort liegen
+    private bool IsChainClosed(int startIdx, int endIdx)
+    {
+        if (startIdx >= endIdx) return false;
+        var a = GetPfadAbsAt(startIdx);
+        var b = GetPfadAbsAt(endIdx);
+        if (!a.HasValue || !b.HasValue) return false;
+        double dx = a.Value.x - b.Value.x, dy = a.Value.y - b.Value.y;
+        return (dx * dx + dy * dy) < 0.01 * 0.01;
+    }
+
+    // True wenn a und b dieselbe Pfad-Ecke sind — entweder identischer Index, oder
+    // Start-/Endpunkt einer geschlossenen Kette (die zeichnerisch am selben Ort liegen,
+    // aber unterschiedliche History-Indizes haben). Ohne diese Prüfung erkennt z.B.
+    // ApplyAngleConstraint den gemeinsamen Eckpunkt zwischen der letzten und der ersten
+    // Linie eines geschlossenen Pfades nicht als "geteilt" und wählt über die
+    // Schnittpunkt-Heuristik den falschen Pivot — wodurch am Ende der eigentlich fixe
+    // Startpunkt des Pfades mitverschoben wird.
+    private bool SamePathCorner(int a, int b)
+    {
+        if (a == b) return true;
+        if (a < 0 || b < 0) return false;
+        var (stA, enA) = FindChainBounds(a);
+        var (stB, enB) = FindChainBounds(b);
+        if (stA != stB || enA != enB) return false;
+        if (!IsChainClosed(stA, enA)) return false;
+        return (a == stA && b == enA) || (a == enA && b == stA);
+    }
+
+    // True wenn idx der Start- oder Endpunkt einer GESCHLOSSENEN Kette ist. Diese beiden Indizes
+    // liegen zeichnerisch am selben Ort, sind aber zwei unterschiedliche History-Einträge — und
+    // UpdatePfadPunktPos führt beim Verschieben des einen automatisch auch den anderen synchron
+    // mit ("Partner-Punkt", siehe dort). Ein Constraint-Apply, der einen dieser beiden Indizes
+    // hart verschiebt, verschiebt also unbemerkt auch den jeweils anderen — obwohl der oft als
+    // fixer Anker für ganz andere Vermassungen (z.B. eine andere Length- oder EdgeDist-Vermassung)
+    // dient. Wird das nicht erkannt, "wandert" der Anker bei völlig unabhängigen Constraint-Edits.
+    private bool IsClosedChainEndpoint(int idx)
+    {
+        if (idx < 0) return false;
+        var (st, en) = FindChainBounds(idx);
+        if (st == en) return false;
+        if (!IsChainClosed(st, en)) return false;
+        return idx == st || idx == en;
+    }
+
     // Pfad-Punkt auf neue absolute Position verschieben
-    private void UpdatePfadPunktPos(int idx, double newAbsX, double newAbsY)
+    // preserveFollowers = true  → nachfolgende "Letzter Punkt"-Punkte werden auf ihrer
+    //                             absoluten Position eingefroren (Drag-Verhalten).
+    // preserveFollowers = false → nachfolgende Punkte folgen dem verschobenen Punkt
+    //                             automatisch (relative Koordinaten bleiben unverändert).
+    //                             Verwenden für alle Vermassen-Constraints, damit der
+    //                             Pfad nach dem vermassten Punkt seine Form behält
+    //                             und nicht eingefroren/verzerrt wird.
+    private void UpdatePfadPunktPos(int idx, double newAbsX, double newAbsY,
+                                    bool preserveFollowers = true, bool onlyThisPoint = false)
     {
         if (idx < 0 || idx >= _history.Count) return;
         if (_history[idx].Params is not PfadPunktParams pfad) return;
@@ -845,36 +3986,41 @@ public partial class MainWindow : Window
         string MkDet(PfadPunktParams p) => p.Typ switch
         {
             PfadPunktTyp.Bogen => (p.BogenModus == "Bogenmitte"
-                ? $"X={p.XRel} Y={p.YRel}, M={p.XMid}/{p.YMid}, {p.Bezugspunkt}"
-                : $"X={p.XRel} Y={p.YRel}, {p.BogenModus}={p.XMid}, {p.Bezugspunkt}"),
-            PfadPunktTyp.Linie => $"X={p.XRel} Y={p.YRel}, {p.Bezugspunkt}",
-            _                  => $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}, {p.Bezugspunkt}"
+                ? $"X={p.XRel} Y={p.YRel}, M={p.XMid}/{p.YMid}"
+                : $"X={p.XRel} Y={p.YRel}, {p.BogenModus}={p.XMid}"),
+            PfadPunktTyp.Linie => $"X={p.XRel} Y={p.YRel}",
+            _                  => $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}"
         };
-        string MkLbl(PfadPunktParams p) => p.Typ switch
+        string MkLbl(int i, PfadPunktParams p) => p.Typ switch
         {
-            PfadPunktTyp.Bogen => "Pfad Bogen",
-            PfadPunktTyp.Linie => "Pfad Linie",
+            PfadPunktTyp.Bogen => $"Pfad Bogen #{PfadPunktNummer(i)}",
+            PfadPunktTyp.Linie => $"Pfad Linie #{PfadPunktNummer(i)}",
             _                  => "Pfad Start"
         };
 
         // Absolutpositionen aller nachfolgenden "Letzter Punkt"-Punkte VOR der Änderung sichern.
         // Nur solange die Kette ununterbrochen "Letzter Punkt" verwendet; erstes anderes Bezug
         // bricht die direkte Abhängigkeit.
+        // Bei preserveFollowers=false werden die Folge-Punkte NICHT eingefroren —
+        // sie folgen dem verschobenen Punkt automatisch über ihre relativen Koordinaten.
+        // Bei onlyThisPoint=true wird nur dieser eine Punkt geändert, nichts weiter.
         var follow = new List<(int j, double ax, double ay, double mx, double my)>();
-        for (int j = idx + 1; j < _history.Count; j++)
+        if (preserveFollowers && !onlyThisPoint)
         {
-            if (_history[j].Params is not PfadPunktParams nxt) break;
-            if (nxt.Bezugspunkt != "Letzter Punkt") break;
-            var jAbs = GetPfadAbsAt(j);
-            if (!jAbs.HasValue) break;
-            // Absolut-Position des Bogenmittelpunkts (nur Bogenmitte-Modus mit Letzter Punkt)
-            double mAbsX = 0, mAbsY = 0;
-            if (nxt.Typ == PfadPunktTyp.Bogen && nxt.BogenModus == "Bogenmitte")
+            for (int j = idx + 1; j < _history.Count; j++)
             {
-                var prevA = GetPfadAbsAt(j - 1);
-                if (prevA.HasValue) { mAbsX = prevA.Value.x + nxt.XMid; mAbsY = prevA.Value.y + nxt.YMid; }
+                if (_history[j].Params is not PfadPunktParams nxt) break;
+                if (nxt.Bezugspunkt != "Letzter Punkt") break;
+                var jAbs = GetPfadAbsAt(j);
+                if (!jAbs.HasValue) break;
+                double mAbsX = 0, mAbsY = 0;
+                if (nxt.Typ == PfadPunktTyp.Bogen && nxt.BogenModus == "Bogenmitte")
+                {
+                    var prevA = GetPfadAbsAt(j - 1);
+                    if (prevA.HasValue) { mAbsX = prevA.Value.x + nxt.XMid; mAbsY = prevA.Value.y + nxt.YMid; }
+                }
+                follow.Add((j, jAbs.Value.x, jAbs.Value.y, mAbsX, mAbsY));
             }
-            follow.Add((j, jAbs.Value.x, jAbs.Value.y, mAbsX, mAbsY));
         }
 
         // Neues XRel/YRel für den verschobenen Punkt berechnen
@@ -894,11 +4040,16 @@ public partial class MainWindow : Window
         }
         var np = pfad with { XRel = xRel, YRel = yRel };
 
+        // Geschlossener Pfad: vor jeder Änderung prüfen (IsChainClosed verlässt sich auf unveränderte History)
+        var (chainSt, chainEn) = FindChainBounds(idx);
+        bool closedPath = chainSt != chainEn && IsChainClosed(chainSt, chainEn);
+        var origChainStAbs = (closedPath && idx == chainEn) ? GetPfadAbsAt(chainSt) : null;
+
         _eigSuppressUpdate    = true;
         _suppressHistoryRegen = true;
         try
         {
-            _history[idx] = new HistoryEntry(MkLbl(np), MkDet(np), np, _history[idx].Level);
+            _history[idx] = new HistoryEntry(MkLbl(idx, np), MkDet(np), np, _history[idx].Level);
 
             // Jeden abhängigen Folge-Punkt auf seine gespeicherte Absolutposition zurücksetzen.
             // prevX/prevY = Absolutposition des gerade vorangegangenen Punkts (nach Anpassung).
@@ -915,8 +4066,46 @@ public partial class MainWindow : Window
                     nyMid = Math.Round(my - prevY, 3);
                 }
                 var nxtNp = nxt with { XRel = nxRel, YRel = nyRel, XMid = nxMid, YMid = nyMid };
-                _history[j] = new HistoryEntry(MkLbl(nxtNp), MkDet(nxtNp), nxtNp, _history[j].Level);
+                _history[j] = new HistoryEntry(MkLbl(j, nxtNp), MkDet(nxtNp), nxtNp, _history[j].Level);
                 prevX = ax; prevY = ay; // Absolutposition dieses Punkts als Referenz für den Nächsten
+            }
+
+            // Geschlossener Pfad: Partner-Punkt synchron mitführen
+            if (closedPath)
+            {
+                if (idx == chainSt)
+                {
+                    if (_history[chainEn].Params is PfadPunktParams ep)
+                    {
+                        double exRel, eyRel;
+                        if (ep.Bezugspunkt == "Letzter Punkt")
+                        {
+                            var prevA = GetPfadAbsAt(chainEn - 1);
+                            exRel = Math.Round(newAbsX - (prevA?.x ?? 0), 3);
+                            eyRel = Math.Round(newAbsY - (prevA?.y ?? 0), 3);
+                        }
+                        else { (exRel, eyRel) = InverseBezugspunkt(ep.Bezugspunkt, newAbsX, newAbsY, w, h); exRel = Math.Round(exRel, 3); eyRel = Math.Round(eyRel, 3); }
+                        var enp = ep with { XRel = exRel, YRel = eyRel };
+                        _history[chainEn] = new HistoryEntry(MkLbl(chainEn, enp), MkDet(enp), enp, _history[chainEn].Level);
+                    }
+                }
+                else if (idx == chainEn && _history[chainSt].Params is PfadPunktParams sp)
+                {
+                    // sp.XRel/YRel sind noch die Original-Werte (sp wurde vor der Überschreibung captured)
+                    var (origSX, origSY) = GCodeGenerator.ConvertBezugspunkt(sp.Bezugspunkt, sp.XRel, sp.YRel, w, h);
+                    var (sxRel, syRel) = InverseBezugspunkt(sp.Bezugspunkt, newAbsX, newAbsY, w, h);
+                    var snp = sp with { XRel = Math.Round(sxRel, 3), YRel = Math.Round(syRel, 3) };
+                    _history[chainSt] = new HistoryEntry(MkLbl(chainSt, snp), MkDet(snp), snp, _history[chainSt].Level);
+                    // chainSt+1 mit "Letzter Punkt" auf absolute Position einfrieren
+                    int nextSt = chainSt + 1;
+                    if (nextSt < chainEn && _history[nextSt].Params is PfadPunktParams np2 && np2.Bezugspunkt == "Letzter Punkt")
+                    {
+                        double absNextX = origSX + np2.XRel;
+                        double absNextY = origSY + np2.YRel;
+                        var nn = np2 with { XRel = Math.Round(absNextX - newAbsX, 3), YRel = Math.Round(absNextY - newAbsY, 3) };
+                        _history[nextSt] = new HistoryEntry(MkLbl(nextSt, nn), MkDet(nn), nn, _history[nextSt].Level);
+                    }
+                }
             }
         }
         finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
@@ -927,7 +4116,500 @@ public partial class MainWindow : Window
         UpdateEigenschaften();
     }
 
+    // Liniensegment (beide Endpunkte) um delta verschieben
+    private void MovePfadLinienSegment(int p2Idx, double mmX, double mmY)
+    {
+        int p1Idx = p2Idx - 1;
+        if (p1Idx < 0) return;
+        if (_history[p1Idx].Params is not PfadPunktParams p1) return;
+        if (_history[p2Idx].Params is not PfadPunktParams p2) return;
+
+        double dx = mmX - _pfadSegDragMouse.x, dy = mmY - _pfadSegDragMouse.y;
+        double newP1X = _pfadSegDragP1.x + dx, newP1Y = _pfadSegDragP1.y + dy;
+        double newP2X = _pfadSegDragP2.x + dx, newP2Y = _pfadSegDragP2.y + dy;
+        double w = WorkX, h = WorkY;
+
+        double p1XR, p1YR;
+        if (p1.Bezugspunkt == "Letzter Punkt" && p1Idx > 0)
+        {
+            var prev = GetPfadAbsAt(p1Idx - 1);
+            p1XR = Math.Round(newP1X - (prev?.x ?? 0), 3);
+            p1YR = Math.Round(newP1Y - (prev?.y ?? 0), 3);
+        }
+        else { (p1XR, p1YR) = InverseBezugspunkt(p1.Bezugspunkt, newP1X, newP1Y, w, h); p1XR = Math.Round(p1XR, 3); p1YR = Math.Round(p1YR, 3); }
+
+        // p2 "Letzter Punkt": beide Punkte bewegen sich gleich → XRel bleibt unverändert
+        double p2XR = p2.Bezugspunkt == "Letzter Punkt"
+            ? p2.XRel : Math.Round(InverseBezugspunkt(p2.Bezugspunkt, newP2X, newP2Y, w, h).xRel, 3);
+        double p2YR = p2.Bezugspunkt == "Letzter Punkt"
+            ? p2.YRel : Math.Round(InverseBezugspunkt(p2.Bezugspunkt, newP2X, newP2Y, w, h).yRel, 3);
+
+        // Follow-Punkte nach p2 (absolute Positionen einfrieren)
+        var follow = new List<(int j, double ax, double ay, double mx, double my, PfadPunktParams np)>();
+        for (int j = p2Idx + 1; j < _history.Count; j++)
+        {
+            if (_history[j].Params is not PfadPunktParams nxt) break;
+            if (nxt.Bezugspunkt != "Letzter Punkt") break;
+            var jAbs = GetPfadAbsAt(j); if (!jAbs.HasValue) break;
+            double mAbsX = 0, mAbsY = 0;
+            if (nxt.Typ == PfadPunktTyp.Bogen && nxt.BogenModus == "Bogenmitte")
+            {
+                var prevA = GetPfadAbsAt(j - 1);
+                if (prevA.HasValue) { mAbsX = prevA.Value.x + nxt.XMid; mAbsY = prevA.Value.y + nxt.YMid; }
+            }
+            follow.Add((j, jAbs.Value.x, jAbs.Value.y, mAbsX, mAbsY, nxt));
+        }
+
+        string MkLbl(int i, PfadPunktParams p) => p.Typ switch { PfadPunktTyp.Bogen => $"Pfad Bogen #{PfadPunktNummer(i)}", PfadPunktTyp.Linie => $"Pfad Linie #{PfadPunktNummer(i)}", _ => "Pfad Start" };
+        string MkDet(PfadPunktParams p) => p.Typ switch
+        {
+            PfadPunktTyp.Bogen => p.BogenModus == "Bogenmitte" ? $"X={p.XRel} Y={p.YRel}, M={p.XMid}/{p.YMid}" : $"X={p.XRel} Y={p.YRel}, {p.BogenModus}={p.XMid}",
+            PfadPunktTyp.Linie => $"X={p.XRel} Y={p.YRel}",
+            _ => $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}"
+        };
+
+        var (chainSt, chainEn) = FindChainBounds(p2Idx);
+        bool closedPath = chainSt != chainEn && IsChainClosed(chainSt, chainEn);
+        // Original-Absolutposition des Startpunkts vor jeder Änderung sichern
+        var origChainStAbs = closedPath ? GetPfadAbsAt(chainSt) : null;
+
+        _eigSuppressUpdate = true; _suppressHistoryRegen = true;
+        try
+        {
+            var np1 = p1 with { XRel = p1XR, YRel = p1YR };
+            _history[p1Idx] = new HistoryEntry(MkLbl(p1Idx, np1), MkDet(np1), np1, _history[p1Idx].Level);
+            var np2 = p2 with { XRel = p2XR, YRel = p2YR };
+            _history[p2Idx] = new HistoryEntry(MkLbl(p2Idx, np2), MkDet(np2), np2, _history[p2Idx].Level);
+            double prevX = newP2X, prevY = newP2Y;
+            foreach (var (j, ax, ay, mx, my, nxt) in follow)
+            {
+                double nxMid = nxt.XMid, nyMid = nxt.YMid;
+                if (nxt.Typ == PfadPunktTyp.Bogen && nxt.BogenModus == "Bogenmitte")
+                { nxMid = Math.Round(mx - prevX, 3); nyMid = Math.Round(my - prevY, 3); }
+                var np = nxt with { XRel = Math.Round(ax - prevX, 3), YRel = Math.Round(ay - prevY, 3), XMid = nxMid, YMid = nyMid };
+                _history[j] = new HistoryEntry(MkLbl(j, np), MkDet(np), np, _history[j].Level);
+                prevX = ax; prevY = ay;
+            }
+
+            if (closedPath)
+            {
+                if (p1Idx == chainSt) // erste Linie: Endpunkt auf neues p1 legen
+                {
+                    if (_history[chainEn].Params is PfadPunktParams ep)
+                    {
+                        double exRel, eyRel;
+                        if (ep.Bezugspunkt == "Letzter Punkt")
+                        {
+                            var prevA = GetPfadAbsAt(chainEn - 1);
+                            exRel = Math.Round(newP1X - (prevA?.x ?? 0), 3);
+                            eyRel = Math.Round(newP1Y - (prevA?.y ?? 0), 3);
+                        }
+                        else { (exRel, eyRel) = InverseBezugspunkt(ep.Bezugspunkt, newP1X, newP1Y, w, h); exRel = Math.Round(exRel, 3); eyRel = Math.Round(eyRel, 3); }
+                        var enp = ep with { XRel = exRel, YRel = eyRel };
+                        _history[chainEn] = new HistoryEntry(MkLbl(chainEn, enp), MkDet(enp), enp, _history[chainEn].Level);
+                    }
+                }
+                else if (p2Idx == chainEn && _history[chainSt].Params is PfadPunktParams sp) // letzte Linie: Startpunkt auf neues p2 legen
+                {
+                    var (sxRel, syRel) = InverseBezugspunkt(sp.Bezugspunkt, newP2X, newP2Y, w, h);
+                    var snp = sp with { XRel = Math.Round(sxRel, 3), YRel = Math.Round(syRel, 3) };
+                    _history[chainSt] = new HistoryEntry(MkLbl(chainSt, snp), MkDet(snp), snp, _history[chainSt].Level);
+                    int nextSt = chainSt + 1;
+                    if (nextSt < p1Idx && origChainStAbs.HasValue &&
+                        _history[nextSt].Params is PfadPunktParams np3 && np3.Bezugspunkt == "Letzter Punkt")
+                    {
+                        double absNextX = origChainStAbs.Value.x + np3.XRel;
+                        double absNextY = origChainStAbs.Value.y + np3.YRel;
+                        var nn = np3 with { XRel = Math.Round(absNextX - newP2X, 3), YRel = Math.Round(absNextY - newP2Y, 3) };
+                        _history[nextSt] = new HistoryEntry(MkLbl(nextSt, nn), MkDet(nn), nn, _history[nextSt].Level);
+                    }
+                }
+            }
+        }
+        finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+    }
+
+    // Bogensegment: Pfeilhöhe über Drag-Position ändern
+    private void UpdateBogenPfeilhoehe(int p2Idx, double mmX, double mmY)
+    {
+        if (_history[p2Idx].Params is not PfadPunktParams p2) return;
+        if (p2.Typ != PfadPunktTyp.Bogen) return;
+
+        double chDx = _pfadSegDragP2.x - _pfadSegDragP1.x, chDy = _pfadSegDragP2.y - _pfadSegDragP1.y;
+        double chLen = Math.Sqrt(chDx*chDx + chDy*chDy);
+        if (chLen < 1e-10) return;
+
+        double pX = -chDy / chLen, pY = chDx / chLen; // links der Fahrrichtung
+        double mcX = (_pfadSegDragP1.x + _pfadSegDragP2.x) / 2;
+        double mcY = (_pfadSegDragP1.y + _pfadSegDragP2.y) / 2;
+        double newH = Math.Round((mmX - mcX) * pX + (mmY - mcY) * pY, 3);
+
+        string MkDet(PfadPunktParams p) => $"X={p.XRel} Y={p.YRel}, {p.BogenModus}={p.XMid}";
+
+        _eigSuppressUpdate = true; _suppressHistoryRegen = true;
+        try
+        {
+            var np = p2 with { BogenModus = "Pfeilhöhe", XMid = newH, YMid = 0 };
+            _history[p2Idx] = new HistoryEntry($"Pfad Bogen #{PfadPunktNummer(p2Idx)}", MkDet(np), np, _history[p2Idx].Level);
+        }
+        finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+        UpdateEigenschaften();
+    }
+
     // Pfad-Punkte als Dots zeichnen (für Move-Werkzeug)
+    private void DrawPfadChainBBoxes(SKCanvas canvas)
+    {
+        if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
+        double sc  = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+        float  pad = (float)(4.0 / _zoom);
+
+        bool dragging = _pfadChainDragIdx >= 0 || _pfadScaleChainIdx >= 0;
+        var boxColor    = dragging ? new SKColor(255, 160, 0, 200) : new SKColor(30, 120, 220, 180);
+        var anchorColor = dragging ? new SKColor(255, 160, 0, 230) : new SKColor(30, 120, 220, 220);
+
+        using var boxPaint = new SKPaint
+        {
+            Color = boxColor, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(1.2 / _zoom), IsAntialias = true,
+            PathEffect = SKPathEffect.CreateDash(new float[] { (float)(6 / _zoom), (float)(3 / _zoom) }, 0)
+        };
+        using var aFill   = new SKPaint { Color = anchorColor, Style = SKPaintStyle.Fill,   IsAntialias = true };
+        using var aStroke = new SKPaint { Color = SKColors.White, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(0.9 / _zoom), IsAntialias = true };
+
+        using var aHotFill = new SKPaint { Color = new SKColor(255, 220, 0, 255), Style = SKPaintStyle.Fill, IsAntialias = true };
+
+        for (int i = 0; i < _history.Count; i++)
+        {
+            if (_history[i].Params is not PfadPunktParams pp || pp.Typ != PfadPunktTyp.Start) continue;
+            var bboxOpt = GetChainBBox(i);
+            if (bboxOpt == null) continue;
+            var (minX, minY, maxX, maxY) = bboxOpt.Value;
+
+            float L = (float)(_topRect.Left   + minX * sc) - pad;
+            float R = (float)(_topRect.Left   + maxX * sc) + pad;
+            float T = (float)(_topRect.Bottom - maxY * sc) - pad;
+            float B = (float)(_topRect.Bottom - minY * sc) + pad;
+
+            canvas.DrawRect(L, T, R - L, B - T, boxPaint);
+
+            float as_ = (float)(4.5 / _zoom);
+            float mH  = (L + R) / 2f, mV = (T + B) / 2f;
+            float[] axs = { L, mH, R, L, R, L, mH, R };
+            float[] ays = { T, T,  T, mV, mV, B, B, B };
+            for (int a = 0; a < 8; a++)
+            {
+                bool hot = _pfadScaleChainIdx == i && _pfadScaleAnchor == a;
+                canvas.DrawRect(axs[a] - as_/2, ays[a] - as_/2, as_, as_, hot ? aHotFill : aFill);
+                canvas.DrawRect(axs[a] - as_/2, ays[a] - as_/2, as_, as_, aStroke);
+            }
+        }
+    }
+
+    // ── Geometrie-Constraint-Symbole zeichnen ──────────────────────────────
+    private void DrawGeomConstraintSymbols(SKCanvas canvas)
+    {
+        if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
+        (float x, float y) Px(double mx, double my) => (
+            (float)(_topRect.Left + mx * Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY)),
+            (float)(_topRect.Bottom - my * Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY)));
+
+        float symR  = (float)(9.0 / _zoom);  // Symbolradius in px (größer)
+        float thick = (float)(1.8 / _zoom);
+
+        using var symPaint = new SKPaint
+        {
+            Color = new SKColor(50, 180, 80, 230), Style = SKPaintStyle.Stroke,
+            StrokeWidth = thick, IsAntialias = true
+        };
+        using var symFill = new SKPaint
+        {
+            Color = new SKColor(50, 180, 80, 60), Style = SKPaintStyle.Fill, IsAntialias = true
+        };
+        using var selPaint = new SKPaint
+        {
+            Color = new SKColor(255, 140, 0, 240), Style = SKPaintStyle.Stroke,
+            StrokeWidth = thick, IsAntialias = true
+        };
+        using var selFill = new SKPaint
+        {
+            Color = new SKColor(255, 140, 0, 80), Style = SKPaintStyle.Fill, IsAntialias = true
+        };
+        using var refHighlight = new SKPaint
+        {
+            Color = new SKColor(255, 160, 0, 220), Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(3.5 / _zoom), IsAntialias = true, StrokeCap = SKStrokeCap.Round
+        };
+
+        // Hebt die Linie(n)/Punkte hervor, auf die ein ausgewähltes Constraint-Symbol verweist —
+        // damit beim Klick auf z.B. das Parallel-Symbol sofort sichtbar ist, welche Linie(n)
+        // gemeint sind.
+        void HighlightSeg(int hp1, int hp2)
+        {
+            var ha1 = GetPfadAbsAt(hp1); var ha2 = GetPfadAbsAt(hp2);
+            if (ha1 == null || ha2 == null) return;
+            var (hx1, hy1) = Px(ha1.Value.x, ha1.Value.y);
+            var (hx2, hy2) = Px(ha2.Value.x, ha2.Value.y);
+            canvas.DrawLine(hx1, hy1, hx2, hy2, refHighlight);
+        }
+        void HighlightPoint(int idx)
+        {
+            var pa = GetPfadAbsAt(idx);
+            if (pa == null) return;
+            var (px, py) = Px(pa.Value.x, pa.Value.y);
+            canvas.DrawCircle(px, py, symR * 0.9f, refHighlight);
+        }
+        void HighlightEdge(int edgeId)
+        {
+            if (edgeId <= 0) return;
+            var (ax, ay) = edgeId == 1 ? Px(0, 0) : edgeId == 2 ? Px(WorkX, 0) : edgeId == 3 ? Px(0, 0) : Px(0, WorkY);
+            var (bx, by) = edgeId == 1 ? Px(0, WorkY) : edgeId == 2 ? Px(WorkX, WorkY) : edgeId == 3 ? Px(WorkX, 0) : Px(WorkX, WorkY);
+            canvas.DrawLine(ax, ay, bx, by, refHighlight);
+        }
+        void HighlightCorner(int cornerId)
+        {
+            if (cornerId <= 0) return;
+            var (cmx, cmy) = WorkpieceCornerPos(cornerId);
+            var (px, py) = Px(cmx, cmy);
+            canvas.DrawCircle(px, py, symR * 0.9f, refHighlight);
+        }
+
+        for (int ei = 0; ei < _vermPlaced.Count; ei++)
+        {
+            var en  = _vermPlaced[ei];
+            bool isSel = (ei == _selectedGeomIdx);
+            var sp = isSel ? selPaint : symPaint;
+            var sf = isSel ? selFill  : symFill;
+
+            if (isSel)
+            {
+                switch (en.Kind)
+                {
+                    case VermKind.ParallelEdge:
+                    case VermKind.PerpendicularEdge:
+                        HighlightSeg(en.P1Idx, en.P2Idx);
+                        HighlightEdge(en.Edge);
+                        break;
+                    case VermKind.Perpendicular:
+                    case VermKind.Parallel:
+                        HighlightSeg(en.P1Idx, en.P2Idx);
+                        HighlightSeg(en.Q1Idx, en.Q2Idx);
+                        break;
+                    case VermKind.Coincident:
+                        HighlightPoint(en.P1Idx);
+                        HighlightPoint(en.P2Idx);
+                        break;
+                    case VermKind.CoincidentCorner:
+                        HighlightPoint(en.P2Idx);
+                        HighlightCorner(en.Edge);
+                        break;
+                }
+            }
+
+            if (en.Kind == VermKind.ParallelEdge || en.Kind == VermKind.PerpendicularEdge)
+            {
+                var p1a = GetPfadAbsAt(en.P1Idx); var p2a = GetPfadAbsAt(en.P2Idx);
+                if (p1a == null || p2a == null) continue;
+
+                if (en.Kind == VermKind.ParallelEdge)
+                {
+                    // Segment-Mittelpunkt
+                    double mx = (p1a.Value.x + p2a.Value.x) / 2, my = (p1a.Value.y + p2a.Value.y) / 2;
+                    var (cx2, cy2) = Px(mx, my);
+
+                    // "="-Symbol (zwei kurze parallele Striche, entlang Segment ausgerichtet), neben
+                    // der Konturlinie platziert — auf der Seite, die der versetzten Fräsbahn (Werkzeug-
+                    // radiuskorrektur) gegenüberliegt, damit sich Symbol und Bahn nicht überlappen.
+                    double ddx = p2a.Value.x - p1a.Value.x, ddy = p2a.Value.y - p1a.Value.y;
+                    double l = Math.Sqrt(ddx*ddx+ddy*ddy); if (l < 1e-9) continue;
+                    float sz = symR * 0.75f;
+                    float ux = (float)(ddx/l), uy = (float)(-ddy/l);
+                    float nx4 = -uy, ny4 = ux;
+                    var rk4 = GetRadiuskorrekturForSeg(en.P1Idx, en.P2Idx);
+                    float sgToolpath4 = rk4 == "Links" ? 1f : rk4 == "Rechts" ? -1f : 0f;
+                    float side4 = sgToolpath4 != 0 ? sgToolpath4 : 1f;
+                    float baseOff = symR * 1.5f, gap = symR * 0.5f;
+                    foreach (float k in new float[]{0f, 1f})
+                    {
+                        float dist = side4 * (baseOff + k * gap);
+                        float ox = cx2 + nx4 * dist, oy = cy2 + ny4 * dist;
+                        canvas.DrawLine(ox - ux * sz, oy - uy * sz, ox + ux * sz, oy + uy * sz, sp);
+                    }
+                }
+                else // PerpendicularEdge — L-Symbol an der Ecke, wo das Segment auf die Kante trifft
+                {
+                    double ddx = p2a.Value.x - p1a.Value.x, ddy = p2a.Value.y - p1a.Value.y;
+                    double l = Math.Sqrt(ddx*ddx+ddy*ddy); if (l < 1e-9) continue;
+
+                    double DistToEdge((double x, double y) pt) => en.Edge switch
+                    {
+                        1 => Math.Abs(pt.x),
+                        2 => Math.Abs(pt.x - WorkX),
+                        3 => Math.Abs(pt.y),
+                        4 => Math.Abs(pt.y - WorkY),
+                        _ => 0
+                    };
+                    var corner = DistToEdge(p1a.Value) <= DistToEdge(p2a.Value) ? p1a.Value : p2a.Value;
+                    var (cx2, cy2) = Px(corner.x, corner.y);
+
+                    float sq = symR * 0.85f;
+                    float ux1 = (float)(ddx/l * sq), uy1 = (float)(-ddy/l * sq);
+                    float ux2 = (float)(ddy/l * sq), uy2 = (float)(ddx/l  * sq);
+                    using var sqPath2 = new SKPath();
+                    sqPath2.MoveTo(cx2 + ux1, cy2 + uy1);
+                    sqPath2.LineTo(cx2 + ux1 + ux2, cy2 + uy1 + uy2);
+                    sqPath2.LineTo(cx2 + ux2, cy2 + uy2);
+                    canvas.DrawPath(sqPath2, sp);
+                }
+            }
+            else if (en.Kind == VermKind.Coincident)
+            {
+                var a = GetPfadAbsAt(en.P1Idx); var b = GetPfadAbsAt(en.P2Idx);
+                if (a == null || b == null) continue;
+                var (ax, ay) = Px(a.Value.x, a.Value.y);
+                var (bx, by) = Px(b.Value.x, b.Value.y);
+                canvas.DrawCircle(ax, ay, symR * 0.55f, sp);
+                canvas.DrawCircle(bx, by, symR * 0.55f, sp);
+                if (Math.Abs(ax - bx) > 0.5f || Math.Abs(ay - by) > 0.5f)
+                    canvas.DrawLine(ax, ay, bx, by, sp);
+            }
+            else if (en.Kind == VermKind.CoincidentCorner)
+            {
+                var ptAbs = GetPfadAbsAt(en.P2Idx);
+                if (ptAbs == null) continue;
+                var (px2, py2) = Px(ptAbs.Value.x, ptAbs.Value.y);
+                canvas.DrawCircle(px2, py2, symR * 0.6f, sp);
+                canvas.DrawCircle(px2, py2, symR * 0.3f, sp);
+            }
+            else if (en.Kind == VermKind.Perpendicular || en.Kind == VermKind.Parallel)
+            {
+                var p1a = GetPfadAbsAt(en.P1Idx); var p2a = GetPfadAbsAt(en.P2Idx);
+                if (p1a == null || p2a == null) continue;
+                double ddx = p2a.Value.x - p1a.Value.x, ddy = p2a.Value.y - p1a.Value.y;
+                double l = Math.Sqrt(ddx*ddx+ddy*ddy); if (l < 1e-9) continue;
+
+                if (en.Kind == VermKind.Parallel)
+                {
+                    double mx = (p1a.Value.x + p2a.Value.x) / 2, my = (p1a.Value.y + p2a.Value.y) / 2;
+                    var (cx3, cy3) = Px(mx, my);
+
+                    // "="-Symbol wie ParallelEdge — neben der Konturlinie, gegenüber der Fräsbahn
+                    float sz = symR * 0.75f;
+                    float ux = (float)(ddx/l), uy = (float)(-ddy/l);
+                    float nx5 = -uy, ny5 = ux;
+                    var rk5 = GetRadiuskorrekturForSeg(en.P1Idx, en.P2Idx);
+                    float sgToolpath5 = rk5 == "Links" ? 1f : rk5 == "Rechts" ? -1f : 0f;
+                    float side5 = sgToolpath5 != 0 ? sgToolpath5 : 1f;
+                    float baseOff5 = symR * 1.5f, gap = symR * 0.5f;
+                    foreach (float k in new float[]{0f, 1f})
+                    {
+                        float dist = side5 * (baseOff5 + k * gap);
+                        float ox = cx3 + nx5 * dist, oy = cy3 + ny5 * dist;
+                        canvas.DrawLine(ox - ux * sz, oy - uy * sz, ox + ux * sz, oy + uy * sz, sp);
+                    }
+                }
+                else // Perpendicular — L-Symbol an der gemeinsamen Ecke beider Segmente (falls vorhanden)
+                {
+                    // Gemeinsamer Punkt der beiden Segmente = die tatsächliche rechtwinklige Ecke
+                    int sharedIdx = en.P1Idx == en.Q1Idx || en.P1Idx == en.Q2Idx ? en.P1Idx
+                                  : en.P2Idx == en.Q1Idx || en.P2Idx == en.Q2Idx ? en.P2Idx
+                                  : -1;
+                    var cornerAbs = sharedIdx >= 0 ? GetPfadAbsAt(sharedIdx) : null;
+                    (double x, double y) corner = cornerAbs
+                        ?? ((p1a.Value.x + p2a.Value.x) / 2, (p1a.Value.y + p2a.Value.y) / 2);
+                    var (cx3, cy3) = Px(corner.x, corner.y);
+
+                    float sq = symR * 0.85f;
+                    float ux1 = (float)(ddx/l * sq), uy1 = (float)(-ddy/l * sq);
+                    float ux2 = (float)(ddy/l * sq), uy2 = (float)(ddx/l  * sq);
+                    using var sqPath3 = new SKPath();
+                    sqPath3.MoveTo(cx3 + ux1, cy3 + uy1);
+                    sqPath3.LineTo(cx3 + ux1 + ux2, cy3 + uy1 + uy2);
+                    sqPath3.LineTo(cx3 + ux2, cy3 + uy2);
+                    canvas.DrawPath(sqPath3, sp);
+                }
+            }
+        }
+    }
+
+    // Gibt den Index eines Geom-Constraint-Eintrags zurück wenn der Mausklick in der Nähe des Symbols liegt
+    private int HitTestGeomConstraintSymbol(double mmX, double mmY)
+    {
+        if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return -1;
+        double sc  = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+        double tol = 10.0 / _zoom;
+
+        for (int i = 0; i < _vermPlaced.Count; i++)
+        {
+            var en = _vermPlaced[i];
+            if (en.Kind != VermKind.Coincident && en.Kind != VermKind.Perpendicular && en.Kind != VermKind.Parallel
+             && en.Kind != VermKind.ParallelEdge && en.Kind != VermKind.PerpendicularEdge
+             && en.Kind != VermKind.CoincidentCorner) continue;
+
+            if (en.Kind == VermKind.Coincident)
+            {
+                var a = GetPfadAbsAt(en.P1Idx); var b = GetPfadAbsAt(en.P2Idx);
+                if (a == null || b == null) continue;
+                foreach (var pt in new[] { a.Value, b.Value })
+                    if (Math.Abs(pt.x - mmX) < tol && Math.Abs(pt.y - mmY) < tol) return i;
+            }
+            else if (en.Kind == VermKind.CoincidentCorner)
+            {
+                var ptAbs = GetPfadAbsAt(en.P2Idx);
+                if (ptAbs == null) continue;
+                if (Math.Abs(ptAbs.Value.x - mmX) < tol && Math.Abs(ptAbs.Value.y - mmY) < tol) return i;
+                var (cpx, cpy) = WorkpieceCornerPos(en.Edge);
+                if (Math.Abs(cpx - mmX) < tol && Math.Abs(cpy - mmY) < tol) return i;
+            }
+            else if (en.Kind == VermKind.Perpendicular || en.Kind == VermKind.PerpendicularEdge)
+            {
+                // Ecke, an der das L-Symbol tatsächlich gezeichnet wird
+                var p1a = GetPfadAbsAt(en.P1Idx); var p2a = GetPfadAbsAt(en.P2Idx);
+                if (p1a == null || p2a == null) continue;
+                (double x, double y) corner;
+                if (en.Kind == VermKind.PerpendicularEdge)
+                {
+                    double DistToEdge((double x, double y) pt) => en.Edge switch
+                    {
+                        1 => Math.Abs(pt.x), 2 => Math.Abs(pt.x - WorkX),
+                        3 => Math.Abs(pt.y), 4 => Math.Abs(pt.y - WorkY), _ => 0
+                    };
+                    corner = DistToEdge(p1a.Value) <= DistToEdge(p2a.Value) ? p1a.Value : p2a.Value;
+                }
+                else
+                {
+                    int sharedIdx = en.P1Idx == en.Q1Idx || en.P1Idx == en.Q2Idx ? en.P1Idx
+                                  : en.P2Idx == en.Q1Idx || en.P2Idx == en.Q2Idx ? en.P2Idx : -1;
+                    var cornerAbs = sharedIdx >= 0 ? GetPfadAbsAt(sharedIdx) : null;
+                    corner = cornerAbs ?? ((p1a.Value.x + p2a.Value.x) / 2, (p1a.Value.y + p2a.Value.y) / 2);
+                }
+                if (Math.Abs(corner.x - mmX) < tol && Math.Abs(corner.y - mmY) < tol) return i;
+            }
+            else // Parallel / ParallelEdge — Symbol liegt neben der Linie (gegenüber der Fräsbahn)
+            {
+                var p1a = GetPfadAbsAt(en.P1Idx); var p2a = GetPfadAbsAt(en.P2Idx);
+                if (p1a == null || p2a == null) continue;
+                double mx = (p1a.Value.x + p2a.Value.x) / 2, my = (p1a.Value.y + p2a.Value.y) / 2;
+                double ddx = p2a.Value.x - p1a.Value.x, ddy = p2a.Value.y - p1a.Value.y;
+                double l = Math.Sqrt(ddx*ddx+ddy*ddy);
+                if (l < 1e-9) { if (Math.Abs(mx - mmX) < tol && Math.Abs(my - mmY) < tol) return i; continue; }
+                double dxu = ddx/l, dyu = ddy/l;
+                var rk = GetRadiuskorrekturForSeg(en.P1Idx, en.P2Idx);
+                double sgTool = rk == "Links" ? 1.0 : rk == "Rechts" ? -1.0 : 0.0;
+                double side = sgTool != 0 ? sgTool : 1.0;
+                double symRmm = 9.0 / _zoom / sc;
+                double offMag = symRmm * 1.75;
+                double sx = mx + side * dyu * offMag, sy = my - side * dxu * offMag;
+                if (Math.Abs(sx - mmX) < tol * 1.3 && Math.Abs(sy - mmY) < tol * 1.3) return i;
+            }
+        }
+        return -1;
+    }
+
     private void DrawPfadPunkteDots(SKCanvas canvas)
     {
         if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
@@ -943,9 +4625,12 @@ public partial class MainWindow : Window
         using var selFill = new SKPaint { Color = new SKColor(220, 80, 0, 230),
             Style = SKPaintStyle.Fill, IsAntialias = true };
 
+        using var midFill = new SKPaint { Color = new SKColor(60, 180, 60, 200),
+            Style = SKPaintStyle.Fill, IsAntialias = true };
+
         for (int i = 0; i < _history.Count; i++)
         {
-            if (_history[i].Params is not PfadPunktParams) continue;
+            if (_history[i].Params is not PfadPunktParams pp) continue;
             var abs = GetPfadAbsAt(i);
             if (abs == null) continue;
             float cx = (float)(_topRect.Left   + abs.Value.x * sc);
@@ -953,6 +4638,24 @@ public partial class MainWindow : Window
             bool isSel = _history[i] == selEntry;
             canvas.DrawCircle(cx, cy, r, isSel ? selFill : fill);
             canvas.DrawCircle(cx, cy, r, stroke);
+
+            // Segment-Mittelpunkt-Anker (Raute) für Linien und Bögen
+            if (pp.Typ != PfadPunktTyp.Start && _activeTool == CanvasTool.Pfeil)
+            {
+                var midOpt = GetPfadSegMidAbs(i);
+                if (midOpt == null) continue;
+                float mx = (float)(_topRect.Left   + midOpt.Value.x * sc);
+                float my = (float)(_topRect.Bottom - midOpt.Value.y * sc);
+                float rd = (float)(4.0 / _zoom);
+                var path = new SKPath();
+                path.MoveTo(mx,      my - rd);
+                path.LineTo(mx + rd, my);
+                path.LineTo(mx,      my + rd);
+                path.LineTo(mx - rd, my);
+                path.Close();
+                canvas.DrawPath(path, midFill);
+                canvas.DrawPath(path, stroke);
+            }
         }
     }
 
@@ -997,6 +4700,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     // ── Eigenschaften-Tab ─────────────────────────────────────────
     private bool         _eigSuppressUpdate;
     private HistoryEntry? _lastShownEntry;   // letzter in Eigenschaften angezeigter Eintrag
+    private int          _eigEndIdx = -1;    // History-Index des Endpunkts bei geschlossenem Pfad
 
     private void UpdateEigenschaften()
     {
@@ -1007,10 +4711,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             // Visibility nur ändern wenn kein Apply läuft (sonst verliert EigText den Fokus)
             if (!_eigSuppressUpdate)
             {
-                TbEigKein.Visibility    = Visibility.Collapsed;
-                PnlGravieren.Visibility = Visibility.Visible;
-                PnlPfadStart.Visibility = Visibility.Collapsed;
-                PnlRechteck.Visibility  = Visibility.Collapsed;
+                TbEigKein.Visibility       = Visibility.Collapsed;
+                PnlGravieren.Visibility    = Visibility.Visible;
+                PnlPfadStart.Visibility    = Visibility.Collapsed;
+                PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+                PnlRechteck.Visibility     = Visibility.Collapsed;
+                PnlKreis.Visibility        = Visibility.Collapsed;
             }
 
             var inv = System.Globalization.CultureInfo.InvariantCulture;
@@ -1082,8 +4788,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 TbEigKein.Visibility            = Visibility.Collapsed;
                 PnlGravieren.Visibility         = Visibility.Collapsed;
                 PnlRechteck.Visibility          = Visibility.Collapsed;
+                PnlKreis.Visibility             = Visibility.Collapsed;
                 PnlPfadStart.Visibility         = Visibility.Visible;
                 PnlPfadEigStartOnly.Visibility    = isStart ? Visibility.Visible : Visibility.Collapsed;
+                PnlPfadEigBezug.Visibility        = Visibility.Collapsed;
                 PnlPfadEigBogenMid.Visibility    = isBogen ? Visibility.Visible : Visibility.Collapsed;
                 PnlPfadEigVerrundung.Visibility  = isStart ? Visibility.Collapsed : Visibility.Visible;
                 PfadEigTitel.Text = pfad.Typ switch
@@ -1119,16 +4827,56 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 if (entryChanged || !PfadEigVer.IsKeyboardFocused) PfadEigVer.Text = pfad.Verrundung.ToString(inv);
             foreach (ComboBoxItem ci in PfadEigBezug.Items)
                 if (ci.Content as string == pfad.Bezugspunkt) { PfadEigBezug.SelectedItem = ci; break; }
+
+            // Geschlossener Pfad: Endpunkt-Panel befüllen wenn Startpunkt ausgewählt
+            _eigEndIdx = -1;
+            int pfadIdx = _history.IndexOf(entry);
+            if (isStart && !_eigSuppressUpdate)
+            {
+                var (chainSt, chainEn) = FindChainBounds(pfadIdx);
+                if (chainSt != chainEn && IsChainClosed(chainSt, chainEn)
+                    && _history[chainEn].Params is PfadPunktParams endPfad)
+                {
+                    _eigEndIdx = chainEn;
+                    bool endIsBogen = endPfad.Typ == PfadPunktTyp.Bogen;
+                    PnlPfadEndPunkt.Visibility        = Visibility.Visible;
+                    PnlEndPfadEigBogenMid.Visibility  = endIsBogen ? Visibility.Visible : Visibility.Collapsed;
+                    PnlEndPfadEigVerrundung.Visibility = Visibility.Visible;
+                    EndPfadEigTitel.Text = endIsBogen ? "Endpunkt – Bogen (Pfad geschlossen)"
+                                                      : "Endpunkt – Linie (Pfad geschlossen)";
+                    if (entryChanged || !EndPfadEigX.IsKeyboardFocused) EndPfadEigX.Text = endPfad.XRel.ToString(inv);
+                    if (entryChanged || !EndPfadEigY.IsKeyboardFocused) EndPfadEigY.Text = endPfad.YRel.ToString(inv);
+                    if (entryChanged || !EndPfadEigVer.IsKeyboardFocused) EndPfadEigVer.Text = endPfad.Verrundung.ToString(inv);
+                    if (endIsBogen)
+                    {
+                        foreach (System.Windows.Controls.ComboBoxItem ci in EndPfadEigBogenModus.Items)
+                            if (ci.Content as string == endPfad.BogenModus) { EndPfadEigBogenModus.SelectedItem = ci; break; }
+                        if (entryChanged || !EndPfadEigXMid.IsKeyboardFocused) EndPfadEigXMid.Text = endPfad.XMid.ToString(inv);
+                        if (entryChanged || !EndPfadEigYMid.IsKeyboardFocused) EndPfadEigYMid.Text = endPfad.YMid.ToString(inv);
+                    }
+                }
+                else
+                {
+                    PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+                }
+            }
+            else if (!_eigSuppressUpdate)
+            {
+                PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+            }
+
             _eigSuppressUpdate = false;
         }
         else if (entry?.Params is RechteckParams rkt)
         {
             if (!_eigSuppressUpdate)
             {
-                TbEigKein.Visibility    = Visibility.Collapsed;
-                PnlGravieren.Visibility = Visibility.Collapsed;
-                PnlPfadStart.Visibility = Visibility.Collapsed;
-                PnlRechteck.Visibility  = Visibility.Visible;
+                TbEigKein.Visibility       = Visibility.Collapsed;
+                PnlGravieren.Visibility    = Visibility.Collapsed;
+                PnlPfadStart.Visibility    = Visibility.Collapsed;
+                PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+                PnlRechteck.Visibility     = Visibility.Visible;
+                PnlKreis.Visibility        = Visibility.Collapsed;
             }
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             _eigSuppressUpdate = true;
@@ -1154,12 +4902,47 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             UpdateRktModusVisibility(rkt.IsTasche);
             _eigSuppressUpdate = false;
         }
+        else if (entry?.Params is KreisParams kr)
+        {
+            if (!_eigSuppressUpdate)
+            {
+                TbEigKein.Visibility       = Visibility.Collapsed;
+                PnlGravieren.Visibility    = Visibility.Collapsed;
+                PnlPfadStart.Visibility    = Visibility.Collapsed;
+                PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+                PnlRechteck.Visibility     = Visibility.Collapsed;
+                PnlKreis.Visibility        = Visibility.Visible;
+            }
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            _eigSuppressUpdate = true;
+            KrEigWerkzeug.ItemsSource  = _werkzeuge.ToList();
+            KrEigWerkzeug.SelectedItem = _werkzeuge.FirstOrDefault(w => w.Nr == kr.WerkzeugNr)
+                                       ?? _werkzeuge.FirstOrDefault();
+            if (!KrEigX.IsKeyboardFocused)      KrEigX.Text      = kr.XRel.ToString(inv);
+            if (!KrEigY.IsKeyboardFocused)      KrEigY.Text      = kr.YRel.ToString(inv);
+            if (!KrEigRadius.IsKeyboardFocused) KrEigRadius.Text = kr.Radius.ToString(inv);
+            if (!KrEigZ.IsKeyboardFocused)      KrEigZ.Text      = kr.ZTiefe.ToString(inv);
+            KrEigFrAussen.IsChecked  = kr.Fraesung     == "Aussen";
+            KrEigFrInnen.IsChecked   = kr.Fraesung     == "Innen";
+            KrEigFrMittig.IsChecked  = kr.Fraesung     == "Mittig";
+            KrEigGegen.IsChecked     = kr.Laufrichtung == "Gegenlauf";
+            KrEigGleich.IsChecked    = kr.Laufrichtung == "Gleichlauf";
+            KrEigMehrfach.IsChecked  = kr.MehrfachZustellung;
+            if (!KrEigZZust.IsKeyboardFocused) KrEigZZust.Text = kr.ZZustellung.ToString(inv);
+            KrModusNut.IsChecked     = !kr.IsTasche;
+            KrModusTasche.IsChecked  = kr.IsTasche;
+            SetKrBezugRadio(kr.Bezugspunkt);
+            UpdateKrModusVisibility(kr.IsTasche);
+            _eigSuppressUpdate = false;
+        }
         else if (!_eigSuppressUpdate)
         {
-            TbEigKein.Visibility    = Visibility.Visible;
-            PnlGravieren.Visibility = Visibility.Collapsed;
-            PnlPfadStart.Visibility = Visibility.Collapsed;
-            PnlRechteck.Visibility  = Visibility.Collapsed;
+            TbEigKein.Visibility       = Visibility.Visible;
+            PnlGravieren.Visibility    = Visibility.Collapsed;
+            PnlPfadStart.Visibility    = Visibility.Collapsed;
+            PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+            PnlRechteck.Visibility     = Visibility.Collapsed;
+            PnlKreis.Visibility        = Visibility.Collapsed;
         }
     }
 
@@ -1177,7 +4960,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (!double.TryParse(Norm(PfadEigX.Text), sty, inv, out var xRel)) return;
         if (!double.TryParse(Norm(PfadEigY.Text), sty, inv, out var yRel)) return;
 
-        string bezug = (PfadEigBezug.SelectedItem as ComboBoxItem)?.Content as string ?? pfad.Bezugspunkt;
+        string bezug = "Unten links";
 
         PfadPunktParams np;
         string lbl, det;
@@ -1199,7 +4982,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 Eintauchwinkel = wz?.Eintauchwinkel ?? pfad.Eintauchwinkel,
             };
             lbl = "Pfad Start";
-            det = $"X={np.XRel} Y={np.YRel}, Z={np.ZTiefe}, {np.Bezugspunkt}";
+            det = $"X={np.XRel} Y={np.YRel}, Z={np.ZTiefe}";
         }
         else if (pfad.Typ == PfadPunktTyp.Bogen)
         {
@@ -1211,23 +4994,28 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             double.TryParse(Norm(PfadEigVer.Text), sty, inv, out var verB);
             np  = pfad with { XRel = xRel, YRel = yRel, XMid = xm, YMid = ym,
                               Bezugspunkt = bezug, BogenModus = bModus, Verrundung = Math.Max(0, verB) };
-            lbl = "Pfad Bogen";
+            lbl = $"Pfad Bogen #{PfadPunktNummer(idx)}";
             det = bMitte
-                ? $"X={np.XRel} Y={np.YRel}, M={np.XMid}/{np.YMid}, {np.Bezugspunkt}"
-                : $"X={np.XRel} Y={np.YRel}, {bModus}={np.XMid}, {np.Bezugspunkt}";
+                ? $"X={np.XRel} Y={np.YRel}, M={np.XMid}/{np.YMid}"
+                : $"X={np.XRel} Y={np.YRel}, {bModus}={np.XMid}";
         }
         else
         {
             double.TryParse(Norm(PfadEigVer.Text), sty, inv, out var verL);
             np  = pfad with { XRel = xRel, YRel = yRel, Bezugspunkt = bezug, Verrundung = Math.Max(0, verL) };
-            lbl = "Pfad Linie";
-            det = $"X={np.XRel} Y={np.YRel}, {np.Bezugspunkt}";
+            lbl = $"Pfad Linie #{PfadPunktNummer(idx)}";
+            det = $"X={np.XRel} Y={np.YRel}";
         }
 
         _eigSuppressUpdate    = true;
         _suppressHistoryRegen = true;
         try { _history[idx] = new HistoryEntry(lbl, det, np, entry.Level); }
         finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
+
+        // Bestehende Vermassungen (z.B. grünes Rechtwinklig-Symbol) erneut durchsetzen,
+        // damit eine manuelle Bearbeitung über das Eigenschaften-Panel sie nicht verletzt.
+        PropagateVermConstraintsLive();
+        ShowVermDiagIfViolated();
 
         _suppressNextAutoFit = true;
         RegenerateGCodeFromHistory();
@@ -1238,6 +5026,79 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void OnPfadEigSelChanged(object sender, SelectionChangedEventArgs e)     => ApplyPfadStartEig();
     private void OnPfadEigWerkzeugChanged(object sender, SelectionChangedEventArgs e) => ApplyPfadStartEig();
     private void OnPfadEigTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) => ApplyPfadStartEig();
+
+    // ── Endpunkt-Panel (geschlossener Pfad) ──────────────────────────────────
+    private void OnEndPfadEigLostFocus(object sender, RoutedEventArgs e)            => ApplyPfadEndPunktEig();
+    private void OnEndPfadEigSelChanged(object sender, SelectionChangedEventArgs e) => ApplyPfadEndPunktEig();
+    private void OnEndPfadEigTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) => ApplyPfadEndPunktEig();
+    private void OnEndPfadEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyPfadEndPunktEig(); }
+
+    private void OnEndPfadEigBogenModusChanged(object sender, SelectionChangedEventArgs e)
+    {
+        string modus = (EndPfadEigBogenModus.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Content as string ?? "Pfeilhöhe";
+        bool isMitte = modus == "Bogenmitte";
+        EndPfadEigBogenWertLabel.Text  = modus switch
+        {
+            "Radius"    => "Radius (mm):",
+            "Pfeilhöhe" => "Pfeilhöhe (mm):",
+            _           => "Bogen-Mitte X (mm):"
+        };
+        PnlEndPfadEigYMid.Visibility = isMitte ? Visibility.Visible : Visibility.Collapsed;
+        ApplyPfadEndPunktEig();
+    }
+
+    private void ApplyPfadEndPunktEig()
+    {
+        if (_eigSuppressUpdate || _eigEndIdx < 0) return;
+        if (_history[_eigEndIdx].Params is not PfadPunktParams pfad) return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sty = System.Globalization.NumberStyles.Float;
+        static string Norm(string s) => s.Replace(',', '.');
+        if (!double.TryParse(Norm(EndPfadEigX.Text), sty, inv, out var xRel)) return;
+        if (!double.TryParse(Norm(EndPfadEigY.Text), sty, inv, out var yRel)) return;
+
+        PfadPunktParams np;
+        string lbl, det;
+
+        if (pfad.Typ == PfadPunktTyp.Bogen)
+        {
+            string bModus = (EndPfadEigBogenModus.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Content as string ?? "Bogenmitte";
+            bool   bMitte = bModus == "Bogenmitte";
+            if (!double.TryParse(Norm(EndPfadEigXMid.Text), sty, inv, out var xm)) return;
+            double ym = 0;
+            if (bMitte && !double.TryParse(Norm(EndPfadEigYMid.Text), sty, inv, out ym)) return;
+            double.TryParse(Norm(EndPfadEigVer.Text), sty, inv, out var verB);
+            np  = pfad with { XRel = xRel, YRel = yRel, XMid = xm, YMid = ym,
+                              Bezugspunkt = "Unten links", BogenModus = bModus, Verrundung = Math.Max(0, verB) };
+            lbl = $"Pfad Bogen #{PfadPunktNummer(_eigEndIdx)}";
+            det = bMitte
+                ? $"X={np.XRel} Y={np.YRel}, M={np.XMid}/{np.YMid}"
+                : $"X={np.XRel} Y={np.YRel}, {bModus}={np.XMid}";
+        }
+        else
+        {
+            double.TryParse(Norm(EndPfadEigVer.Text), sty, inv, out var verL);
+            np  = pfad with { XRel = xRel, YRel = yRel, Bezugspunkt = "Unten links", Verrundung = Math.Max(0, verL) };
+            lbl = $"Pfad Linie #{PfadPunktNummer(_eigEndIdx)}";
+            det = $"X={np.XRel} Y={np.YRel}";
+        }
+
+        int startIdx = HistoryList.SelectedIndex;
+        _eigSuppressUpdate    = true;
+        _suppressHistoryRegen = true;
+        try { _history[_eigEndIdx] = new HistoryEntry(lbl, det, np, _history[_eigEndIdx].Level); }
+        finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
+
+        // Bestehende Vermassungen (z.B. grünes Rechtwinklig-Symbol) erneut durchsetzen,
+        // damit eine manuelle Bearbeitung über das Endpunkt-Panel sie nicht verletzt.
+        PropagateVermConstraintsLive();
+        ShowVermDiagIfViolated();
+
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+        HistoryList.SelectedIndex = startIdx;
+    }
 
     private void OnPfadEigBogenModusChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -1717,17 +5578,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 var np = dlg.Result! with { Typ = p.Typ };
                 int lvl = np.Typ == PfadPunktTyp.Start ? 0 : 1;
                 string det = np.Typ == PfadPunktTyp.Start
-                    ? $"X={np.XRel} Y={np.YRel}, Z={np.ZTiefe}, {np.Bezugspunkt}"
+                    ? $"X={np.XRel} Y={np.YRel}, Z={np.ZTiefe}"
                     : np.Typ == PfadPunktTyp.Bogen
                     ? (np.BogenModus == "Bogenmitte"
-                        ? $"X={np.XRel} Y={np.YRel}, M={np.XMid}/{np.YMid}, {np.Bezugspunkt}"
-                        : $"X={np.XRel} Y={np.YRel}, {np.BogenModus}={np.XMid}, {np.Bezugspunkt}")
-                    : $"X={np.XRel} Y={np.YRel}, {np.Bezugspunkt}";
+                        ? $"X={np.XRel} Y={np.YRel}, M={np.XMid}/{np.YMid}"
+                        : $"X={np.XRel} Y={np.YRel}, {np.BogenModus}={np.XMid}")
+                    : $"X={np.XRel} Y={np.YRel}";
                 string lbl = np.Typ switch
                 {
                     PfadPunktTyp.Start => "Pfad Start",
-                    PfadPunktTyp.Bogen => "Pfad Bogen",
-                    _                  => "Pfad Linie"
+                    PfadPunktTyp.Bogen => $"Pfad Bogen #{PfadPunktNummer(idx)}",
+                    _                  => $"Pfad Linie #{PfadPunktNummer(idx)}"
                 };
                 _history[idx] = new HistoryEntry(lbl, det, np, lvl);
                 break;
@@ -1763,6 +5624,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 break;
             }
         }
+        // Bestehende Vermassungen (z.B. grünes Rechtwinklig-Symbol) erneut durchsetzen,
+        // damit eine Bearbeitung über den Eigenschaften-Dialog sie nicht verletzt.
+        PropagateVermConstraintsLive();
+        ShowVermDiagIfViolated();
         RegenerateGCodeFromHistory();
     }
 
@@ -1885,6 +5750,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     KreistascheParams p       => GCodeGenerator.Kreistasche(p, workX, workY),
                     RechteckParams p when p.IsTasche => GCodeGenerator.Tasche(RechteckToTasche(p), workX, workY),
                     RechteckParams p          => GCodeGenerator.Rechteck(p, workX, workY),
+                    KreisParams p             => GCodeGenerator.Kreis(p, workX, workY),
                     GraviereParams p when p.IsTasche => GCodeGenerator.TextfeldTasche(p, workX, workY),
                     GraviereParams p when p.IsVCarve => GCodeGenerator.VCarve(p, workX, workY),
                     GraviereParams p                 => GCodeGenerator.Gravieren(p, workX, workY),
@@ -2002,23 +5868,53 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             case Key.Z when !ctrl: SetActiveTool(_activeTool == CanvasTool.Zoom ? CanvasTool.Select : CanvasTool.Zoom); e.Handled = true; break;
             case Key.Back:
             {
-                // Letzten Pfad-Punkt entfernen
+                // Letzten Pfad-Punkt entfernen (Zoom-Ansicht beibehalten)
                 int last = _history.Count - 1;
                 if (last >= 0 && _history[last].Params is PfadPunktParams)
                 {
+                    _suppressNextAutoFit = true;
                     _history.RemoveAt(last);
                     UpdatePfadMenuState();
                     DrawSkia?.InvalidateVisual();
                 }
                 e.Handled = true; break;
             }
+            case Key.Delete when _selectedGeomIdx >= 0:
+                _vermPlaced.RemoveAt(_selectedGeomIdx);
+                _selectedGeomIdx = -1;
+                PropagateVermConstraints();
+                DrawSkia?.InvalidateVisual();
+                e.Handled = true; break;
+
+            case Key.Delete when _activeTool == CanvasTool.Vermassen && _vermState == 3 && _vermEditIdx >= 0:
+                _vermPlaced.RemoveAt(_vermEditIdx);
+                _vermEditIdx = -1;
+                _vermState   = 0;
+                DrawSkia?.InvalidateVisual();
+                e.Handled = true; break;
+
+            case Key.Delete when _activeTool == CanvasTool.Move && HistoryList.SelectedItems.Count > 0:
+                DeleteSelectedHistory();
+                e.Handled = true; break;
+
             case Key.Escape:
-                if (_activeTool == CanvasTool.PfadBogen && _pfadBogenWaiting)
+                if (_activeTool == CanvasTool.Vermassen)
+                {
+                    CloseVermTextBox();
+                    _vermEditIdx = -1;
+                    if (_vermState == 5) { _vermQ1Idx = -1; _vermQ2Idx = -1; _vermState = 1; }
+                    else if (_vermState >= 1) { _vermIsHolding = false; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermState = 0; if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture(); }
+                    else _vermState = 0;
+                    DrawSkia?.InvalidateVisual();
+                }
+                else if (_activeTool == CanvasTool.PfadBogen && _pfadBogenWaiting)
                 { _pfadBogenWaiting = false; DrawSkia?.InvalidateVisual(); }
-                else if (_activeTool == CanvasTool.VCarveText && _isTextDragging)
+                else if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _isTextDragging)
                 { _isTextDragging = false; ClearTextRubberBand(); }
                 else if (_activeTool == CanvasTool.Rechteck && _rktDragging)
                 { _rktDragging = false; ClearRktRubberBand(); DrawSkia?.InvalidateVisual(); }
+                else if (_activeTool == CanvasTool.Kreis && _kreisDragging)
+                { _kreisDragging = false; CloseKreisDurchmesserBox(); ClearKreisRubberBand(); DrawSkia?.InvalidateVisual(); }
                 else
                     SetActiveTool(CanvasTool.Select);
                 e.Handled = true; break;
@@ -2160,6 +6056,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (TxtZoomLevel is not null)
             TxtZoomLevel.Text = $"{_zoom * 100:F0} %";
         RepositionInlineTextBox();
+        RepositionVermTextBox();
     }
 
     private void ResetZoom()
@@ -2297,7 +6194,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void SetActiveTool(CanvasTool tool)
     {
         // Inline-Texteditor schließen wenn Werkzeug wechselt
-        if (tool != CanvasTool.VCarveText && _inlineTextBox != null)
+        if (tool is not (CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _inlineTextBox != null)
             FlushInlineEdit();
 
         // Pfad-Vorschau und Bogen-Warte-Zustand abbrechen wenn Werkzeug wechselt
@@ -2311,22 +6208,39 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         var inactive = System.Windows.Media.Brushes.Transparent;
         BtnToolHand.Background        = tool == CanvasTool.Hand       ? active : inactive;
         BtnToolZoom.Background        = tool == CanvasTool.Zoom       ? active : inactive;
-        BtnToolVCarveText.Background  = tool == CanvasTool.VCarveText ? active : inactive;
+        BtnToolVCarveText.Background    = tool == CanvasTool.VCarveText   ? active : inactive;
+        BtnToolVCarveTextSk.Background  = tool == CanvasTool.VCarveTextSk ? active : inactive;
         BtnToolMove.Background        = tool == CanvasTool.Move       ? active : inactive;
+        BtnToolPfeil.Background       = tool == CanvasTool.Pfeil      ? active : inactive;
+        BtnToolVermassen.Background   = tool == CanvasTool.Vermassen  ? active : inactive;
+        if (tool != CanvasTool.Vermassen)
+        {
+            CloseVermTextBox();
+            _vermState = 0; _vermIsHolding = false; _vermP1Idx = -1; _vermP2Idx = -1;
+            _vermQ1Idx = -1; _vermQ2Idx = -1; _vermEditIdx = -1; _vermActiveEdge = 0;
+            _geomMode = GeomConstraintMode.None; _geomFirstIdx = -1; _geomFirstIdx2 = -1;
+            _selectedGeomIdx = -1;
+            UpdateGeomModeButtons();
+            if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture();
+        }
+        VermToolbar.Visibility = tool == CanvasTool.Vermassen ? Visibility.Visible : Visibility.Collapsed;
         BtnToolPfadStart.Background   = tool == CanvasTool.PfadStart  ? active : inactive;
         BtnToolPfadLinie.Background   = tool == CanvasTool.PfadLinie  ? active : inactive;
         BtnToolPfadKurve.Background   = tool == CanvasTool.PfadBogen  ? active : inactive;
         BtnToolRechteck.Background    = tool == CanvasTool.Rechteck  ? active : inactive;
+        BtnToolKreis.Background       = tool == CanvasTool.Kreis     ? active : inactive;
         CanvasGrid.Cursor = tool switch
         {
-            CanvasTool.Hand       => Cursors.Hand,
-            CanvasTool.Zoom       => Cursors.Cross,
-            CanvasTool.VCarveText => Cursors.Cross,
-            CanvasTool.PfadStart  => Cursors.Cross,
-            CanvasTool.PfadLinie  => Cursors.Cross,
-            CanvasTool.PfadBogen  => Cursors.Cross,
-            CanvasTool.Rechteck   => Cursors.Cross,
-            _                     => Cursors.Arrow,   // Move: context-sensitive (see MouseMove)
+            CanvasTool.Hand         => Cursors.Hand,
+            CanvasTool.Zoom         => Cursors.Cross,
+            CanvasTool.VCarveText   => Cursors.Cross,
+            CanvasTool.VCarveTextSk => Cursors.Cross,
+            CanvasTool.PfadStart    => Cursors.Cross,
+            CanvasTool.PfadLinie    => Cursors.Cross,
+            CanvasTool.PfadBogen    => Cursors.Cross,
+            CanvasTool.Rechteck     => Cursors.Cross,
+            CanvasTool.Kreis        => Cursors.Cross,
+            _                       => Cursors.Arrow,   // Move: context-sensitive (see MouseMove)
         };
         DrawSkia?.InvalidateVisual();
     }
@@ -2340,8 +6254,48 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void OnToolVCarveText(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.VCarveText ? CanvasTool.Select : CanvasTool.VCarveText);
 
+    private void OnToolVCarveTextSk(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.VCarveTextSk ? CanvasTool.Select : CanvasTool.VCarveTextSk);
+
     private void OnToolMove(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.Move ? CanvasTool.Select : CanvasTool.Move);
+
+    private void OnToolPfeil(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.Pfeil ? CanvasTool.Select : CanvasTool.Pfeil);
+
+    private void OnToolVermassen(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.Vermassen ? CanvasTool.Select : CanvasTool.Vermassen);
+
+    // ── Geometrie-Constraint-Toolbar ─────────────────────────────
+    private void OnVermKoinzident  (object sender, RoutedEventArgs e) => ToggleGeomMode(GeomConstraintMode.Coincident);
+    private void OnVermRechtwinklig(object sender, RoutedEventArgs e) => ToggleGeomMode(GeomConstraintMode.Perpendicular);
+    private void OnVermParallel    (object sender, RoutedEventArgs e) => ToggleGeomMode(GeomConstraintMode.Parallel);
+
+    private void ToggleGeomMode(GeomConstraintMode mode)
+    {
+        if (_activeTool != CanvasTool.Vermassen) SetActiveTool(CanvasTool.Vermassen);
+        // Laufende Länge/Winkel/Kanten-Eingabe abbrechen, damit die Klick-States nicht
+        // mit dem Geometrie-Constraint-Modus kollidieren.
+        CloseVermTextBox();
+        _vermState = 0; _vermIsHolding = false;
+        _vermP1Idx = -1; _vermP2Idx = -1; _vermQ1Idx = -1; _vermQ2Idx = -1;
+        _vermEditIdx = -1; _vermActiveEdge = 0; _vermPtIdx = -1;
+        if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture();
+        _geomMode = _geomMode == mode ? GeomConstraintMode.None : mode;   // erneuter Klick = abwählen
+        _geomFirstIdx = -1; _geomFirstIdx2 = -1;
+        UpdateGeomModeButtons();
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void UpdateGeomModeButtons()
+    {
+        var active   = new System.Windows.Media.SolidColorBrush(
+                           System.Windows.Media.Color.FromArgb(0xCC, 0xDD, 0xD0, 0xB0));
+        var inactive = System.Windows.Media.Brushes.Transparent;
+        BtnVermKoinzident.Background   = _geomMode == GeomConstraintMode.Coincident    ? active : inactive;
+        BtnVermRechtwinklig.Background = _geomMode == GeomConstraintMode.Perpendicular ? active : inactive;
+        BtnVermParallel.Background     = _geomMode == GeomConstraintMode.Parallel      ? active : inactive;
+    }
 
     private void OnZoom100(object sender, RoutedEventArgs e)   => ZoomTo100();
     private void OnZoom1to1(object sender, RoutedEventArgs e)  => ZoomTo1to1();
@@ -2434,6 +6388,140 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_rktRubberBand != null) SimToolCanvas.Children.Remove(_rktRubberBand);
     }
 
+    // ── Kreis-Werkzeug: Rubber-Band ──────────────────────────────
+    private void UpdateKreisRubberBand(Point center, double radiusPx)
+    {
+        if (_kreisRubberBand == null)
+        {
+            _kreisRubberBand = new System.Windows.Shapes.Ellipse
+            {
+                Stroke           = System.Windows.Media.Brushes.Orange,
+                StrokeThickness  = 1.5,
+                StrokeDashArray  = new System.Windows.Media.DoubleCollection { 5, 3 },
+                Fill             = new System.Windows.Media.SolidColorBrush(
+                                       System.Windows.Media.Color.FromArgb(25, 255, 160, 0)),
+                IsHitTestVisible = false,
+            };
+        }
+        double d = radiusPx * 2;
+        _kreisRubberBand.Width  = d;
+        _kreisRubberBand.Height = d;
+        System.Windows.Controls.Canvas.SetLeft(_kreisRubberBand, center.X - radiusPx);
+        System.Windows.Controls.Canvas.SetTop (_kreisRubberBand, center.Y - radiusPx);
+        if (!SimToolCanvas.Children.Contains(_kreisRubberBand))
+            SimToolCanvas.Children.Add(_kreisRubberBand);
+    }
+
+    private void ClearKreisRubberBand()
+    {
+        if (_kreisRubberBand != null) SimToolCanvas.Children.Remove(_kreisRubberBand);
+    }
+
+    private void ShowKreisDurchmesserBox(Point cursorPx)
+    {
+        CloseKreisDurchmesserBox();
+        _kreisInputBox = new TextBox
+        {
+            Width  = 90, Height = 26,
+            Text   = "10",
+            ToolTip = "Durchmesser (mm) — Enter bestätigt",
+            BorderBrush     = new SolidColorBrush(Color.FromRgb(0x22, 0x99, 0xFF)),
+            BorderThickness = new Thickness(2),
+            Background      = new SolidColorBrush(Color.FromArgb(230, 30, 30, 40)),
+            Foreground      = System.Windows.Media.Brushes.White,
+            CaretBrush      = System.Windows.Media.Brushes.White,
+            FontSize        = 13,
+            Padding         = new Thickness(4, 2, 4, 2),
+        };
+        System.Windows.Controls.Canvas.SetLeft(_kreisInputBox, cursorPx.X + 14);
+        System.Windows.Controls.Canvas.SetTop (_kreisInputBox, cursorPx.Y - 30);
+        SimToolCanvas.Children.Add(_kreisInputBox);
+        _kreisInputBox.KeyDown += KreisInputBox_KeyDown;
+        _kreisInputBox.SelectAll();
+        _kreisInputBox.Focus();
+        Keyboard.Focus(_kreisInputBox);
+    }
+
+    private void CloseKreisDurchmesserBox()
+    {
+        if (_kreisInputBox == null) return;
+        SimToolCanvas.Children.Remove(_kreisInputBox);
+        _kreisInputBox = null;
+    }
+
+    private void KreisInputBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Return)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            string txt = _kreisInputBox!.Text.Replace(',', '.');
+            if (double.TryParse(txt, System.Globalization.NumberStyles.Float, inv, out double d) && d > 0.1)
+            {
+                double cx2mm = SnapX((_kreisDragCenter.X - _panX) / _zoom);
+                double cy2mm = SnapY(WorkY - (_kreisDragCenter.Y - _panY) / _zoom);
+                CloseKreisDurchmesserBox();
+                ClearKreisRubberBand();
+                _kreisDragging = false;
+                AddKreis(cx2mm, cy2mm, d / 2.0);
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            CloseKreisDurchmesserBox();
+            ClearKreisRubberBand();
+            _kreisDragging = false;
+            DrawSkia?.InvalidateVisual();
+            e.Handled = true;
+        }
+    }
+
+    private void DrawBogenPreview(SKCanvas canvas,
+        (double x, double y) p1, (double x, double y) p2, (double x, double y) mid, float lt)
+    {
+        double dx = p2.x - p1.x, dy = p2.y - p1.y;
+        double L = Math.Sqrt(dx * dx + dy * dy);
+        if (L < 1e-6) return;
+
+        double perpX = -dy / L, perpY = dx / L;
+        double mcx = (p1.x + p2.x) / 2, mcy = (p1.y + p2.y) / 2;
+        double h = (mid.x - mcx) * perpX + (mid.y - mcy) * perpY;
+
+        using var paint = new SKPaint
+        {
+            Color = new SKColor(220, 80, 0, 180),
+            Style = SKPaintStyle.Stroke, StrokeWidth = lt * 1.5f, IsAntialias = true
+        };
+
+        double wy = WorkY;
+        if (Math.Abs(h) < 1e-6)
+        {
+            canvas.DrawLine((float)p1.x, (float)(wy - p1.y),
+                            (float)p2.x, (float)(wy - p2.y), paint);
+            return;
+        }
+
+        double r     = (L * L / 4 + h * h) / (2 * Math.Abs(h));
+        double sign  = h > 0 ? 1 : -1;
+        double t     = h - sign * r;
+        double ocx   = mcx + t * perpX;
+        double ocy   = mcy + t * perpY;
+
+        float dOcx = (float)ocx, dOcy = (float)(wy - ocy), dR = (float)r;
+        float dp1x = (float)p1.x, dp1y = (float)(wy - p1.y);
+        float dp2x = (float)p2.x, dp2y = (float)(wy - p2.y);
+
+        double a1    = Math.Atan2(dp1y - dOcy, dp1x - dOcx) * 180 / Math.PI;
+        double a2    = Math.Atan2(dp2y - dOcy, dp2x - dOcx) * 180 / Math.PI;
+        double sweep = a2 - a1;
+        // h > 0 → CCW in mm = CW in screen → positive sweep in SkiaSharp
+        if (h > 0) { if (sweep < 0) sweep += 360; }
+        else       { if (sweep > 0) sweep -= 360; }
+
+        canvas.DrawArc(new SKRect(dOcx - dR, dOcy - dR, dOcx + dR, dOcy + dR),
+                       (float)a1, (float)sweep, false, paint);
+    }
+
     private void StartInlineTextEdit(Point screenA, Point screenB)
     {
         double wx = WorkX, wy = WorkY;
@@ -2469,7 +6557,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Vorschub:        lastGrav?.Vorschub ?? 1000,
             Drehzahl:        lastGrav?.Drehzahl ?? 24000,
             Bezugspunkt:     "Unten links",
-            IsVCarve:        true);
+            IsVCarve:        true,
+            UseSkia:         _activeTool == CanvasTool.VCarveTextSk);
 
         _suppressHistoryRegen = true;
         try { _history.Add(new HistoryEntry("V-Carve", "…", _inlineParams)); }
@@ -2586,6 +6675,22 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
     }
 
+    private void RepositionVermTextBox()
+    {
+        if (_vermTextBox == null) return;
+        Point pos;
+        if (_vermState == 2) pos = VermLabelScreenPos();
+        else if (_vermState == 4 && _vermEditIdx >= 0 && _vermEditIdx < _vermPlaced.Count)
+        {
+            var lmm = VermLabelPosMm(_vermPlaced[_vermEditIdx]);
+            if (lmm == null) return;
+            pos = new Point(lmm.Value.x * _zoom + _panX, (WorkY - lmm.Value.y) * _zoom + _panY);
+        }
+        else return;
+        System.Windows.Controls.Canvas.SetLeft(_vermTextBox, pos.X - 40);
+        System.Windows.Controls.Canvas.SetTop (_vermTextBox, pos.Y - 28);
+    }
+
     private void InlineTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_inlineTextBox == null || _inlineParams == null) return;
@@ -2639,7 +6744,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             if (token.IsCancellationRequested) { Dispatcher.BeginInvoke(() => _vCarvePending.Remove(gp)); return; }
             GCodeGenerator.TextGeoCtx ctx;
-            try { ctx = GCodeGenerator.BuildTextGeo(gp, wx, wy); }
+            try { ctx = gp.UseSkia
+                      ? GCodeGenerator.BuildTextGeoSk(gp, wx, wy)
+                      : GCodeGenerator.BuildTextGeo(gp, wx, wy); }
             catch { Dispatcher.BeginInvoke(() => _vCarvePending.Remove(gp)); return; }
             List<GCodeGenerator.VCarveCircle>? circles = null;
             if (gp.IsVCarve && !token.IsCancellationRequested)
@@ -2977,6 +7084,64 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         UpdateAll();
     }
 
+    private int HitTestKreis(double mmX, double mmY)
+    {
+        double tol = 8.0 / _zoom;
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            if (_history[i].Params is not KreisParams kr) continue;
+            var (cx, cy) = GCodeGenerator.ConvertBezugspunkt(kr.Bezugspunkt, kr.XRel, kr.YRel, WorkX, WorkY);
+            double dist = Math.Sqrt((mmX - cx) * (mmX - cx) + (mmY - cy) * (mmY - cy));
+            if (dist <= kr.Radius + tol)
+                return i;
+        }
+        return -1;
+    }
+
+    private void StartMoveKreis(int idx, double mmX, double mmY)
+    {
+        _moveHistoryIdx  = idx;
+        _moveDragStartMm = new Point(mmX, mmY);
+        var kr = (KreisParams)_history[idx].Params;
+        (_moveStartRefX, _moveStartRefY) = GCodeGenerator.ConvertBezugspunkt(kr.Bezugspunkt, kr.XRel, kr.YRel, WorkX, WorkY);
+        HistoryList.SelectedItem    = _history[idx];
+        TabEigenschaften.IsSelected = true;
+        _previewKreisParams = kr;
+    }
+
+    private void UpdateMoveKreis(double mmX, double mmY)
+    {
+        if (_moveHistoryIdx < 0 || _previewKreisParams == null) return;
+        double newCx = SnapX(_moveStartRefX + (mmX - _moveDragStartMm.X));
+        double newCy = SnapY(_moveStartRefY + (mmY - _moveDragStartMm.Y));
+        var (newXRel, newYRel) = AbsToRel(_previewKreisParams.Bezugspunkt, newCx, newCy, WorkX, WorkY);
+        _previewKreisParams = _previewKreisParams with
+        {
+            XRel = Math.Round(newXRel, 3),
+            YRel = Math.Round(newYRel, 3)
+        };
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void CommitMoveKreis()
+    {
+        if (_moveHistoryIdx < 0 || _previewKreisParams == null) return;
+        var final        = _previewKreisParams;
+        var entry        = _history[_moveHistoryIdx];
+        int committedIdx = _moveHistoryIdx;
+        _suppressHistoryRegen = true;
+        try { _history[committedIdx] = new HistoryEntry(entry.Label,
+            $"M={final.XRel:F2}/{final.YRel:F2} R={final.Radius}", final); }
+        finally { _suppressHistoryRegen = false; }
+        _moveHistoryIdx     = -1;
+        _previewKreisParams = null;
+        HistoryList.SelectedItem    = _history[committedIdx];
+        TabEigenschaften.IsSelected = true;
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+        UpdateAll();
+    }
+
     // Inverse of GCodeGenerator.ConvertBezugspunkt
     private static (double xRel, double yRel) AbsToRel(string bezug, double absX, double absY, double w, double h)
         => bezug switch
@@ -3289,8 +7454,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
-        // Klick auf Textfeld (VCarveText) → inline editieren
-        if (_activeTool == CanvasTool.VCarveText && e.ChangedButton == MouseButton.Left
+        // Klick auf Textfeld (VCarveText/Sk) → inline editieren
+        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+            && e.ChangedButton == MouseButton.Left
             && e.ClickCount == 1 && _inlineTextBox == null)
         {
             var pos2 = e.GetPosition(CanvasGrid);
@@ -3323,14 +7489,26 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;
         }
 
-        // Move-Werkzeug: Ecke = Resize, Innenbereich = Verschieben, Pfad-Punkt = Drag
-        if (_activeTool == CanvasTool.Move && e.ChangedButton == MouseButton.Left)
+        // Pfeil-Werkzeug: einzelne Pfad-Punkte und Segment-Mittelpunkte verschieben
+        if (_activeTool == CanvasTool.Pfeil && e.ChangedButton == MouseButton.Left)
         {
             var pos  = e.GetPosition(CanvasGrid);
             double mmX = (pos.X - _panX) / _zoom;
             double mmY = WorkY - (pos.Y - _panY) / _zoom;
 
-            // Pfad-Punkt testen (Vorrang vor Textfeldern)
+            int segIdx = HitTestPfadSegMid(mmX, mmY);
+            if (segIdx >= 0 && _history[segIdx].Params is PfadPunktParams segP2)
+            {
+                _pfadSegDragIdx    = segIdx;
+                _pfadSegDragIsArc  = segP2.Typ == PfadPunktTyp.Bogen;
+                _pfadSegDragP1     = GetPfadAbsAt(segIdx - 1) ?? (mmX, mmY);
+                _pfadSegDragP2     = GetPfadAbsAt(segIdx)     ?? (mmX, mmY);
+                _pfadSegDragMouse  = (mmX, mmY);
+                CanvasGrid.CaptureMouse();
+                CanvasGrid.Cursor  = Cursors.SizeAll;
+                e.Handled = true;
+                return;
+            }
             int pfadIdx = HitTestPfadPunkt(mmX, mmY);
             if (pfadIdx >= 0)
             {
@@ -3339,6 +7517,38 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 _pfadDragOrigAbs = absOpt ?? (mmX, mmY);
                 HistoryList.SelectedItem    = _history[pfadIdx];
                 TabEigenschaften.IsSelected = true;
+                CanvasGrid.CaptureMouse();
+                CanvasGrid.Cursor = Cursors.SizeAll;
+                e.Handled = true;
+                return;
+            }
+            e.Handled = true;
+            return;
+        }
+
+        // Move-Werkzeug: ganzen Pfad verschieben + Objekte (Kreis, Rechteck, Textfeld)
+        if (_activeTool == CanvasTool.Move && e.ChangedButton == MouseButton.Left)
+        {
+            var pos  = e.GetPosition(CanvasGrid);
+            double mmX = (pos.X - _panX) / _zoom;
+            double mmY = WorkY - (pos.Y - _panY) / _zoom;
+
+            // Ankerpunkt → Skalieren (Priorität vor BBox-Interior)
+            var (scaleChain, scaleAnchor) = HitTestPfadChainAnchor(mmX, mmY);
+            if (scaleChain >= 0)
+            {
+                StartScalePfadChain(scaleChain, scaleAnchor);
+                CanvasGrid.CaptureMouse();
+                CanvasGrid.Cursor = ScaleAnchorCursor(scaleAnchor);
+                e.Handled = true;
+                return;
+            }
+
+            // BBox-Interior → ganzen Pfad verschieben
+            int chainIdx = HitTestPfadChainBBox(mmX, mmY);
+            if (chainIdx >= 0)
+            {
+                StartMovePfadChain(chainIdx, mmX, mmY);
                 CanvasGrid.CaptureMouse();
                 CanvasGrid.Cursor = Cursors.SizeAll;
                 e.Handled = true;
@@ -3396,12 +7606,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 CanvasGrid.CaptureMouse();
                 CanvasGrid.Cursor = Cursors.SizeAll;
                 e.Handled = true;
+                return;
+            }
+            int krIdx = HitTestKreis(mmX, mmY);
+            if (krIdx >= 0)
+            {
+                StartMoveKreis(krIdx, mmX, mmY);
+                CanvasGrid.CaptureMouse();
+                CanvasGrid.Cursor = Cursors.SizeAll;
+                e.Handled = true;
             }
             return;
         }
 
-        // VCarveText + Ctrl: Resize-Handle anklicken
-        if (_activeTool == CanvasTool.VCarveText && _ctrlResizeMode
+        // VCarveText/Sk + Ctrl: Resize-Handle anklicken
+        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _ctrlResizeMode
             && _inlineTextBox != null && _inlineExistingIdx >= 0
             && e.ChangedButton == MouseButton.Left)
         {
@@ -3427,8 +7646,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
-        // VCarveText-Werkzeug: Abbrechen mit Rechtsklick
-        if (_activeTool == CanvasTool.VCarveText && e.ChangedButton == MouseButton.Right && _isTextDragging)
+        // VCarveText/Sk-Werkzeug: Abbrechen mit Rechtsklick
+        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+            && e.ChangedButton == MouseButton.Right && _isTextDragging)
         {
             _isTextDragging = false;
             ClearTextRubberBand();
@@ -3436,8 +7656,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;
         }
 
-        // VCarveText-Werkzeug: 2-Klick-Modus
-        if (_activeTool == CanvasTool.VCarveText && e.ChangedButton == MouseButton.Left && _inlineTextBox == null)
+        // VCarveText/Sk-Werkzeug: 2-Klick-Modus
+        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+            && e.ChangedButton == MouseButton.Left && _inlineTextBox == null)
         {
             var pos = e.GetPosition(CanvasGrid);
             if (!_isTextDragging)
@@ -3465,8 +7686,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (e.ChangedButton == MouseButton.Left)
         {
             var posPf = e.GetPosition(CanvasGrid);
-            double pfX = SnapX((posPf.X - _panX) / _zoom);
-            double pfY = SnapY(WorkY - (posPf.Y - _panY) / _zoom);
+            double rawPfX = (posPf.X - _panX) / _zoom;
+            double rawPfY = WorkY - (posPf.Y - _panY) / _zoom;
+            double pfX = SnapX(rawPfX);
+            double pfY = SnapY(rawPfY);
 
             if (_activeTool == CanvasTool.PfadStart)
             {
@@ -3490,7 +7713,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 }
                 else
                 {
-                    AddPfadBogen(_pfadBogenEndAbs, (pfX, pfY));
+                    AddPfadBogen(_pfadBogenEndAbs, (rawPfX, rawPfY));
                     _pfadBogenWaiting = false;
                     DrawSkia?.InvalidateVisual();
                 }
@@ -3526,6 +7749,268 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 e.Handled = true;
                 return;
             }
+            if (_activeTool == CanvasTool.Kreis)
+            {
+                var rp2 = e.GetPosition(CanvasGrid);
+                double cxMm = SnapX((rp2.X - _panX) / _zoom);
+                double cyMm = SnapY(WorkY - (rp2.Y - _panY) / _zoom);
+                var centerPx = new Point(cxMm * _zoom + _panX, (WorkY - cyMm) * _zoom + _panY);
+                if (!_kreisDragging)
+                {
+                    _kreisDragCenter = centerPx;
+                    _pfadMouseMm     = (cxMm, cyMm);
+                    _pfadMouseValid  = true;
+                    _kreisDragging   = true;
+                    ShowKreisDurchmesserBox(centerPx);
+                }
+                else
+                {
+                    _kreisDragging = false;
+                    CloseKreisDurchmesserBox();
+                    ClearKreisRubberBand();
+                    double cx2mm = SnapX((_kreisDragCenter.X - _panX) / _zoom);
+                    double cy2mm = SnapY(WorkY - (_kreisDragCenter.Y - _panY) / _zoom);
+                    double dx = cxMm - cx2mm, dy = cyMm - cy2mm;
+                    double radMm = Math.Round(Math.Sqrt(dx*dx + dy*dy), 3);
+                    if (radMm > 0.1)
+                        AddKreis(cx2mm, cy2mm, radMm);
+                }
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // Vermassen-Werkzeug
+        if (_activeTool == CanvasTool.Vermassen && e.ChangedButton == MouseButton.Left)
+        {
+            var vpos = e.GetPosition(CanvasGrid);
+            double vmx = (vpos.X - _panX) / _zoom;
+            double vmy = WorkY - (vpos.Y - _panY) / _zoom;
+
+            // Symbol-Klick: Constraint-Icon auswählen (in jedem Geom-Modus)
+            {
+                int symHit = HitTestGeomConstraintSymbol(vmx, vmy);
+                if (symHit >= 0)
+                {
+                    _selectedGeomIdx = (_selectedGeomIdx == symHit) ? -1 : symHit;
+                    DrawSkia?.InvalidateVisual();
+                    e.Handled = true; return;
+                }
+                // Klick ins Leere → Selektion aufheben
+                _selectedGeomIdx = -1;
+            }
+
+            // Geometrie-Constraint-Modus (Koinzident/Rechtwinklig/Parallel) aktiv:
+            // eigener, einfacher Klick-Ablauf statt der normalen Vermassen-State-Machine.
+            if (_geomMode != GeomConstraintMode.None)
+            {
+                HandleGeomModeClick(vmx, vmy);
+                e.Handled = true;
+                return;
+            }
+
+            // State 2/4: TextBox aktiv → fokussieren
+            if (_vermState == 2 || _vermState == 4)
+            {
+                _vermTextBox?.Focus();
+                e.Handled = true;
+                return;
+            }
+            // State 3: Offset-Drag bestätigen
+            if (_vermState == 3 && _vermEditIdx >= 0)
+            {
+                _vermPlaced[_vermEditIdx] = _vermPlaced[_vermEditIdx] with { Offset = _vermDragOffset };
+                _vermState   = 0;
+                _vermEditIdx = -1;
+                DrawSkia?.InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+            // State 0/1: Klick
+            if (_vermState == 0)
+            {
+                // 1. Klick auf Label einer platzierten Masslinie → Bearbeiten
+                int labelHit = HitTestVermLabel(vpos.X, vpos.Y);
+                if (labelHit >= 0)
+                {
+                    _vermEditIdx = labelHit;
+                    _vermState   = 4;
+                    ShowVermEditTextBox(labelHit);
+                    e.Handled = true;
+                    return;
+                }
+                // 2. Klick auf Masslinie → Offset ziehen
+                int lineHit = HitTestVermLine(vmx, vmy);
+                if (lineHit >= 0)
+                {
+                    _vermEditIdx    = lineHit;
+                    _vermDragOffset = _vermPlaced[lineHit].Offset;
+                    _vermMouseMm    = (vmx, vmy);
+                    _vermState      = 3;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1;
+                    DrawSkia?.InvalidateVisual();
+                    e.Handled = true;
+                    return;
+                }
+                // 3a. Klick auf Pfad-Punkt → Punkt-Modus
+                int ptHit0 = HitTestPfadPoint(vmx, vmy);
+                if (ptHit0 >= 0)
+                {
+                    _vermPtIdx = ptHit0;
+                    _vermP1Idx = -1; _vermP2Idx = -1;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1;
+                    _vermState = 1;
+                    DrawSkia?.InvalidateVisual();
+                    e.Handled = true; return;
+                }
+                // 3b. Klick auf Pfad-Segment → neue Masslinie
+                var hit = HitTestPfadLineSegment(vmx, vmy);
+                if (hit.p1 >= 0)
+                {
+                    _vermP1Idx    = hit.p1;
+                    _vermP2Idx    = hit.p2;
+                    _vermP1Abs    = GetPfadAbsAt(_vermP1Idx) ?? (vmx, vmy);
+                    _vermP2Abs    = GetPfadAbsAt(_vermP2Idx) ?? (vmx, vmy);
+                    _vermMouseMm  = (vmx, vmy);
+                    _vermDownMm   = (vmx, vmy);
+                    _vermIsHolding = true;
+                    _vermState    = 1;
+                    _vermHoverP1  = -1; _vermHoverP2 = -1; _vermHoverPoint = -1;
+                    CanvasGrid.CaptureMouse();
+                    DrawSkia?.InvalidateVisual();
+                }
+                else
+                {
+                    int edgeHit = HitTestWorkpieceEdge(vmx, vmy);
+                    if (edgeHit > 0)
+                    {
+                        _vermActiveEdge = edgeHit;
+                        _vermP1Idx = -1; _vermP2Idx = -1;
+                        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0;
+                        _vermState = 1;
+                        DrawSkia?.InvalidateVisual();
+                    }
+                }
+            }
+            else if (_vermState == 1)
+            {
+                // EdgeDist/EdgeAngle/PointEdgeDist: Kante bereits gewählt, jetzt Segment oder Punkt wählen
+                if (_vermActiveEdge > 0 && _vermP1Idx < 0)
+                {
+                    // Punkt geklickt → PointEdgeDist
+                    int ptHitE = HitTestPfadPoint(vmx, vmy);
+                    if (ptHitE >= 0)
+                    {
+                        _vermP1Idx = -1; _vermP2Idx = ptHitE;
+                        _vermP2Abs = GetPfadAbsAt(_vermP2Idx) ?? (vmx, vmy);
+                        _vermActiveKind = VermKind.PointEdgeDist;
+                        _vermOffset = 0; _vermPtIdx = -1;
+                        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1;
+                        _vermState = 5;
+                        DrawSkia?.InvalidateVisual();
+                        e.Handled = true; return;
+                    }
+                    // Segment geklickt → EdgeDist oder EdgeAngle
+                    var segHit = HitTestPfadLineSegment(vmx, vmy);
+                    if (segHit.p1 >= 0)
+                    {
+                        _vermP1Idx = segHit.p1; _vermP2Idx = segHit.p2;
+                        _vermP1Abs = GetPfadAbsAt(_vermP1Idx) ?? (vmx, vmy);
+                        _vermP2Abs = GetPfadAbsAt(_vermP2Idx) ?? (vmx, vmy);
+                        _vermActiveKind = IsSegmentParallelToEdge(_vermP1Abs, _vermP2Abs, _vermActiveEdge)
+                            ? VermKind.EdgeDist : VermKind.EdgeAngle;
+                        _vermOffset = 0;
+                        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0;
+                        _vermState = 5;
+                        DrawSkia?.InvalidateVisual();
+                        e.Handled = true; return;
+                    }
+                }
+                // Punkt bereits gewählt, jetzt Kante wählen → PointEdgeDist
+                if (_vermPtIdx >= 0)
+                {
+                    int edgeHitPt = HitTestWorkpieceEdge(vmx, vmy);
+                    if (edgeHitPt > 0)
+                    {
+                        _vermActiveEdge = edgeHitPt;
+                        _vermP1Idx = -1; _vermP2Idx = _vermPtIdx;
+                        _vermP2Abs = GetPfadAbsAt(_vermP2Idx) ?? (vmx, vmy);
+                        _vermActiveKind = VermKind.PointEdgeDist;
+                        _vermOffset = 0; _vermPtIdx = -1;
+                        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1;
+                        _vermState = 5;
+                        DrawSkia?.InvalidateVisual();
+                        e.Handled = true; return;
+                    }
+                }
+                // Segment bereits gewählt, jetzt Kante wählen → Vorschau (State 5)
+                if (_vermP1Idx >= 0)
+                {
+                    int edgeHit1 = HitTestWorkpieceEdge(vmx, vmy);
+                    if (edgeHit1 > 0)
+                    {
+                        _vermActiveEdge = edgeHit1;
+                        _vermActiveKind = IsSegmentParallelToEdge(_vermP1Abs, _vermP2Abs, edgeHit1)
+                            ? VermKind.EdgeDist : VermKind.EdgeAngle;
+                        _vermOffset     = 0;
+                        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0;
+                        _vermState = 5;
+                        DrawSkia?.InvalidateVisual();
+                        e.Handled = true; return;
+                    }
+                }
+                // Zweiter Klick auf Punkt → PointDist (Pt→Pt) oder LineToPoint (Seg→Pt)
+                int ptHit1 = HitTestPfadPoint(vmx, vmy);
+                if (ptHit1 >= 0 && ptHit1 != _vermPtIdx)
+                {
+                    if (_vermPtIdx >= 0)
+                    {
+                        // Punkt→Punkt
+                        _vermP1Idx = _vermPtIdx; _vermP2Idx = ptHit1;
+                        _vermP1Abs = GetPfadAbsAt(_vermP1Idx) ?? (vmx, vmy);
+                        _vermP2Abs = GetPfadAbsAt(_vermP2Idx) ?? (vmx, vmy);
+                        _vermActiveKind = VermKind.PointDist;
+                    }
+                    else if (_vermP1Idx >= 0)
+                    {
+                        // Linie→Punkt
+                        _vermQ1Idx = ptHit1; _vermQ2Idx = ptHit1;
+                        _vermQ1Abs = GetPfadAbsAt(ptHit1) ?? (vmx, vmy);
+                        _vermQ2Abs = _vermQ1Abs;
+                        _vermActiveKind = VermKind.LineToPoint;
+                    }
+                    else { e.Handled = true; return; }
+                    _vermOffset = 0; _vermPtIdx = -1;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1;
+                    _vermState = 5;
+                    DrawSkia?.InvalidateVisual();
+                    e.Handled = true; return;
+                }
+                // Prüfen ob ein zweites (anderes) Segment angeklickt wurde
+                var hit2 = HitTestPfadLineSegment(vmx, vmy);
+                if (hit2.p1 >= 0 && (hit2.p1 != _vermP1Idx || hit2.p2 != _vermP2Idx))
+                {
+                    // Zweites Segment gewählt → ParallelDist oder Angle
+                    _vermQ1Idx = hit2.p1;
+                    _vermQ2Idx = hit2.p2;
+                    _vermQ1Abs = GetPfadAbsAt(_vermQ1Idx) ?? (vmx, vmy);
+                    _vermQ2Abs = GetPfadAbsAt(_vermQ2Idx) ?? (vmx, vmy);
+                    bool isParallel = AreSegmentsParallel(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs, tolDeg: 0.1);
+                    _vermActiveKind = isParallel ? VermKind.ParallelDist : VermKind.Angle;
+                    _vermState = 5; _vermPtIdx = -1;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1;
+                }
+                else if (_vermP1Idx >= 0)
+                {
+                    PlaceVermassungAt(vmx, vmy);
+                }
+            }
+            else if (_vermState == 5)
+            {
+                PlaceTwoSegmentVermAt(vmx, vmy);
+            }
+            e.Handled = true;
+            return;
         }
 
         // Pan starten: Rechtsklick immer, Linksklick beim Hand-Werkzeug
@@ -3544,27 +8029,75 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     {
         if (e.ChangedButton == MouseButton.Left)
         {
-            // VCarveText + Ctrl-Resize: Drag beendet → Resize committen, Editor wieder öffnen
-            if (_activeTool == CanvasTool.VCarveText && _ctrlResizeReopen >= 0
-                && CanvasGrid.IsMouseCaptured)
+            // VCarveText/Sk + Ctrl-Resize: Drag beendet → Resize committen, Editor wieder öffnen
+            if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+                && _ctrlResizeReopen >= 0 && CanvasGrid.IsMouseCaptured)
             {
                 CanvasGrid.ReleaseMouseCapture();
                 int reopenIdx = _ctrlResizeReopen;
                 _ctrlResizeReopen = -1;
-                CommitMoveTextField();                   // Neue Grösse in History schreiben
-                SetActiveTool(CanvasTool.VCarveText);   // Tool-Highlight sichern
-                StartEditExistingTextField(reopenIdx);   // Editor mit neuer Grösse wieder öffnen
+                CommitMoveTextField();                  // Neue Grösse in History schreiben
+                var savedTool = _activeTool;
+                SetActiveTool(savedTool);               // Tool-Highlight sichern
+                StartEditExistingTextField(reopenIdx);  // Editor mit neuer Grösse wieder öffnen
                 e.Handled = true;
                 return;
             }
 
-            // Move-Werkzeug: Pfad-Punkt-Drag beendet
-            if (_activeTool == CanvasTool.Move && _pfadDragHistIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            // Pfeil-Werkzeug: Segment-Mittelpunkt-Drag beendet
+            if (_activeTool == CanvasTool.Pfeil && _pfadSegDragIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            {
+                CanvasGrid.ReleaseMouseCapture();
+                CanvasGrid.Cursor = Cursors.Arrow;
+                _pfadSegDragIdx = -1;
+                PropagateVermConstraints();
+                CheckAndReportConstraints();
+                DrawSkia?.InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+
+            // Pfeil-Werkzeug: Pfad-Punkt-Drag beendet
+            if (_activeTool == CanvasTool.Pfeil && _pfadDragHistIdx >= 0 && CanvasGrid.IsMouseCaptured)
             {
                 CanvasGrid.ReleaseMouseCapture();
                 CanvasGrid.Cursor = Cursors.Arrow;
                 _pfadDragHistIdx = -1;
+                PropagateVermConstraints();
+                CheckAndReportConstraints();
                 DrawSkia?.InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+
+            // Move-Werkzeug: Pfad skalieren beendet
+            if (_activeTool == CanvasTool.Move && _pfadScaleChainIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            {
+                CanvasGrid.ReleaseMouseCapture();
+                CanvasGrid.Cursor = Cursors.Arrow;
+                CommitScalePfadChain();
+                e.Handled = true;
+                return;
+            }
+
+            // Move-Werkzeug: ganzen Pfad-Drag beendet
+            if (_activeTool == CanvasTool.Move && _pfadChainDragIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            {
+                CanvasGrid.ReleaseMouseCapture();
+                CanvasGrid.Cursor = Cursors.Arrow;
+                CommitMovePfadChain();
+                e.Handled = true;
+                return;
+            }
+
+            // Move-Werkzeug: Kreis-Drag beendet
+            if (_activeTool == CanvasTool.Move && CanvasGrid.IsMouseCaptured
+                && _moveHistoryIdx >= 0 && _moveHistoryIdx < _history.Count
+                && _history[_moveHistoryIdx].Params is KreisParams)
+            {
+                CanvasGrid.ReleaseMouseCapture();
+                CanvasGrid.Cursor = Cursors.Arrow;
+                CommitMoveKreis();
                 e.Handled = true;
                 return;
             }
@@ -3579,8 +8112,30 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 return;
             }
 
-            // VCarveText-Werkzeug: Mouse-Capture freigeben (z.B. nach Ctrl-Resize)
-            if (_activeTool == CanvasTool.VCarveText && CanvasGrid.IsMouseCaptured)
+            // Vermassen State 1: Drag-Positionierung abschließen oder in Warte-Modus wechseln
+            if (_activeTool == CanvasTool.Vermassen && _vermState == 1 && _vermIsHolding)
+            {
+                CanvasGrid.ReleaseMouseCapture();
+                _vermIsHolding = false;
+                var vup = e.GetPosition(CanvasGrid);
+                double vux = (vup.X - _panX) / _zoom;
+                double vuy = WorkY - (vup.Y - _panY) / _zoom;
+                double dx = vux - _vermDownMm.x, dy = vuy - _vermDownMm.y;
+                bool hasMoved = (dx*dx + dy*dy) > 4.0; // > 2 mm Schwellwert
+                if (hasMoved)
+                {
+                    // Maustaste nach Positionierung losgelassen → Masslinie platzieren
+                    _vermMouseMm = (vux, vuy);
+                    PlaceVermassungAt(vux, vuy);
+                }
+                // else: schneller Klick → Warte-Modus (state 1 bleibt, _vermIsHolding = false)
+                DrawSkia?.InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+
+            // VCarveText/Sk-Werkzeug: Mouse-Capture freigeben (z.B. nach Ctrl-Resize)
+            if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && CanvasGrid.IsMouseCaptured)
             {
                 CanvasGrid.ReleaseMouseCapture();
                 e.Handled = true;
@@ -3633,10 +8188,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         CanvasGrid.ReleaseMouseCapture();
         CanvasGrid.Cursor = _activeTool switch
         {
-            CanvasTool.Hand       => Cursors.Hand,
-            CanvasTool.Zoom       => Cursors.Cross,
-            CanvasTool.VCarveText => Cursors.Cross,
-            _                     => Cursors.Arrow,
+            CanvasTool.Hand         => Cursors.Hand,
+            CanvasTool.Zoom         => Cursors.Cross,
+            CanvasTool.VCarveText   => Cursors.Cross,
+            CanvasTool.VCarveTextSk => Cursors.Cross,
+            _                       => Cursors.Arrow,
         };
     }
 
@@ -3647,37 +8203,80 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             && !_isPanning && !CanvasGrid.IsMouseCaptured)
         {
             var pos = e.GetPosition(CanvasGrid);
-            _pfadMouseMm    = (SnapX((pos.X - _panX) / _zoom),
-                               SnapY(WorkY - (pos.Y - _panY) / _zoom));
+            double rawX = (pos.X - _panX) / _zoom;
+            double rawY = WorkY - (pos.Y - _panY) / _zoom;
+            // Bogen-Mittelpunkt nicht am Raster fangen
+            bool noSnap = _activeTool == CanvasTool.PfadBogen && _pfadBogenWaiting;
+            _pfadMouseMm    = noSnap ? (rawX, rawY) : (SnapX(rawX), SnapY(rawY));
             _pfadMouseValid = true;
             DrawSkia?.InvalidateVisual();
             return;
         }
 
-        // Move-Werkzeug: Textfeld / Pfad-Punkt ziehen oder Hover-Cursor (nicht wenn gerade gepannt wird)
+        // Pfeil-Werkzeug: Pfad-Punkte und Segment-Mittelpunkte ziehen
+        if (_activeTool == CanvasTool.Pfeil && !_isPanning)
+        {
+            var pos = e.GetPosition(CanvasGrid);
+            double mmX = (pos.X - _panX) / _zoom;
+            double mmY = WorkY - (pos.Y - _panY) / _zoom;
+
+            if (_pfadSegDragIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            {
+                if (_pfadSegDragIsArc) UpdateBogenPfeilhoehe(_pfadSegDragIdx, mmX, mmY);
+                else                  MovePfadLinienSegment(_pfadSegDragIdx, mmX, mmY);
+                PropagateVermConstraintsLive();
+                DrawSkia?.InvalidateVisual();
+                return;
+            }
+            if (_pfadDragHistIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            {
+                UpdatePfadPunktPos(_pfadDragHistIdx, SnapX(mmX), SnapY(mmY));
+                PropagateVermConstraintsLive();
+                DrawSkia?.InvalidateVisual();
+                return;
+            }
+            // Hover
+            CanvasGrid.Cursor = (HitTestPfadPunkt(mmX, mmY) >= 0 || HitTestPfadSegMid(mmX, mmY) >= 0)
+                ? Cursors.SizeAll : Cursors.Arrow;
+            return;
+        }
+
+        // Move-Werkzeug: ganzen Pfad / Objekte ziehen oder Hover-Cursor
         if (_activeTool == CanvasTool.Move && !_isPanning)
         {
             var pos = e.GetPosition(CanvasGrid);
             double mmX = (pos.X - _panX) / _zoom;
             double mmY = WorkY - (pos.Y - _panY) / _zoom;
 
-            // Pfad-Punkt wird gezogen
-            if (_pfadDragHistIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            // Kette wird skaliert
+            if (_pfadScaleChainIdx >= 0 && CanvasGrid.IsMouseCaptured)
             {
-                UpdatePfadPunktPos(_pfadDragHistIdx, SnapX(mmX), SnapY(mmY));
-                DrawSkia?.InvalidateVisual();
+                UpdateScalePfadChain(mmX, mmY);
+                return;
+            }
+
+            // Ganze Kette wird gezogen
+            if (_pfadChainDragIdx >= 0 && CanvasGrid.IsMouseCaptured)
+            {
+                UpdateMovePfadChain(mmX, mmY);
                 return;
             }
 
             if (_moveHistoryIdx >= 0 && CanvasGrid.IsMouseCaptured)
             {
-                UpdateMoveTextField(mmX, mmY);
+                if (_moveHistoryIdx < _history.Count && _history[_moveHistoryIdx].Params is KreisParams)
+                    UpdateMoveKreis(mmX, mmY);
+                else
+                    UpdateMoveTextField(mmX, mmY);
             }
             else
             {
-                // Hover: Ecken des selektierten Eintrags → Resize-Cursor; Pfad-Punkte → SizeAll
+                // Hover
                 Cursor cur = Cursors.Arrow;
-                if (HitTestPfadPunkt(mmX, mmY) >= 0)
+                var (hoverChain, hoverAnchor) = HitTestPfadChainAnchor(mmX, mmY);
+                if (hoverChain >= 0)
+                    cur = ScaleAnchorCursor(hoverAnchor);
+                else if (HitTestPfadChainBBox(mmX, mmY) >= 0)
                     cur = Cursors.SizeAll;
                 else if (HistoryList.SelectedItem is HistoryEntry hov
                     && hov.Params is GraviereParams hovGp)
@@ -3697,15 +8296,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     else if (HitTestTextField(mmX, mmY) >= 0 || HitTestRechteck(mmX, mmY) >= 0)
                         cur = Cursors.SizeAll;
                 }
-                else if (HitTestTextField(mmX, mmY) >= 0 || HitTestRechteck(mmX, mmY) >= 0)
+                else if (HitTestTextField(mmX, mmY) >= 0 || HitTestRechteck(mmX, mmY) >= 0
+                         || HitTestKreis(mmX, mmY) >= 0)
                     cur = Cursors.SizeAll;
                 CanvasGrid.Cursor = cur;
             }
             return;
         }
 
-        // VCarveText + Ctrl-Resize: Drag läuft
-        if (_activeTool == CanvasTool.VCarveText && _ctrlResizeReopen >= 0
+        // VCarveText/Sk + Ctrl-Resize: Drag läuft
+        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+            && _ctrlResizeReopen >= 0
             && _moveHistoryIdx >= 0 && CanvasGrid.IsMouseCaptured && !_isPanning)
         {
             var pos  = e.GetPosition(CanvasGrid);
@@ -3715,8 +8316,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;
         }
 
-        // VCarveText-Werkzeug: Gummiband nach erstem Klick — Fadenkreuz + eingerastetes Gummiband
-        if (_activeTool == CanvasTool.VCarveText && _isTextDragging && !_isPanning)
+        // VCarveText/Sk-Werkzeug: Gummiband nach erstem Klick — Fadenkreuz + eingerastetes Gummiband
+        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _isTextDragging && !_isPanning)
         {
             var pos2   = e.GetPosition(CanvasGrid);
             double mx2 = SnapX((pos2.X - _panX) / _zoom);
@@ -3757,9 +8358,71 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             DrawSkia?.InvalidateVisual();
             return;
         }
+        if (_activeTool == CanvasTool.Kreis && !_isPanning)
+        {
+            var kpos   = e.GetPosition(CanvasGrid);
+            double kmx = SnapX((kpos.X - _panX) / _zoom);
+            double kmy = SnapY(WorkY - (kpos.Y - _panY) / _zoom);
+            _pfadMouseMm    = (kmx, kmy);
+            _pfadMouseValid = true;
+            if (_kreisDragging)
+            {
+                double cx2 = (_kreisDragCenter.X - _panX) / _zoom;
+                double cy2 = WorkY - (_kreisDragCenter.Y - _panY) / _zoom;
+                double dx = kmx - cx2, dy = kmy - cy2;
+                double rPx = Math.Sqrt(dx*dx + dy*dy) * _zoom;
+                UpdateKreisRubberBand(_kreisDragCenter, rPx);
+            }
+            DrawSkia?.InvalidateVisual();
+            return;
+        }
 
-        // Hover-Cursor im VCarveText-Modus: IBeam über Textfeldern, Corner-Cursor bei Ctrl
-        if (!_isPanning && !CanvasGrid.IsMouseCaptured && _activeTool == CanvasTool.VCarveText)
+        // Vermassen-Werkzeug: Hover (0) + Offset-Vorschau (1) + Drag (3)
+        if (_activeTool == CanvasTool.Vermassen && !_isPanning)
+        {
+            var vmp = e.GetPosition(CanvasGrid);
+            double vmx = (vmp.X - _panX) / _zoom;
+            double vmy = WorkY - (vmp.Y - _panY) / _zoom;
+            _vermMouseMm = (vmx, vmy);
+            if (_vermState == 0)
+            {
+                int ptHit  = HitTestPfadPoint(vmx, vmy);
+                var hit    = ptHit < 0 ? HitTestPfadLineSegment(vmx, vmy) : (-1, -1);
+                int edgeHit = hit.Item1 < 0 && ptHit < 0 ? HitTestWorkpieceEdge(vmx, vmy) : 0;
+                if (ptHit != _vermHoverPoint || hit.Item1 != _vermHoverP1 ||
+                    hit.Item2 != _vermHoverP2 || edgeHit != _vermHoverEdge)
+                {
+                    _vermHoverPoint = ptHit;
+                    _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2; _vermHoverEdge = edgeHit;
+                    DrawSkia?.InvalidateVisual();
+                }
+            }
+            else if (_vermState == 1 || _vermState == 5)
+            {
+                // Im Warte-Modus (state 1, nicht haltend): Hover für 2. Auswahl aktualisieren
+                if (_vermState == 1 && !_vermIsHolding)
+                {
+                    _vermHoverPoint = HitTestPfadPoint(vmx, vmy);
+                    var hit = _vermHoverPoint < 0 ? HitTestPfadLineSegment(vmx, vmy) : (-1, -1);
+                    _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2;
+                    if (_vermActiveEdge == 0)
+                        _vermHoverEdge = hit.Item1 < 0 && _vermHoverPoint < 0
+                            ? HitTestWorkpieceEdge(vmx, vmy) : 0;
+                }
+                DrawSkia?.InvalidateVisual();
+            }
+            else if (_vermState == 3 && _vermEditIdx >= 0)
+            {
+                // Offset-Drag: Vorschau aktualisieren (alle Arten)
+                _vermDragOffset = VermComputeNewOffset(vmx, vmy, _vermPlaced[_vermEditIdx]);
+                DrawSkia?.InvalidateVisual();
+            }
+            return;
+        }
+
+        // Hover-Cursor im VCarveText/Sk-Modus: IBeam über Textfeldern, Corner-Cursor bei Ctrl
+        if (!_isPanning && !CanvasGrid.IsMouseCaptured
+            && (_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk))
         {
             var hPos  = e.GetPosition(CanvasGrid);
             double hx = (hPos.X - _panX) / _zoom;
@@ -3817,10 +8480,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         CanvasGrid.ReleaseMouseCapture();
         CanvasGrid.Cursor = _activeTool switch
         {
-            CanvasTool.Hand       => Cursors.Hand,
-            CanvasTool.Zoom       => Cursors.Cross,
-            CanvasTool.VCarveText => Cursors.Cross,
-            _                     => Cursors.Arrow,
+            CanvasTool.Hand         => Cursors.Hand,
+            CanvasTool.Zoom         => Cursors.Cross,
+            CanvasTool.VCarveText   => Cursors.Cross,
+            CanvasTool.VCarveTextSk => Cursors.Cross,
+            _                       => Cursors.Arrow,
         };
     }
 
@@ -4355,14 +9019,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_selectedGCodeLine >= 1 && !_topRect.IsEmpty)
             DrawSelectionLocatorSk(canvas);
 
-        // Move-Werkzeug: Pfad-Punkte als Dots anzeigen
+        // Move-Werkzeug: Bounding-Box mit Ankerpunkten; Pfeil-Werkzeug: Punkte-Dots
         if (_activeTool == CanvasTool.Move)
+            DrawPfadChainBBoxes(canvas);
+        else if (_activeTool == CanvasTool.Pfeil)
             DrawPfadPunkteDots(canvas);
+
+        DrawVermassungOverlay(canvas);
 
         // Pfad- und Textfeld-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
             && (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen
-                || _activeTool == CanvasTool.VCarveText || _activeTool == CanvasTool.Rechteck))
+                or CanvasTool.VCarveText or CanvasTool.VCarveTextSk or CanvasTool.Rechteck
+                || _activeTool == CanvasTool.Kreis))
         {
             double sc2 = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
             float  cx2 = (float)(_topRect.Left   + _pfadMouseMm.x * sc2);
@@ -4399,10 +9068,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 using var ep2 = new SKPaint { Color = new SKColor(220, 80, 0, 200),
                     Style = SKPaintStyle.Fill, IsAntialias = true };
                 canvas.DrawCircle(ex, ey, (float)(4.5 / _zoom), ep2);
-                using var lp2 = new SKPaint { Color = new SKColor(220, 80, 0, 120),
-                    Style = SKPaintStyle.Stroke, StrokeWidth = lt2, IsAntialias = true,
-                    PathEffect = SKPathEffect.CreateDash(new float[] { 4 * lt2, 3 * lt2 }, 0) };
-                canvas.DrawLine(cx2, cy2, ex, ey, lp2);
+                // Live-Bogenvorschau
+                var p1 = GetLastPfadAbsPoint();
+                if (p1.HasValue)
+                    DrawBogenPreview(canvas, p1.Value, _pfadBogenEndAbs, _pfadMouseMm, lt2);
             }
         }
 
@@ -5059,6 +9728,39 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
+        // ── Kreis-Konturen ──
+        foreach (var entry in _history)
+        {
+            if (entry.Params is not KreisParams kr) continue;
+            bool isSelected = HistoryList.SelectedItem == entry;
+            bool isDragged  = isSelected && _previewKreisParams != null;
+            if (isDragged) kr = _previewKreisParams!;
+            var (cx, cy) = GCodeGenerator.ConvertBezugspunkt(kr.Bezugspunkt, kr.XRel, kr.YRel, wx, wy);
+            float rPx = (float)(kr.Radius * scale);
+            var (cpx, cpy) = MmToPx(cx, cy);
+            var lineColor = isSelected ? new SKColor(0xFF, 0xA0, 0x00) : new SKColor(80, 80, 80, 200);
+            using var krPaint = new SKPaint
+            {
+                Color = lineColor, Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)(1.0 / _zoom), IsAntialias = true
+            };
+            canvas.DrawCircle(cpx, cpy, rPx, krPaint);
+
+            if (isSelected && _activeTool == CanvasTool.Move)
+            {
+                float as_ = 8f / (float)_zoom;
+                using var anchorFill = new SKPaint { Color = new SKColor(0xFF, 0xA0, 0x00), Style = SKPaintStyle.Fill };
+                using var anchorBdr  = new SKPaint { Color = SKColors.White, Style = SKPaintStyle.Stroke, StrokeWidth = 1.2f };
+                void DrawAnchorK(float ax, float ay)
+                {
+                    canvas.DrawRect(ax - as_ / 2, ay - as_ / 2, as_, as_, anchorFill);
+                    canvas.DrawRect(ax - as_ / 2, ay - as_ / 2, as_, as_, anchorBdr);
+                }
+                DrawAnchorK(cpx + rPx, cpy);      // rechts (Radius-Griff)
+                DrawAnchorK(cpx,       cpy);       // Mitte
+            }
+        }
+
         // ── Pfad-Konturen ──
         {
             var selEntry = HistoryList.SelectedItem as HistoryEntry;
@@ -5099,6 +9801,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 return (cx, cy, R, cross < 0);
             }
 
+            var fullyConstrainedPts = GetFullyConstrainedPoints();
             int hi = 0;
             while (hi < _history.Count)
             {
@@ -5106,6 +9809,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 { hi++; continue; }
 
                 // Kette ab Start sammeln
+                int chainHi = hi;
                 var chain = new List<(HistoryEntry e, PfadPunktParams p)> { (_history[hi], startP) };
                 int hj = hi + 1;
                 while (hj < _history.Count
@@ -5151,6 +9855,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     (drawPts, drawMids) = GCodeGenerator.InsertLineCornerArcs(
                         new List<(double x, double y)>(pts), arcMidsC, verrC, closed: false);
 
+                // Konkave Ecken mit Fräserradius visualisieren:
+                // Kreis-Bogen mit Radius r um den Fräspfad-Eckpunkt Q (korrekte Darstellung)
+                var chainStart = chain[0].p;
+                if (chainStart.Radiuskorrektur != "Mittig" && chainStart.FraeserD > 1e-10)
+                {
+                    double sign = chainStart.Radiuskorrektur == "Links" ? 1.0 : -1.0;
+                    var concaveRad = GCodeGenerator.ConcaveCornerRadii(
+                        drawPts, drawMids, chainStart.FraeserD / 2.0, sign);
+                    if (concaveRad.Any(v => v > 1e-10))
+                        (drawPts, drawMids) = GCodeGenerator.InsertConcaveCircleArcs(
+                            new List<(double x, double y)>(drawPts),
+                            new List<(double, double)?>(drawMids),
+                            concaveRad, sign);
+                }
+
                 using var pfadPath = new SKPath();
                 var sp0 = MmToPx(drawPts[0].x, drawPts[0].y);
                 pfadPath.MoveTo(sp0.px, sp0.py);
@@ -5183,13 +9902,60 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     StrokeWidth = (float)(1.5 / _zoom), IsAntialias = true };
                 canvas.DrawPath(pfadPath, pfadPaint);
 
-                // Punkte als kleine Kreise
-                float dotR2 = 3f / (float)_zoom;
-                using var dotPaint = new SKPaint { Color = lineCol, Style = SKPaintStyle.Fill };
-                foreach (var pt in pts)
+                // Vollständig eingeschränkte Segmente in grüner Farbe hervorheben
+                if (!isSel && fullyConstrainedPts.Count > 0)
                 {
-                    var dp = MmToPx(pt.x, pt.y);
-                    canvas.DrawCircle(dp.px, dp.py, dotR2, dotPaint);
+                    using var cPaint = new SKPaint { Color = new SKColor(0, 190, 110),
+                        Style = SKPaintStyle.Stroke, StrokeWidth = (float)(1.5 / _zoom), IsAntialias = true };
+                    for (int k = 1; k < chain.Count; k++)
+                    {
+                        if (!fullyConstrainedPts.Contains(chainHi + k - 1) ||
+                            !fullyConstrainedPts.Contains(chainHi + k)) continue;
+                        using var cSegPath = new SKPath();
+                        var csp = MmToPx(pts[k - 1].x, pts[k - 1].y);
+                        cSegPath.MoveTo(csp.px, csp.py);
+                        if (arcMidsC[k].HasValue)
+                        {
+                            var (amx, amy) = arcMidsC[k]!.Value;
+                            var (cx2, cy2, cR2, ccw2) = Arc3Pts(
+                                pts[k-1].x, pts[k-1].y, amx, amy, pts[k].x, pts[k].y);
+                            if (!double.IsInfinity(cR2) && cR2 > 1e-6)
+                            {
+                                var ccp = MmToPx(cx2, cy2);
+                                float rPxC = (float)(cR2 * scale);
+                                var ovalC = new SKRect(ccp.px - rPxC, ccp.py - rPxC,
+                                                       ccp.px + rPxC, ccp.py + rPxC);
+                                float ca1 = (float)(Math.Atan2(-(pts[k-1].y - cy2), pts[k-1].x - cx2) * 180 / Math.PI);
+                                float ca2 = (float)(Math.Atan2(-(pts[k].y   - cy2), pts[k].x   - cx2) * 180 / Math.PI);
+                                float csw = ca2 - ca1;
+                                if ( ccw2 && csw < 0) csw += 360;
+                                if (!ccw2 && csw > 0) csw -= 360;
+                                cSegPath.ArcTo(ovalC, ca1, csw, false);
+                            }
+                            else
+                            {
+                                var cep = MmToPx(pts[k].x, pts[k].y);
+                                cSegPath.LineTo(cep.px, cep.py);
+                            }
+                        }
+                        else
+                        {
+                            var cep = MmToPx(pts[k].x, pts[k].y);
+                            cSegPath.LineTo(cep.px, cep.py);
+                        }
+                        canvas.DrawPath(cSegPath, cPaint);
+                    }
+                }
+
+                // Punkte als kleine Kreise (fixierte in grün)
+                float dotR2 = 3f / (float)_zoom;
+                using var dotPaintDef  = new SKPaint { Color = lineCol, Style = SKPaintStyle.Fill };
+                using var dotPaintFix  = new SKPaint { Color = new SKColor(0, 190, 110), Style = SKPaintStyle.Fill };
+                for (int kd = 0; kd < pts.Count; kd++)
+                {
+                    bool ptFix = !isSel && fullyConstrainedPts.Contains(chainHi + kd);
+                    var dp = MmToPx(pts[kd].x, pts[kd].y);
+                    canvas.DrawCircle(dp.px, dp.py, dotR2, ptFix ? dotPaintFix : dotPaintDef);
                 }
             }
         }
@@ -6826,6 +11592,21 @@ public class HistoryEntry(string label, string details, object p, int level = 0)
         }
     }
 }
+
+public record KreisParams(
+    double XRel, double YRel,
+    double Radius,
+    double ZTiefe,
+    double FraeserD, double Drehzahl, double Vorschub, double VorschubFz,
+    string Fraesung,        // "Aussen" | "Innen" | "Mittig"
+    string Laufrichtung,    // "Gegenlauf" | "Gleichlauf"
+    int WerkzeugNr = 0,
+    bool MehrfachZustellung = false,
+    double ZZustellung = 0,
+    double Eintauchwinkel = 3,
+    string Bezugspunkt = "Mitte",
+    bool IsTasche = false
+);
 
 public record RechteckParams(
     double XRel, double YRel,

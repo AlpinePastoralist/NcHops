@@ -599,6 +599,9 @@
                             Panel.ZIndex="2"/>
                     <!-- Simulations-Werkzeugkopf -->
                     <Canvas x:Name="SimToolCanvas" IsHitTestVisible="False" Panel.ZIndex="5"/>
+                    <!-- Overlay für Vermassen-TextBox (hit-test aktiv, über allem) -->
+                    <Canvas x:Name="VermOverlayCanvas" Panel.ZIndex="6" Background="Transparent"
+                            IsHitTestVisible="True"/>
                     <!-- Werkzeugpalette (links, schwebend) -->
                     <Border HorizontalAlignment="Left" VerticalAlignment="Center"
                             Margin="8,0" Padding="4,6"
@@ -626,8 +629,17 @@
                             <Button x:Name="BtnToolVCarveText"
                                     Style="{StaticResource ToolPalBtn}"
                                     Click="OnToolVCarveText"
-                                    ToolTip="V-Carve Textfeld aufziehen">
+                                    ToolTip="V-Carve Textfeld aufziehen (WPF)">
                                 <TextBlock Text="T" FontSize="15" Foreground="White"
+                                           FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <Button x:Name="BtnToolVCarveTextSk"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnToolVCarveTextSk"
+                                    ToolTip="V-Carve Textfeld aufziehen (Skia – schneller)">
+                                <TextBlock Text="T₂" FontSize="13" Foreground="White"
                                            FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
@@ -635,10 +647,28 @@
                             <Button x:Name="BtnToolMove"
                                     Style="{StaticResource ToolPalBtn}"
                                     Click="OnToolMove"
-                                    ToolTip="Verschieben – Textfeld / Pfad-Punkt ziehen">
+                                    ToolTip="Verschieben – ganzen Pfad / Objekte verschieben">
                                 <Viewbox Width="16" Height="16">
                                     <Path Fill="White" Stretch="None"
                                           Data="M 8,0 L 10.5,4 L 9,4 L 9,7 L 12,7 L 12,9 L 9,9 L 9,12 L 10.5,12 L 8,16 L 5.5,12 L 7,12 L 7,9 L 4,9 L 4,7 L 7,7 L 7,4 L 5.5,4 Z"/>
+                                </Viewbox>
+                            </Button>
+                            <Button x:Name="BtnToolPfeil"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnToolPfeil"
+                                    ToolTip="Pfeilwerkzeug – einzelne Pfad-Punkte verschieben">
+                                <Viewbox Width="16" Height="16">
+                                    <Path Fill="White" Stretch="None"
+                                          Data="M 1,1 L 1,11 L 4,8 L 5.5,12 L 7,11.5 L 5.5,7.5 L 9,7.5 Z"/>
+                                </Viewbox>
+                            </Button>
+                            <Button x:Name="BtnToolVermassen"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnToolVermassen"
+                                    ToolTip="Vermassen – Maßlinie an Pfad-Segment">
+                                <Viewbox Width="16" Height="16">
+                                    <Path Fill="White" Stretch="None"
+                                          Data="M 1,12 L 15,12 M 1,10 L 1,14 M 15,10 L 15,14 M 8,12 L 8,4 M 5,6 L 8,2 L 11,6"/>
                                 </Viewbox>
                             </Button>
                             <Rectangle Height="1" Margin="4,6" Fill="#44FFFFFF"/>
@@ -678,8 +708,73 @@
                                           Data="M 1,1 L 15,1 L 15,11 L 1,11 Z"/>
                                 </Viewbox>
                             </Button>
+                            <Button x:Name="BtnToolKreis"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnKreisTool"
+                                    ToolTip="Kreis aufziehen">
+                                <Viewbox Width="16" Height="16">
+                                    <Ellipse Width="14" Height="14" Margin="1"
+                                             Stroke="White" StrokeThickness="1.5" Fill="Transparent"/>
+                                </Viewbox>
+                            </Button>
                         </StackPanel>
                     </Border>
+                    <!-- Vermassen-Toolbar (rechts, schwebend, nur sichtbar wenn Vermassen aktiv) -->
+                    <Border x:Name="VermToolbar"
+                            HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Margin="0,0,8,0" Padding="4,6"
+                            Background="#CC2A3545" CornerRadius="6"
+                            Panel.ZIndex="8" Visibility="Collapsed">
+                        <StackPanel>
+                            <!-- Koinzident -->
+                            <Button x:Name="BtnVermKoinzident"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnVermKoinzident"
+                                    ToolTip="Koinzident – zwei Punkte auf gleiche Position zwingen">
+                                <Viewbox Width="16" Height="16">
+                                    <Canvas Width="16" Height="16">
+                                        <Ellipse Canvas.Left="1" Canvas.Top="1" Width="6" Height="6"
+                                                 Stroke="White" StrokeThickness="1.5" Fill="Transparent"/>
+                                        <Ellipse Canvas.Left="9" Canvas.Top="9" Width="6" Height="6"
+                                                 Stroke="White" StrokeThickness="1.5" Fill="Transparent"/>
+                                        <Line X1="4" Y1="4" X2="12" Y2="12"
+                                              Stroke="White" StrokeThickness="1" Opacity="0.5"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
+                            <!-- Rechtwinklig -->
+                            <Button x:Name="BtnVermRechtwinklig"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnVermRechtwinklig"
+                                    ToolTip="Rechtwinklig – zwei Linien senkrecht zueinander, oder Linie senkrecht zur Werkstückkante (2. Klick auf Kante)">
+                                <Viewbox Width="16" Height="16">
+                                    <Canvas Width="16" Height="16">
+                                        <Line X1="2" Y1="14" X2="14" Y2="14"
+                                              Stroke="White" StrokeThickness="1.5"/>
+                                        <Line X1="2" Y1="14" X2="2" Y2="2"
+                                              Stroke="White" StrokeThickness="1.5"/>
+                                        <Polyline Points="2,8 6,8 6,14"
+                                                  Stroke="White" StrokeThickness="1" Fill="Transparent"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
+                            <!-- Parallel -->
+                            <Button x:Name="BtnVermParallel"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnVermParallel"
+                                    ToolTip="Parallel – zwei Linien parallel halten, oder Linie parallel zur Werkstückkante (2. Klick auf Kante)">
+                                <Viewbox Width="16" Height="16">
+                                    <Canvas Width="16" Height="16">
+                                        <Line X1="2" Y1="5"  X2="14" Y2="5"
+                                              Stroke="White" StrokeThickness="1.5"/>
+                                        <Line X1="2" Y1="11" X2="14" Y2="11"
+                                              Stroke="White" StrokeThickness="1.5"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+
                     <!-- Zoom-Anzeige -->
                     <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
                             Margin="0,0,6,6" Padding="5,2"
@@ -1091,20 +1186,22 @@
                                                Margin="0,0,0,6" Visibility="Collapsed"/>
                                 </StackPanel>
 
-                                <TextBlock Text="Bezugspunkt:" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                <ComboBox x:Name="PfadEigBezug" Margin="0,0,0,6"
-                                          SelectionChanged="OnPfadEigSelChanged">
-                                    <ComboBoxItem Content="Letzter Punkt"/>
-                                    <ComboBoxItem Content="Unten links"/>
-                                    <ComboBoxItem Content="Oben links"/>
-                                    <ComboBoxItem Content="Unten rechts"/>
-                                    <ComboBoxItem Content="Oben rechts"/>
-                                    <ComboBoxItem Content="Mitte"/>
-                                    <ComboBoxItem Content="Links Mitte"/>
-                                    <ComboBoxItem Content="Rechts Mitte"/>
-                                    <ComboBoxItem Content="Oben Mitte"/>
-                                    <ComboBoxItem Content="Unten Mitte"/>
-                                </ComboBox>
+                                <StackPanel x:Name="PnlPfadEigBezug">
+                                    <TextBlock Text="Bezugspunkt:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="PfadEigBezug" Margin="0,0,0,6"
+                                              SelectionChanged="OnPfadEigSelChanged">
+                                        <ComboBoxItem Content="Letzter Punkt"/>
+                                        <ComboBoxItem Content="Unten links"/>
+                                        <ComboBoxItem Content="Oben links"/>
+                                        <ComboBoxItem Content="Unten rechts"/>
+                                        <ComboBoxItem Content="Oben rechts"/>
+                                        <ComboBoxItem Content="Mitte"/>
+                                        <ComboBoxItem Content="Links Mitte"/>
+                                        <ComboBoxItem Content="Rechts Mitte"/>
+                                        <ComboBoxItem Content="Oben Mitte"/>
+                                        <ComboBoxItem Content="Unten Mitte"/>
+                                    </ComboBox>
+                                </StackPanel>
 
                                 <!-- Verrundung: nur für Linie und Bogen sichtbar -->
                                 <StackPanel x:Name="PnlPfadEigVerrundung">
@@ -1113,6 +1210,67 @@
                                              LostFocus="OnPfadEigLostFocus"
                                              TextChanged="OnPfadEigTextChanged"
                                              KeyDown="OnPfadEigKeyDown"/>
+                                </StackPanel>
+
+                            </StackPanel>
+
+                            <!-- Pfad geschlossen: Endpunkt-Eigenschaften (nur sichtbar wenn Start gewählt + Pfad geschlossen) -->
+                            <StackPanel x:Name="PnlPfadEndPunkt" Visibility="Collapsed" Margin="0,8,0,0">
+
+                                <Separator Margin="0,0,0,8"/>
+
+                                <TextBlock x:Name="EndPfadEigTitel" Text="Endpunkt (Pfad geschlossen)"
+                                           FontWeight="Bold" FontSize="13" Margin="0,0,0,8"
+                                           Foreground="{StaticResource TextDarkBrush}"/>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EndPfadEigX" LostFocus="OnEndPfadEigLostFocus"
+                                                 TextChanged="OnEndPfadEigTextChanged"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EndPfadEigY" LostFocus="OnEndPfadEigLostFocus"
+                                                 TextChanged="OnEndPfadEigTextChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Nur für Bogen-Endpunkt -->
+                                <StackPanel x:Name="PnlEndPfadEigBogenMid">
+                                    <TextBlock Text="Bogen-Art:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="EndPfadEigBogenModus" Margin="0,0,0,6"
+                                              SelectionChanged="OnEndPfadEigBogenModusChanged">
+                                        <ComboBoxItem Content="Bogenmitte"/>
+                                        <ComboBoxItem Content="Radius"/>
+                                        <ComboBoxItem Content="Pfeilhöhe"/>
+                                    </ComboBox>
+                                    <TextBlock x:Name="EndPfadEigBogenWertLabel"
+                                               Text="Bogen-Mitte X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="EndPfadEigXMid" Margin="0,0,0,6"
+                                             LostFocus="OnEndPfadEigLostFocus"
+                                             TextChanged="OnEndPfadEigTextChanged"/>
+                                    <StackPanel x:Name="PnlEndPfadEigYMid">
+                                        <TextBlock Text="Bogen-Mitte Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EndPfadEigYMid" Margin="0,0,0,6"
+                                                 LostFocus="OnEndPfadEigLostFocus"
+                                                 TextChanged="OnEndPfadEigTextChanged"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- Bezugspunkt für Endpunkt: nicht mehr nötig (immer "Unten links") -->
+
+                                <StackPanel x:Name="PnlEndPfadEigVerrundung">
+                                    <TextBlock Text="Verrundung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="EndPfadEigVer" Margin="0,0,0,6"
+                                             LostFocus="OnEndPfadEigLostFocus"
+                                             TextChanged="OnEndPfadEigTextChanged"
+                                             KeyDown="OnEndPfadEigKeyDown"/>
                                 </StackPanel>
 
                             </StackPanel>
@@ -1276,6 +1434,149 @@
                                     <StackPanel Grid.Column="0">
                                         <TextBlock Text="Z-Zustellung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                         <TextBox x:Name="RktEigZZust" LostFocus="OnRktEigLostFocus" KeyDown="OnRktEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                            </StackPanel>
+
+                            <!-- ── Kreis ── -->
+                            <StackPanel x:Name="PnlKreis" Visibility="Collapsed">
+
+                                <TextBlock Text="Kreis" FontWeight="Bold" FontSize="13"
+                                           Margin="0,0,0,8"
+                                           Foreground="{StaticResource TextDarkBrush}"/>
+
+                                <!-- Modus: Kontur / Tasche -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <RadioButton x:Name="KrModusNut" Content="Kontur"
+                                                 GroupName="KrModus" IsChecked="True"
+                                                 Margin="0,0,12,0" VerticalAlignment="Center"
+                                                 Checked="OnKrEigChanged"/>
+                                    <RadioButton x:Name="KrModusTasche" Content="Tasche"
+                                                 GroupName="KrModus"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnKrEigChanged"/>
+                                </StackPanel>
+
+                                <!-- Werkzeug -->
+                                <TextBlock Text="Werkzeug:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="KrEigWerkzeug"
+                                          DisplayMemberPath="DisplayName"
+                                          Margin="0,0,0,10"
+                                          SelectionChanged="OnKrEigChanged"/>
+
+                                <!-- X / Y -->
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="KrEigX" LostFocus="OnKrEigLostFocus" KeyDown="OnKrEigKeyDown"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="KrEigY" LostFocus="OnKrEigLostFocus" KeyDown="OnKrEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Bezugspunkt -->
+                                <TextBlock Text="Bezugspunkt:" FontWeight="SemiBold" Margin="0,4,0,2"/>
+                                <Canvas Width="90" Height="64" HorizontalAlignment="Left" Margin="0,0,0,8">
+                                    <Rectangle Canvas.Left="10" Canvas.Top="8"
+                                               Width="70" Height="48"
+                                               Fill="#F5EFDA" Stroke="#C8A864"
+                                               StrokeThickness="1.5" RadiusX="2" RadiusY="2"/>
+                                    <!-- Oben -->
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugOL"
+                                                 GroupName="KrBezug" Canvas.Left="3"  Canvas.Top="1"
+                                                 ToolTip="Oben links"  Checked="OnKrEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugOM"
+                                                 GroupName="KrBezug" Canvas.Left="38" Canvas.Top="1"
+                                                 ToolTip="Oben Mitte"  Checked="OnKrEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugOR"
+                                                 GroupName="KrBezug" Canvas.Left="73" Canvas.Top="1"
+                                                 ToolTip="Oben rechts" Checked="OnKrEigChanged"/>
+                                    <!-- Mitte -->
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugML"
+                                                 GroupName="KrBezug" Canvas.Left="3"  Canvas.Top="25"
+                                                 ToolTip="Links Mitte"  Checked="OnKrEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugMM"
+                                                 GroupName="KrBezug" Canvas.Left="38" Canvas.Top="25"
+                                                 IsChecked="True"
+                                                 ToolTip="Mitte"        Checked="OnKrEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugMR"
+                                                 GroupName="KrBezug" Canvas.Left="73" Canvas.Top="25"
+                                                 ToolTip="Rechts Mitte" Checked="OnKrEigChanged"/>
+                                    <!-- Unten -->
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugUL"
+                                                 GroupName="KrBezug" Canvas.Left="3"  Canvas.Top="49"
+                                                 ToolTip="Unten links"  Checked="OnKrEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugUM"
+                                                 GroupName="KrBezug" Canvas.Left="38" Canvas.Top="49"
+                                                 ToolTip="Unten Mitte"  Checked="OnKrEigChanged"/>
+                                    <RadioButton Style="{StaticResource BezugKompakt}" x:Name="KrBezugUR"
+                                                 GroupName="KrBezug" Canvas.Left="73" Canvas.Top="49"
+                                                 ToolTip="Unten rechts" Checked="OnKrEigChanged"/>
+                                </Canvas>
+
+                                <!-- Radius -->
+                                <TextBlock Text="Radius (mm):" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <TextBox x:Name="KrEigRadius" Margin="0,0,0,10"
+                                         LostFocus="OnKrEigLostFocus" KeyDown="OnKrEigKeyDown"/>
+
+                                <!-- Z-Tiefe -->
+                                <TextBlock Text="Z-Tiefe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBox x:Name="KrEigZ" Margin="0,0,0,10"
+                                         LostFocus="OnKrEigLostFocus" KeyDown="OnKrEigKeyDown"/>
+
+                                <!-- Fräsung (nur Kontur-Modus) -->
+                                <StackPanel x:Name="PnlKrFraesung">
+                                    <TextBlock Text="Fräsung:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <RadioButton x:Name="KrEigFrAussen" Content="Außen"
+                                                     GroupName="KrFraesung" IsChecked="True"
+                                                     Margin="0,0,10,0" VerticalAlignment="Center"
+                                                     Checked="OnKrEigChanged"/>
+                                        <RadioButton x:Name="KrEigFrInnen"  Content="Innen"
+                                                     GroupName="KrFraesung"
+                                                     Margin="0,0,10,0" VerticalAlignment="Center"
+                                                     Checked="OnKrEigChanged"/>
+                                        <RadioButton x:Name="KrEigFrMittig" Content="Mittig"
+                                                     GroupName="KrFraesung"
+                                                     VerticalAlignment="Center"
+                                                     Checked="OnKrEigChanged"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- Laufrichtung -->
+                                <TextBlock Text="Laufrichtung:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <RadioButton x:Name="KrEigGegen"  Content="Gegenlauf"
+                                                 GroupName="KrLauf" IsChecked="True"
+                                                 Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnKrEigChanged"/>
+                                    <RadioButton x:Name="KrEigGleich" Content="Gleichlauf"
+                                                 GroupName="KrLauf"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnKrEigChanged"/>
+                                </StackPanel>
+
+                                <!-- Z-Zustellung -->
+                                <CheckBox x:Name="KrEigMehrfach" Content="Mehrfach-Zustellung"
+                                          Margin="0,0,0,4"
+                                          Checked="OnKrEigChanged" Unchecked="OnKrEigChanged"/>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Z-Zustellung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="KrEigZZust" LostFocus="OnKrEigLostFocus" KeyDown="OnKrEigKeyDown"/>
                                     </StackPanel>
                                 </Grid>
 

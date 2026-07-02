@@ -1025,6 +1025,100 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    public static string Kreis(KreisParams p, double workW, double workH)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("(Kreis fräsen)");
+        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
+        sb.AppendLine($"(R={F(p.Radius)}, Fraesung={p.Fraesung}, {p.Laufrichtung})");
+
+        if (p.IsTasche)
+        {
+            var tp = new KreistascheParams(p.XRel, p.YRel, p.Radius * 2,
+                p.ZTiefe, p.ZZustellung > 0 ? p.ZZustellung : 2, p.Eintauchwinkel,
+                p.FraeserD, 0.5, p.Vorschub, p.VorschubFz, p.Drehzahl, p.Bezugspunkt);
+            return Kreistasche(tp, workW, workH);
+        }
+
+        var (cx, cy) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+        double off = p.Fraesung switch
+        {
+            "Aussen" =>  p.FraeserD / 2.0,
+            "Innen"  => -p.FraeserD / 2.0,
+            _        =>  0.0
+        };
+        double R = p.Radius + off;
+        if (R < 1e-6) return sb.AppendLine("(Kreis: Radius zu klein für Werkzeug)").ToString();
+
+        // Gegenlauf = G03 (CCW) für Außen, G02 für Innen; Gleichlauf umgekehrt
+        bool ccw = (p.Fraesung == "Innen") ? p.Laufrichtung == "Gleichlauf"
+                                            : p.Laufrichtung == "Gegenlauf";
+        string arc = ccw ? "G03" : "G02";
+
+        double feed    = p.Vorschub;
+        double feedZ   = p.VorschubFz;
+        double z       = -Math.Abs(p.ZTiefe);
+        double zStep   = Math.Abs(p.ZZustellung);
+        double startX  = cx;
+        double startY  = cy - R;   // Startpunkt unten
+
+        string Sz() => $"G00 Z{F(5)}";
+
+        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
+        sb.AppendLine(Sz());
+        sb.AppendLine($"G00 X{F(startX)} Y{F(startY)}");
+
+        double curZ = 0;
+        while (curZ > z)
+        {
+            double prevZ = curZ;
+            curZ = Math.Max(z, curZ - (p.MehrfachZustellung && zStep > 1e-6 ? zStep : Math.Abs(z)));
+
+            double dz    = Math.Abs(curZ - prevZ);
+            double angle = p.Eintauchwinkel;
+            sb.AppendLine($"G00 Z{F(prevZ)}");
+            // I/J vom Startpunkt (unten) zum Mittelpunkt
+            double iStart = cx - startX;   // = 0
+            double jStart = cy - startY;   // = R
+
+            if (angle > 0 && angle < 90 && dz > 1e-6)
+            {
+                double arcLen = (dz / 2.0) / Math.Tan(angle * Math.PI / 180.0);
+                if (arcLen <= R * Math.PI)
+                {
+                    // Bogenförmige V-Rampe ab Startwinkel -π/2 (unten)
+                    double a      = arcLen / R;
+                    double midZ2  = prevZ - dz / 2.0;
+                    double sign   = ccw ? 1.0 : -1.0;
+                    double ex     = cx + R * Math.Cos(-Math.PI / 2 + sign * a);
+                    double ey     = cy + R * Math.Sin(-Math.PI / 2 + sign * a);
+                    string arcBack = ccw ? "G02" : "G03";
+                    sb.AppendLine($"{arc} X{F(ex)} Y{F(ey)} Z{F(midZ2)} I{F(iStart)} J{F(jStart)} F{(int)feedZ}");
+                    sb.AppendLine($"{arcBack} X{F(startX)} Y{F(startY)} Z{F(curZ)} I{F(cx - ex)} J{F(cy - ey)} F{(int)feedZ}");
+                }
+                else
+                    sb.AppendLine($"G01 Z{F(curZ)} F{(int)feedZ}");
+            }
+            else
+                sb.AppendLine($"G01 Z{F(curZ)} F{(int)feedZ}");
+
+            // Voller Kreis: zwei Halbkreise (unten → oben → unten)
+            double midY = cy + R;
+            sb.AppendLine($"{arc} X{F(cx)} Y{F(midY)} I{F(iStart)} J{F(jStart)} F{(int)feed}");
+            sb.AppendLine($"{arc} X{F(startX)} Y{F(startY)} I0 J{F(cy - midY)} F{(int)feed}");
+
+            if (curZ > z)
+            {
+                sb.AppendLine(Sz());
+                sb.AppendLine($"G00 X{F(startX)} Y{F(startY)}");
+            }
+        }
+
+        sb.AppendLine(Sz());
+        sb.AppendLine("M05");
+        return sb.ToString();
+    }
+
     // Berechnet versetzte Segmentpunkte und liefert (Startpunkt, Liste von G-Code-Moves).
     // Konvexe Ecken → G02/G03-Bogen; konkave Ecken → Miter-Schnittpunkt.
     private static ((double X, double Y) Start, List<string> Moves) BuildOffsetMoves(
@@ -1455,9 +1549,13 @@ public static class GCodeGenerator
             int vIdx  = (s == m - 1 && closed) ? 0 : s + 1;
             if (vIdx < n && vtxConvex[vIdx])
             {
-                var cornerPt = pts[vIdx];
-                result.Add(new PathMove(effStart[nextS].x, effStart[nextS].y, IsArc: true,
-                    I: cornerPt.x - ep.x, J: cornerPt.y - ep.y, CW: sg > 0));
+                var cornerPt  = pts[vIdx];
+                var nextStart = effStart[nextS];
+                // Kreuzprodukt (ep-corner)×(nextStart-corner): negativ → CW, positiv → CCW
+                double crArc = (ep.x - cornerPt.x) * (nextStart.y - cornerPt.y)
+                             - (ep.y - cornerPt.y) * (nextStart.x - cornerPt.x);
+                result.Add(new PathMove(nextStart.x, nextStart.y, IsArc: true,
+                    I: cornerPt.x - ep.x, J: cornerPt.y - ep.y, CW: crArc < 0));
             }
         }
 
@@ -1693,6 +1791,273 @@ public static class GCodeGenerator
                 var c = corner[i].Value;
                 newPts.Add((c.ax, c.ay));           // Austrittspunkt
                 newMids.Add((c.mx, c.my));           // arcMid = Verrundungsbogen
+            }
+        }
+
+        return (newPts, newMids);
+    }
+
+    // Berechnet pro Punkt den Verrundungsradius für konkave Ecken (für Konturlinie-Vorschau).
+    // Konkave Ecken = Innenecken auf der Seite der Radiuskorrektur; sign: +1 = Links, -1 = Rechts.
+    internal static List<double> ConcaveCornerRadii(
+        List<(double x, double y)> pts,
+        List<(double mx, double my)?> arcMids,
+        double r, double sign)
+    {
+        int n = pts.Count;
+        var result = new List<double>(new double[n]);
+        if (n < 3 || r < 1e-10) return result;
+
+        var geom = new (double cx, double cy, double R, bool cw)?[n];
+        for (int i = 1; i < n; i++)
+        {
+            if (i < arcMids.Count && arcMids[i].HasValue)
+            {
+                var (cx, cy, arcR, cw) = ArcFrom3Points(
+                    pts[i-1].x, pts[i-1].y,
+                    arcMids[i].Value.mx, arcMids[i].Value.my,
+                    pts[i].x, pts[i].y);
+                if (!double.IsInfinity(arcR)) geom[i] = (cx, cy, arcR, cw);
+            }
+        }
+
+        (double x, double y) TanEnd(int i)
+        {
+            if (geom[i].HasValue)
+                return BogenArcTangentAt(geom[i].Value.cx, geom[i].Value.cy, pts[i].x, pts[i].y, geom[i].Value.cw);
+            double dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            return len > 1e-10 ? (dx/len, dy/len) : (1, 0);
+        }
+        (double x, double y) TanStart(int i)
+        {
+            if (geom[i].HasValue)
+                return BogenArcTangentAt(geom[i].Value.cx, geom[i].Value.cy, pts[i-1].x, pts[i-1].y, geom[i].Value.cw);
+            double dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            return len > 1e-10 ? (dx/len, dy/len) : (1, 0);
+        }
+
+        for (int i = 1; i < n - 1; i++)
+        {
+            var tanIn  = TanEnd(i);
+            var tanOut = TanStart(i + 1);
+            double cross = tanIn.x * tanOut.y - tanIn.y * tanOut.x;
+            bool isConcave = Math.Abs(cross) > 0.01 && !(sign > 0 ? cross < 0 : cross > 0);
+            if (isConcave) result[i] = r;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Konkave Ecken für Konturlinie-Vorschau korrekt visualisieren:
+    /// Für jede konkave Ecke wird Q (Fräsmittelpunkt-Eckpunkt = Schnittpunkt der
+    /// versetzten Segmente) berechnet und ein Kreisbogen mit Radius r um Q eingefügt.
+    /// Unterstützt L→L, L→B, B→L, B→B durch geometrisch korrekte Schnittberechnung.
+    /// </summary>
+    internal static (List<(double x, double y)> pts, List<(double mx, double my)?> arcMids)
+        InsertConcaveCircleArcs(
+            List<(double x, double y)> pts,
+            List<(double mx, double my)?> arcMids,
+            List<double> concaveRadii,
+            double sign)
+    {
+        int n = pts.Count;
+        if (n < 3) return (pts, arcMids);
+
+        // Bogengeometrie vorberechnen
+        var geom = new (double cx, double cy, double R, bool cw)?[n];
+        for (int i = 1; i < n; i++)
+        {
+            if (i < arcMids.Count && arcMids[i].HasValue)
+            {
+                var (cx, cy, R, cw) = ArcFrom3Points(
+                    pts[i-1].x, pts[i-1].y,
+                    arcMids[i].Value.mx, arcMids[i].Value.my,
+                    pts[i].x, pts[i].y);
+                if (!double.IsInfinity(R)) geom[i] = (cx, cy, R, cw);
+            }
+        }
+
+        (double x, double y) TanEnd(int i)
+        {
+            if (geom[i].HasValue)
+                return BogenArcTangentAt(geom[i].Value.cx, geom[i].Value.cy, pts[i].x, pts[i].y, geom[i].Value.cw);
+            double dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            return len > 1e-10 ? (dx/len, dy/len) : (1, 0);
+        }
+        (double x, double y) TanStart(int i)
+        {
+            if (geom[i].HasValue)
+                return BogenArcTangentAt(geom[i].Value.cx, geom[i].Value.cy, pts[i-1].x, pts[i-1].y, geom[i].Value.cw);
+            double dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+            double len = Math.Sqrt(dx*dx + dy*dy);
+            return len > 1e-10 ? (dx/len, dy/len) : (1, 0);
+        }
+        double SegLen(int i)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                double a1 = Math.Atan2(pts[i-1].y - g.cy, pts[i-1].x - g.cx);
+                double a2 = Math.Atan2(pts[i].y   - g.cy, pts[i].x   - g.cx);
+                double sp = a2 - a1;
+                if (g.cw) { if (sp > 0) sp -= 2*Math.PI; } else { if (sp < 0) sp += 2*Math.PI; }
+                return g.R * Math.Abs(sp);
+            }
+            double dx2 = pts[i].x - pts[i-1].x, dy2 = pts[i].y - pts[i-1].y;
+            return Math.Sqrt(dx2*dx2 + dy2*dy2);
+        }
+        (double x, double y) StepBack(int i, double t)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                double a2  = Math.Atan2(pts[i].y - g.cy, pts[i].x - g.cx);
+                double dA  = t / g.R;
+                double ang = a2 + (g.cw ? dA : -dA);
+                return (g.cx + g.R * Math.Cos(ang), g.cy + g.R * Math.Sin(ang));
+            }
+            var tan = TanEnd(i);
+            return (pts[i].x - t * tan.x, pts[i].y - t * tan.y);
+        }
+        (double x, double y) StepFwd(int i, double t)
+        {
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                double a1  = Math.Atan2(pts[i-1].y - g.cy, pts[i-1].x - g.cx);
+                double dA  = t / g.R;
+                double ang = a1 + (g.cw ? -dA : dA);
+                return (g.cx + g.R * Math.Cos(ang), g.cy + g.R * Math.Sin(ang));
+            }
+            var tan = TanStart(i);
+            return (pts[i-1].x + t * tan.x, pts[i-1].y + t * tan.y);
+        }
+
+        var segStart = new (double x, double y)[n];
+        var segEnd   = new (double x, double y)[n];
+        for (int i = 1; i < n; i++) { segStart[i] = pts[i-1]; segEnd[i] = pts[i]; }
+
+        var corner = new (double mx, double my, double ax, double ay)?[n];
+
+        for (int i = 1; i < n - 1; i++)
+        {
+            double r = i < concaveRadii.Count ? concaveRadii[i] : 0;
+            if (r < 1e-10) continue;
+
+            var tanIn  = TanEnd(i);
+            var tanOut = TanStart(i + 1);
+            double cross = tanIn.x * tanOut.y - tanIn.y * tanOut.x;
+            if (Math.Abs(cross) < 1e-6) continue;
+
+            // Offset-Normalen: linke Normale × sign = Offset-Richtung
+            double nInX  = -tanIn.y  * sign, nInY  =  tanIn.x  * sign;
+            double nOutX = -tanOut.y * sign, nOutY =  tanOut.x * sign;
+
+            bool prevIsArc = geom[i].HasValue;
+            bool nextIsArc = geom[i + 1].HasValue;
+
+            // Q = Schnittpunkt der versetzten Segmente (korrekte Bogen-Geometrie)
+            (double x, double y) Q;
+            if (!prevIsArc && !nextIsArc)
+            {
+                // Linie → Linie
+                var o1 = (x: pts[i].x + r * nInX,  y: pts[i].y + r * nInY);
+                var o2 = (x: pts[i].x + r * nOutX, y: pts[i].y + r * nOutY);
+                var q = LineIntersect(o1, tanIn, o2, tanOut);
+                if (!q.HasValue) continue;
+                Q = q.Value;
+            }
+            else if (!prevIsArc)
+            {
+                // Linie → Bogen
+                var g2 = geom[i + 1].Value;
+                double r2 = g2.R + sign * (g2.cw ? 1.0 : -1.0) * r;
+                if (r2 < 1e-6) continue;
+                var o1 = (x: pts[i].x + r * nInX, y: pts[i].y + r * nInY);
+                Q = BogenPickClosest(BogenLineCircleIntersect(o1, tanIn, g2.cx, g2.cy, r2), pts[i], pts[i]);
+            }
+            else if (!nextIsArc)
+            {
+                // Bogen → Linie
+                var g1 = geom[i].Value;
+                double r1 = g1.R + sign * (g1.cw ? 1.0 : -1.0) * r;
+                if (r1 < 1e-6) continue;
+                var o2 = (x: pts[i].x + r * nOutX, y: pts[i].y + r * nOutY);
+                Q = BogenPickClosest(BogenLineCircleIntersect(o2, tanOut, g1.cx, g1.cy, r1), pts[i], pts[i]);
+            }
+            else
+            {
+                // Bogen → Bogen
+                var g1 = geom[i].Value;
+                var g2 = geom[i + 1].Value;
+                double r1 = g1.R + sign * (g1.cw ? 1.0 : -1.0) * r;
+                double r2 = g2.R + sign * (g2.cw ? 1.0 : -1.0) * r;
+                if (r1 < 1e-6 || r2 < 1e-6) continue;
+                Q = BogenPickClosest(BogenCircleCircleIntersect(g1.cx, g1.cy, r1, g2.cx, g2.cy, r2), pts[i], pts[i]);
+            }
+
+            // Sanity-Check: Q muss mindestens r vom Eckpunkt entfernt sein
+            double distQ2 = (Q.x - pts[i].x)*(Q.x - pts[i].x) + (Q.y - pts[i].y)*(Q.y - pts[i].y);
+            if (distQ2 < r * r * 0.25) continue;
+
+            // Setback = Projektion von (Q − pts[i]) auf die Tangente
+            double stepB = Math.Abs((Q.x - pts[i].x) * tanIn.x  + (Q.y - pts[i].y) * tanIn.y);
+            double stepF = Math.Abs((Q.x - pts[i].x) * tanOut.x + (Q.y - pts[i].y) * tanOut.y);
+
+            // Maximal 90% der jeweiligen Segmentlänge
+            stepB = Math.Min(stepB, SegLen(i)     * 0.9);
+            stepF = Math.Min(stepF, SegLen(i + 1) * 0.9);
+            if (stepB < 1e-10 || stepF < 1e-10) continue;
+
+            var A = StepBack(i,     stepB);
+            var B = StepFwd (i + 1, stepF);
+
+            // Bogen-Mittelpunkt: der Punkt auf dem Kreisbogen um Q Richtung pts[i]
+            double dqx = pts[i].x - Q.x, dqy = pts[i].y - Q.y;
+            double dqLen = Math.Sqrt(dqx*dqx + dqy*dqy);
+            double cmx, cmy;
+            if (dqLen < 1e-10) { cmx = (A.x + B.x) * 0.5; cmy = (A.y + B.y) * 0.5; }
+            else               { cmx = Q.x + r * dqx / dqLen; cmy = Q.y + r * dqy / dqLen; }
+
+            corner[i]     = (cmx, cmy, B.x, B.y);
+            segEnd[i]     = A;
+            segStart[i+1] = B;
+        }
+
+        // Ausgabeliste aufbauen
+        var newPts  = new List<(double x, double y)>();
+        var newMids = new List<(double mx, double my)?>();
+        newPts.Add(pts[0]);
+        newMids.Add(null);
+
+        for (int i = 1; i < n; i++)
+        {
+            var sStart = segStart[i];
+            var sEnd   = segEnd[i];
+
+            (double mx2, double my2)? mid;
+            if (geom[i].HasValue)
+            {
+                var g = geom[i].Value;
+                double a1 = Math.Atan2(sStart.y - g.cy, sStart.x - g.cx);
+                double a2 = Math.Atan2(sEnd.y   - g.cy, sEnd.x   - g.cx);
+                double sp = a2 - a1;
+                if (g.cw) { if (sp > 0) sp -= 2*Math.PI; } else { if (sp < 0) sp += 2*Math.PI; }
+                mid = (g.cx + g.R * Math.Cos(a1 + sp / 2), g.cy + g.R * Math.Sin(a1 + sp / 2));
+            }
+            else mid = null;
+
+            newPts.Add(sEnd);
+            newMids.Add(mid);
+
+            if (i < n - 1 && corner[i].HasValue)
+            {
+                var c = corner[i].Value;
+                newPts.Add((c.ax, c.ay));
+                newMids.Add((c.mx, c.my));
             }
         }
 
@@ -2098,7 +2463,7 @@ public static class GCodeGenerator
     public static string Gravieren(GraviereParams p, double workW, double workH)
     {
         var sb  = new StringBuilder();
-        var ctx = BuildTextGeo(p, workW, workH);
+        var ctx = p.UseSkia ? BuildTextGeoSk(p, workW, workH) : BuildTextGeo(p, workW, workH);
 
         double scale  = ctx.Scale;
         double multiH = ctx.MultiH;
@@ -2210,6 +2575,200 @@ public static class GCodeGenerator
         if (flatDisplay.CanFreeze) flatDisplay.Freeze();
         if (geo2.CanFreeze)        geo2.Freeze();
         return new TextGeoCtx(geo2, flat2, flatDisplay, scale, multiH, ox, oy, yOffset);
+    }
+
+    // ── Skia-basierte Textgeometrie (FreeType-Pfade, deutlich schneller) ────
+    public static TextGeoCtx BuildTextGeoSk(GraviereParams p, double workW, double workH)
+    {
+        const float emSize = 1000f;
+        using var typeface = SkiaSharp.SKTypeface.FromFamilyName(p.FontFamily)
+                             ?? SkiaSharp.SKTypeface.Default;
+        using var paint = new SkiaSharp.SKPaint
+        {
+            Typeface    = typeface,
+            TextSize    = emSize,
+            IsAntialias = false,
+            TextAlign   = SkiaSharp.SKTextAlign.Left,
+        };
+
+        var m = paint.FontMetrics;
+        // Ascent ist negativ (oberhalb Baseline), Descent positiv (unterhalb)
+        float lineH       = m.Descent - m.Ascent;
+        float lineSpacing = lineH + m.Leading;
+
+        double scale = p.FontSizeMm > 0 ? p.FontSizeMm / lineH : 1.0;
+
+        bool bezugRechts = p.Bezugspunkt.Contains("rechts", StringComparison.OrdinalIgnoreCase);
+        bool alignRight  = p.Ausrichtung == "Rechts" || bezugRechts;
+        bool alignCenter = p.Ausrichtung == "Mitte" && !bezugRechts;
+
+        var   lines    = (string.IsNullOrEmpty(p.Text) ? " " : p.Text).Split('\n');
+        int   numLines = lines.Length;
+        float maxWU    = (p.TextBreite > 0 && scale > 0) ? (float)(p.TextBreite / scale) : float.MaxValue;
+
+        using var fullPath = new SkiaSharp.SKPath();
+        for (int i = 0; i < numLines; i++)
+        {
+            string line      = string.IsNullOrEmpty(lines[i]) ? " " : lines[i];
+            float  yBaseline = -m.Ascent + lineSpacing * i;  // Y der Baseline (Textoberseite bei y=0)
+            using var lp = paint.GetTextPath(line, 0, yBaseline);
+
+            if (maxWU < float.MaxValue && (alignRight || alignCenter))
+            {
+                float lw = paint.MeasureText(line);
+                float dx = alignRight ? maxWU - lw : (maxWU - lw) * 0.5f;
+                if (dx > 0.01f) lp.Offset(dx, 0);
+            }
+            fullPath.AddPath(lp);
+        }
+
+        double multiH = numLines == 1 ? lineH : lineSpacing * (numLines - 1) + lineH;
+
+        // Toleranz in Skia-Font-Einheiten (identisch zu WPF ToleranceType.Absolute bei emSize=1000)
+        // 2.0 bzw. 0.5 Einheiten entsprechen bei scale≈0.01 mm/Einheit → 0.02 / 0.005 mm Abweichung
+        const float tolCoarse = 2.0f;
+        const float tolFine   = 0.5f;
+
+        var flatFigs    = SkFlattenPath(fullPath, tolCoarse);
+        var displayFigs = SkFlattenPath(fullPath, tolFine);
+
+        // WPF PathGeometry mit einzelnen LineSegments aufbauen — so erkennt
+        // ComputeVCarveCircles alle Punkte als Segmentgrenzen (segBounds[k]=true),
+        // und der Tangenten-Dot-Product-Filter unterscheidet echte Ecken von Kurven.
+        static System.Windows.Media.PathGeometry ToWpf(
+            List<(List<(float X, float Y)> Pts, bool Closed)> figs)
+        {
+            var geo = new System.Windows.Media.PathGeometry();
+            foreach (var (pts, closed) in figs)
+            {
+                if (pts.Count < 2) continue;
+                var fig = new System.Windows.Media.PathFigure
+                {
+                    StartPoint = new System.Windows.Point(pts[0].X, pts[0].Y),
+                    IsClosed   = closed,
+                    IsFilled   = closed,
+                };
+                for (int k = 1; k < pts.Count; k++)
+                    fig.Segments.Add(new System.Windows.Media.LineSegment(
+                        new System.Windows.Point(pts[k].X, pts[k].Y), false));
+                geo.Figures.Add(fig);
+            }
+            if (geo.CanFreeze) geo.Freeze();
+            return geo;
+        }
+
+        var flat2       = ToWpf(flatFigs);
+        var flatDisplay = ToWpf(displayFigs);
+
+        var (ox, oy) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+
+        double fieldH  = p.TextHoehe > 0 ? p.TextHoehe
+                       : (p.FontSizeMm > 0 ? p.FontSizeMm : multiH * scale);
+        double yOffset = (fieldH - multiH * scale) / 2.0;
+
+        // Effektive Textbreite aus den Display-Konturen bestimmen
+        float maxX = 0f;
+        foreach (var (pts, _) in displayFigs)
+            foreach (var (px, _) in pts)
+                if (px > maxX) maxX = px;
+        double textWEff = p.TextBreite > 0 ? p.TextBreite : maxX * scale;
+
+        if (p.Bezugspunkt.Contains("Oben"))                                       oy -= fieldH;
+        if (p.Bezugspunkt.Contains("rechts", StringComparison.OrdinalIgnoreCase)) ox -= textWEff;
+        if (p.Bezugspunkt is "Mitte" or "Oben Mitte" or "Unten Mitte")            ox -= textWEff / 2;
+
+        return new TextGeoCtx(System.Windows.Media.Geometry.Empty,
+                              flat2, flatDisplay, scale, multiH, ox, oy, yOffset);
+    }
+
+    // ── Skia-Pfad-Flattening: Bezier → Polylinien ────────────────────────────
+
+    private static List<(List<(float X, float Y)> Pts, bool Closed)>
+        SkFlattenPath(SkiaSharp.SKPath path, float tol)
+    {
+        tol = Math.Max(tol, 0.001f);
+        var result  = new List<(List<(float, float)>, bool)>();
+        var current = new List<(float, float)>();
+        bool curClosed = false;
+
+        using var iter = path.CreateIterator(false);
+        var pts = new SkiaSharp.SKPoint[4];
+        SkiaSharp.SKPathVerb verb;
+
+        while ((verb = iter.Next(pts)) != SkiaSharp.SKPathVerb.Done)
+        {
+            switch (verb)
+            {
+                case SkiaSharp.SKPathVerb.Move:
+                    if (current.Count > 1) result.Add((current, curClosed));
+                    current   = [(pts[0].X, pts[0].Y)];
+                    curClosed = false;
+                    break;
+                case SkiaSharp.SKPathVerb.Line:
+                    current.Add((pts[1].X, pts[1].Y));
+                    break;
+                case SkiaSharp.SKPathVerb.Quad:
+                    SkFlattenQuad(pts[0], pts[1], pts[2], tol, current);
+                    break;
+                case SkiaSharp.SKPathVerb.Cubic:
+                    SkFlattenCubic(pts[0], pts[1], pts[2], pts[3], tol, current);
+                    break;
+                case SkiaSharp.SKPathVerb.Conic:
+                    // Gewicht nahe 1 (TrueType-Kurven) → exakt wie quadratisch; sonst gut genug
+                    SkFlattenQuad(pts[0], pts[1], pts[2], tol, current);
+                    break;
+                case SkiaSharp.SKPathVerb.Close:
+                    curClosed = true;
+                    if (current.Count > 1) result.Add((current, true));
+                    current   = [];
+                    curClosed = false;
+                    break;
+            }
+        }
+        if (current.Count > 1) result.Add((current, curClosed));
+        return result;
+    }
+
+    private static SkiaSharp.SKPoint SkMid(SkiaSharp.SKPoint a, SkiaSharp.SKPoint b)
+        => new((a.X + b.X) * 0.5f, (a.Y + b.Y) * 0.5f);
+
+    private static float SkPtLineDist2(SkiaSharp.SKPoint p,
+                                       SkiaSharp.SKPoint a, SkiaSharp.SKPoint b)
+    {
+        float dx = b.X - a.X, dy = b.Y - a.Y;
+        float len2 = dx * dx + dy * dy;
+        if (len2 < 1e-12f) { dx = p.X - a.X; dy = p.Y - a.Y; return dx * dx + dy * dy; }
+        float t  = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / len2, 0f, 1f);
+        float nx = p.X - (a.X + t * dx), ny = p.Y - (a.Y + t * dy);
+        return nx * nx + ny * ny;
+    }
+
+    private static void SkFlattenQuad(SkiaSharp.SKPoint p0, SkiaSharp.SKPoint p1,
+                                      SkiaSharp.SKPoint p2, float tol,
+                                      List<(float, float)> out_, int depth = 0)
+    {
+        if (depth > 12 || SkPtLineDist2(p1, p0, p2) < tol * tol)
+        { out_.Add((p2.X, p2.Y)); return; }
+        var m01 = SkMid(p0, p1);
+        var m12 = SkMid(p1, p2);
+        var m   = SkMid(m01, m12);
+        SkFlattenQuad(p0, m01, m,   tol, out_, depth + 1);
+        SkFlattenQuad(m,  m12, p2,  tol, out_, depth + 1);
+    }
+
+    private static void SkFlattenCubic(SkiaSharp.SKPoint p0, SkiaSharp.SKPoint p1,
+                                       SkiaSharp.SKPoint p2, SkiaSharp.SKPoint p3,
+                                       float tol, List<(float, float)> out_, int depth = 0)
+    {
+        if (depth > 16 ||
+            (SkPtLineDist2(p1, p0, p3) < tol * tol &&
+             SkPtLineDist2(p2, p0, p3) < tol * tol))
+        { out_.Add((p3.X, p3.Y)); return; }
+        var m01  = SkMid(p0, p1); var m12 = SkMid(p1, p2); var m23 = SkMid(p2, p3);
+        var m012 = SkMid(m01, m12); var m123 = SkMid(m12, m23);
+        var m    = SkMid(m012, m123);
+        SkFlattenCubic(p0, m01, m012, m,   tol, out_, depth + 1);
+        SkFlattenCubic(m,  m123, m23, p3,  tol, out_, depth + 1);
     }
 
     // ── Textfeld-Tasche (Clipper2-basiert, exakter Polygon-Offset) ──────────
@@ -2585,7 +3144,9 @@ public static class GCodeGenerator
     // Für Hintergrund-Berechnungen: ctx auf UI-Thread holen, dann Überladung mit ctx aufrufen.
     public static List<VCarveCircle> ComputeVCarveCircles(
         GraviereParams p, double workW, double workH, double sampleStepMm = 0.5)
-        => ComputeVCarveCircles(p, BuildTextGeo(p, workW, workH), sampleStepMm);
+        => ComputeVCarveCircles(p,
+               p.UseSkia ? BuildTextGeoSk(p, workW, workH) : BuildTextGeo(p, workW, workH),
+               sampleStepMm);
 
     public static List<VCarveCircle> ComputeVCarveCircles(
         GraviereParams p, TextGeoCtx ctx, double sampleStepMm = 0.5)
