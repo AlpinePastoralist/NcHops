@@ -2609,14 +2609,55 @@ public partial class MainWindow : Window
         return result;
     }
 
+    // True wenn die durch (a,b) definierte Linie dieselbe Pfad-Linie ist wie (p1,p2) —
+    // unabhängig von der Reihenfolge der Endpunkte und unter Berücksichtigung von
+    // SamePathCorner (geschlossene-Pfad-Zwillingsindizes).
+    private bool SegmentIsSameLine(int a, int b, int p1, int p2)
+    {
+        if (a < 0 || b < 0) return false;
+        return (SamePathCorner(a, p1) && SamePathCorner(b, p2)) ||
+               (SamePathCorner(a, p2) && SamePathCorner(b, p1));
+    }
+
+    // True wenn eine ANDERE platzierte Vermassung die Richtung des Segments (p1Idx,p2Idx)
+    // aktiv vorgibt (Angle/Perpendicular/Parallel als deren gedrehtes Q-Segment, oder
+    // EdgeAngle/ParallelEdge/PerpendicularEdge direkt). In diesem Fall darf eine Length-
+    // Vermassung auf demselben Segment NICHT ihre beim Anlegen eingefrorene Richtung
+    // (DirX/DirY) erzwingen — sonst kämpfen beide Constraints bei jeder Propagation
+    // gegeneinander: die Winkel-Vermassung dreht die Linie auf den Soll-Winkel, die
+    // Length-Vermassung dreht sie im selben Durchlauf wieder auf die alte, beim Anlegen
+    // gültige Richtung zurück (Symptom: Winkel-Vermassung nach der Länge hinzugefügt
+    // wirkt nicht / Werte driften bei jeder Propagation).
+    private bool SegmentHasDirectionConstraint(int p1Idx, int p2Idx)
+    {
+        foreach (var en in _vermPlaced)
+        {
+            switch (en.Kind)
+            {
+                case VermKind.Angle:
+                case VermKind.Perpendicular:
+                case VermKind.Parallel:
+                    if (SegmentIsSameLine(en.Q1Idx, en.Q2Idx, p1Idx, p2Idx)) return true;
+                    break;
+                case VermKind.EdgeAngle:
+                case VermKind.ParallelEdge:
+                case VermKind.PerpendicularEdge:
+                    if (SegmentIsSameLine(en.P1Idx, en.P2Idx, p1Idx, p2Idx)) return true;
+                    break;
+            }
+        }
+        return false;
+    }
+
     private void ApplyLengthConstraint(int p1Idx, int p2Idx, double newLen, double dirX = 0, double dirY = 0)
     {
         var p1 = GetPfadAbsAt(p1Idx); var p2v = GetPfadAbsAt(p2Idx);
         if (p1 == null || p2v == null) return;
         double dx, dy;
-        if (Math.Abs(dirX) > 1e-9 || Math.Abs(dirY) > 1e-9)
+        if ((Math.Abs(dirX) > 1e-9 || Math.Abs(dirY) > 1e-9) && !SegmentHasDirectionConstraint(p1Idx, p2Idx))
         {
-            // Gespeicherten Normalvektor verwenden → Winkel bleibt immer erhalten
+            // Gespeicherten Normalvektor verwenden → Winkel bleibt immer erhalten,
+            // solange keine andere Vermassung die Richtung dieses Segments aktiv vorgibt.
             dx = dirX; dy = dirY;
         }
         else
