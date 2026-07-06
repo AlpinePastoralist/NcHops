@@ -1543,11 +1543,11 @@ public partial class MainWindow : Window
         string txt;
         if (en.Kind == VermKind.Angle || en.Kind == VermKind.EdgeAngle)
         {
-            // Anzeigewert = spitzer Winkel (wie im Label) — live berechnet, damit die Box
-            // immer den tatsächlich sichtbaren Winkel zeigt.
-            double actualNow = GetCurrentActualAngle(en) ?? en.Value;
-            double display = actualNow > 90.0 ? 180.0 - actualNow : actualNow;
-            txt = display.ToString("F2", inv);
+            // Anzeigewert = tatsächlicher Winkel (0–180°, wie im Label) — live berechnet, damit
+            // die Box immer den echten, sichtbaren Winkel zeigt (keine Faltung auf den spitzen
+            // Wert mehr, sonst würde z.B. eine Eingabe von 110° nach dem Bestätigen wieder als
+            // 70° angezeigt).
+            txt = (GetCurrentActualAngle(en) ?? en.Value).ToString("F2", inv);
         }
         else
             txt = en.Value.ToString("F3", inv);
@@ -2146,16 +2146,12 @@ public partial class MainWindow : Window
                             "Konflikt", MessageBoxButton.OK, MessageBoxImage.Warning);
                         e.Handled = true; return;
                     }
-                    // Winkel: Eingabe ist spitzer Wert → in Actual-Span umrechnen
-                    // (wenn die Linie aktuell stumpf steht, bleibt sie stumpf). Ob aktuell stumpf
-                    // oder spitz wird live aus der Geometrie ermittelt statt aus en.Value, das
-                    // durch andere Vermassungen nicht mehr automatisch nachgeführt wird.
+                    // Winkel: Die Bearbeiten-Box zeigt jetzt immer den echten Winkel (0–180°,
+                    // siehe ShowVermEditTextBox), daher ist die Eingabe bereits der gewünschte
+                    // Zielwinkel selbst und wird ohne Umrechnung übernommen. (Vorher wurde hier
+                    // stets auf den spitzen Winkel gefaltet zurückgerechnet, was bei einer
+                    // Eingabe >90° den falschen Wert speicherte, z.B. aus 110° wurde 70°.)
                     double storeVal = newVal;
-                    if (en.Kind == VermKind.Angle || en.Kind == VermKind.EdgeAngle)
-                    {
-                        double actualNow = GetCurrentActualAngle(en) ?? en.Value;
-                        storeVal = actualNow > 90.0 ? 180.0 - newVal : newVal;
-                    }
                     ApplyVermConstraint(_vermEditIdx, storeVal);
                     _vermPlaced[_vermEditIdx] = _vermPlaced[_vermEditIdx] with { Value = storeVal };
                     PropagateVermConstraints();
@@ -2347,6 +2343,13 @@ public partial class MainWindow : Window
             // gespeicherten Wert an die aktuelle Geometrie anpasst). Ohne feste Priorität würde
             // eine später hinzugefügte Kanten-/Längenbemaßung eine bereits als parallel markierte
             // Linie schräg ziehen können, ohne dass sie je zurückkorrigiert wird.
+            // Hinweis: Length/PointDist werden hier NICHT mehr pauschal übersprungen, wenn ihr
+            // Zielpunkt kantengebunden ist — ApplyLengthConstraint entscheidet inzwischen selbst
+            // (via GetAxisFixedPoints/IsAxisFixed), welcher der beiden Endpunkte bei einem echten
+            // Achsen-Konflikt bewegt werden muss, und verschiebt in dem Fall automatisch den
+            // ANDEREN (nicht kantenfixierten) Punkt. Ein pauschales Überspringen hier würde die
+            // Längen-Vermassung stattdessen komplett wirkungslos machen, obwohl sie durchaus
+            // korrekt (am jeweils freien Punkt) durchsetzbar wäre.
             var edgeLocked = new HashSet<int>();
             foreach (var e in _vermPlaced)
             {
@@ -2354,15 +2357,20 @@ public partial class MainWindow : Window
                 else if (e.Kind == VermKind.PointEdgeDist) edgeLocked.Add(e.P2Idx);
             }
 
-            bool IsEdgeOverridden(VermEntry e) => e.Kind switch
+            bool IsEdgeOverridden(VermEntry e)
             {
-                VermKind.Length or VermKind.PointDist
-                                                        => edgeLocked.Contains(e.P2Idx),
-                VermKind.Angle or VermKind.ParallelDist
-                    or VermKind.LineToPoint             => edgeLocked.Contains(e.Q1Idx) || edgeLocked.Contains(e.Q2Idx),
-                VermKind.EdgeAngle                       => edgeLocked.Contains(e.P1Idx) || edgeLocked.Contains(e.P2Idx),
-                _                                        => false
-            };
+                switch (e.Kind)
+                {
+                    case VermKind.Angle:
+                    case VermKind.ParallelDist:
+                    case VermKind.LineToPoint:
+                        return edgeLocked.Contains(e.Q1Idx) || edgeLocked.Contains(e.Q2Idx);
+                    case VermKind.EdgeAngle:
+                        return edgeLocked.Contains(e.P1Idx) || edgeLocked.Contains(e.P2Idx);
+                    default:
+                        return false;
+                }
+            }
 
             bool IsDirectionConstraint(VermKind k) => k is VermKind.ParallelEdge or VermKind.PerpendicularEdge
                                                           or VermKind.Parallel     or VermKind.Perpendicular;
@@ -2609,6 +2617,93 @@ public partial class MainWindow : Window
         return result;
     }
 
+    // Achsen-weise (statt nur vollständige 2D-) Positions-Fixierung: X bzw. Y eines Punktes
+    // gilt als fixiert, wenn er direkt über EdgeDist/PointEdgeDist/CoincidentCorner an eine
+    // Kante gebunden ist, ODER wenn er über eine garantiert achsparallele/-senkrechte
+    // Segment-Verbindung (ParallelEdge/PerpendicularEdge — OHNE dass dafür zusätzlich die
+    // Länge bekannt sein müsste) starr mit einem bereits auf dieser Achse fixierten Punkt
+    // verbunden ist (z.B. eine vertikale Linie: beide Endpunkte teilen dieselbe X-Position).
+    // Ohne diese Weiterleitung "sieht" eine Length-Vermassung auf einer benachbarten Linie
+    // nicht, dass ihr Zielpunkt indirekt schon über eine andere Kanten-Vermassung ortsfest
+    // ist, und verschiebt ihn trotzdem — was die eigentlich fixierte Kantendistanz am
+    // anderen Ende der starren Linie verändert.
+    private (HashSet<int> xFixed, HashSet<int> yFixed) GetAxisFixedPoints()
+    {
+        var xFixed = new HashSet<int>();
+        var yFixed = new HashSet<int>();
+        foreach (var en in _vermPlaced)
+        {
+            switch (en.Kind)
+            {
+                case VermKind.CoincidentCorner:
+                    xFixed.Add(en.P2Idx); yFixed.Add(en.P2Idx);
+                    break;
+                case VermKind.PointEdgeDist:
+                case VermKind.EdgeDist:
+                    if (en.Edge == 1 || en.Edge == 2) xFixed.Add(en.P2Idx);
+                    else if (en.Edge == 3 || en.Edge == 4) yFixed.Add(en.P2Idx);
+                    break;
+            }
+        }
+
+        var sameX = new List<(int, int)>();
+        var sameY = new List<(int, int)>();
+        foreach (var en in _vermPlaced)
+        {
+            bool vertEdge = en.Edge == 1 || en.Edge == 2;
+            bool horizEdge = en.Edge == 3 || en.Edge == 4;
+            if (en.Kind == VermKind.ParallelEdge)
+            {
+                if (vertEdge) sameX.Add((en.P1Idx, en.P2Idx));
+                else if (horizEdge) sameY.Add((en.P1Idx, en.P2Idx));
+            }
+            else if (en.Kind == VermKind.PerpendicularEdge)
+            {
+                if (vertEdge) sameY.Add((en.P1Idx, en.P2Idx));
+                else if (horizEdge) sameX.Add((en.P1Idx, en.P2Idx));
+            }
+        }
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var (a, b) in sameX)
+            {
+                if (xFixed.Contains(a) && xFixed.Add(b)) changed = true;
+                if (xFixed.Contains(b) && xFixed.Add(a)) changed = true;
+            }
+            foreach (var (a, b) in sameY)
+            {
+                if (yFixed.Contains(a) && yFixed.Add(b)) changed = true;
+                if (yFixed.Contains(b) && yFixed.Add(a)) changed = true;
+            }
+            foreach (var en in _vermPlaced)
+            {
+                if (en.Kind != VermKind.Coincident) continue;
+                if (xFixed.Contains(en.P1Idx) && xFixed.Add(en.P2Idx)) changed = true;
+                if (xFixed.Contains(en.P2Idx) && xFixed.Add(en.P1Idx)) changed = true;
+                if (yFixed.Contains(en.P1Idx) && yFixed.Add(en.P2Idx)) changed = true;
+                if (yFixed.Contains(en.P2Idx) && yFixed.Add(en.P1Idx)) changed = true;
+            }
+        }
+        return (xFixed, yFixed);
+    }
+
+    // Wie set.Contains(pt), aber unter Berücksichtigung des geschlossene-Pfad-Zwillingsindex
+    // (siehe SamePathCorner) — pt und sein Zwilling sind physisch derselbe Punkt.
+    private bool IsAxisFixed(int pt, HashSet<int> set)
+    {
+        if (set.Contains(pt)) return true;
+        var (st, en) = FindChainBounds(pt);
+        if (st != en && IsChainClosed(st, en))
+        {
+            int partner = pt == st ? en : (pt == en ? st : -1);
+            if (partner >= 0 && set.Contains(partner)) return true;
+        }
+        return false;
+    }
+
     // True wenn die durch (a,b) definierte Linie dieselbe Pfad-Linie ist wie (p1,p2) —
     // unabhängig von der Reihenfolge der Endpunkte und unter Berücksichtigung von
     // SamePathCorner (geschlossene-Pfad-Zwillingsindizes).
@@ -2667,14 +2762,36 @@ public partial class MainWindow : Window
             if (curLen < 1e-9) return;
             dx /= curLen; dy /= curLen;
         }
-        // Normalerweise bleibt P1 fix und P2 wird verschoben. Ist P2 aber der Start- oder
-        // Endpunkt einer geschlossenen Kette (IsClosedChainEndpoint), würde das Verschieben
-        // über den "Partner-Punkt"-Mechanismus in UpdatePfadPunktPos unbemerkt auch den
-        // jeweils anderen (spatial identischen) Index mitverschieben — den eigentlichen
-        // Anker des Pfades, auf den sich andere Vermassungen verlassen. In diesem Fall
-        // stattdessen P1 verschieben und P2 (den Anker) fix lassen.
-        bool p2IsAnchor = IsClosedChainEndpoint(p2Idx);
-        bool p1IsAnchor = IsClosedChainEndpoint(p1Idx);
+        // Normalerweise bleibt P1 fix und P2 wird verschoben. Zwei Gründe können das umkehren:
+        //
+        // 1. Echte Achsen-Fixierung (Vorrang): Ist P2 über eine Kanten-Vermassung — direkt
+        //    oder indirekt über eine starre achsparallele/-senkrechte Linie (GetAxisFixedPoints)
+        //    — auf genau der Achse fixiert, die newLen entlang der aktuellen Richtung ändern
+        //    würde, MUSS stattdessen P1 verschoben werden — alles andere verletzt die Kanten-
+        //    Vermassung. Bsp.: die untere Linie einer Kontur, deren rechter Eckpunkt über eine
+        //    starre vertikale Linie an eine kantenbemasste obere Ecke gekoppelt ist — beim Ändern
+        //    der unteren Länge muss der LINKE Punkt wandern, nicht der (indirekt) kantenfixierte.
+        // 2. Ist P2 der Start- oder Endpunkt einer geschlossenen Kette (IsClosedChainEndpoint),
+        //    würde das Verschieben über den "Partner-Punkt"-Mechanismus in UpdatePfadPunktPos
+        //    unbemerkt auch den jeweils anderen (spatial identischen) Index mitverschieben —
+        //    den eigentlichen Anker des Pfades. Nur als Fallback, wenn Fall 1 nicht eindeutig
+        //    entscheidet (keiner der beiden Punkte ist achsen-fixiert).
+        var (axisXFixed, axisYFixed) = GetAxisFixedPoints();
+        bool AxisConflict(int pt) => (IsAxisFixed(pt, axisXFixed) && Math.Abs(dx) > 1e-6) ||
+                                      (IsAxisFixed(pt, axisYFixed) && Math.Abs(dy) > 1e-6);
+        bool p1AxisFixed = AxisConflict(p1Idx);
+        bool p2AxisFixed = AxisConflict(p2Idx);
+        bool p2IsAnchor, p1IsAnchor;
+        if (p2AxisFixed != p1AxisFixed)
+        {
+            p2IsAnchor = p2AxisFixed;
+            p1IsAnchor = p1AxisFixed;
+        }
+        else
+        {
+            p2IsAnchor = IsClosedChainEndpoint(p2Idx);
+            p1IsAnchor = IsClosedChainEndpoint(p1Idx);
+        }
         double movedX, movedY; int movedIdx;
         if (p2IsAnchor && !p1IsAnchor)
         {
@@ -3104,7 +3221,12 @@ public partial class MainWindow : Window
             // P1 < P2 im Pfad (Segment aus zwei aufeinanderfolgenden Punkten) → P1 ist nie
             // ein Folge-Punkt von P2, preserveFollowers=false verschiebt daher nur echte
             // nachfolgende Pfad-Punkte, nicht den fixen Anker P1.
-            if (Math.Abs(nx2 - p2.Value.x) > 1e-6 || Math.Abs(ny2 - p2.Value.y) > 1e-6)
+            // Toleranz an die Speicherpräzision (Math.Round(...,3) → 0.001mm) angleichen statt
+            // 1e-6: sonst löst bereits reines Rundungsrauschen (z.B. nach einem starren
+            // ShiftPfadChain-Verschieben der ganzen Kette) hier eine "Korrektur" aus, die einen
+            // vermeintlich schon exakt ausgerichteten Punkt unnötig neu setzt und dadurch das
+            // Rechteck bei jeder Propagation minimal verzerrt.
+            if (Math.Abs(nx2 - p2.Value.x) > 1e-3 || Math.Abs(ny2 - p2.Value.y) > 1e-3)
                 UpdatePfadPunktPos(p2Idx, nx2, ny2, preserveFollowers: false);
             DrawSkia?.InvalidateVisual();
             return;
@@ -3114,7 +3236,8 @@ public partial class MainWindow : Window
             // parallel zur Kante → vertikal wenn Kante vertikal, sonst horizontal
             double nx2 = isVerticalEdge ? p1.Value.x : p1.Value.x + (dx0 >= 0 ? segLen : -segLen);
             double ny2 = isVerticalEdge ? p1.Value.y + (dy0 >= 0 ? segLen : -segLen) : p1.Value.y;
-            if (Math.Abs(nx2 - p2.Value.x) > 1e-6 || Math.Abs(ny2 - p2.Value.y) > 1e-6)
+            // Gleiche Toleranz-Angleichung wie im PerpendicularEdge-Zweig oben (0.001mm statt 1e-6).
+            if (Math.Abs(nx2 - p2.Value.x) > 1e-3 || Math.Abs(ny2 - p2.Value.y) > 1e-3)
                 UpdatePfadPunktPos(p2Idx, nx2, ny2, preserveFollowers: false);
             DrawSkia?.InvalidateVisual();
             return;
@@ -3494,9 +3617,9 @@ public partial class MainWindow : Window
                 // wird — genau das führte dazu, dass sich Winkelwerte durch andere Vermassungen
                 // verändern konnten.
                 double curActual = Math.Round(VermArcSpanActual(p1abs.Value, p2abs.Value, q1abs.Value, q2abs.Value), 2);
-                // Anzeige als spitzer Winkel (0°=parallel, 90°=rechtwinklig)
-                double curDisplay = curActual > 90.0 ? 180.0 - curActual : curActual;
-                string? lbl = hideLabel ? null : curDisplay.ToString("F2", inv) + "°";
+                // Anzeige als echter Winkel (0–180°) statt auf den spitzen Wert gefaltet, damit
+                // z.B. eine eingegebene 110°-Bemassung auch als 110° angezeigt bleibt.
+                string? lbl = hideLabel ? null : curActual.ToString("F2", inv) + "°";
                 var interA = LinesIntersection(p1abs.Value, p2abs.Value, q1abs.Value, q2abs.Value);
                 double arcR = interA.HasValue ? AngleArcRadius(drawOffset, p1abs.Value, p2abs.Value, interA.Value) : 20;
                 DrawAngleLine(p1abs.Value, p2abs.Value, q1abs.Value, q2abs.Value, arcR, lbl);
@@ -3517,8 +3640,8 @@ public partial class MainWindow : Window
                 double curActual = Math.Round(VermArcSpanActual(p1abs.Value, p2abs.Value, e1, e2), 2);
                 if (Math.Abs(curActual - en.Value) > 0.005)
                     _vermPlaced[ei] = en = en with { Value = curActual };
-                double curDisplay = curActual > 90.0 ? 180.0 - curActual : curActual;
-                string? lbl = hideLabel ? null : curDisplay.ToString("F2", inv) + "°";
+                // Anzeige als echter Winkel (0–180°), siehe Angle-Zweig oben.
+                string? lbl = hideLabel ? null : curActual.ToString("F2", inv) + "°";
                 double arcREA = AngleArcRadius(drawOffset, p1abs.Value, p2abs.Value, inter.Value);
                 DrawAngleLine(p1abs.Value, p2abs.Value, e1, e2, arcREA, lbl);
             }
@@ -3579,8 +3702,7 @@ public partial class MainWindow : Window
                 double rEA = AngleArcRadius(tEA, _vermP1Abs, _vermP2Abs, inter.Value);
                 var (e1, e2) = EdgeVirtualSegment(inter.Value, _vermActiveEdge);
                 double angA = VermArcSpanActual(_vermP1Abs, _vermP2Abs, e1, e2);
-                double angD = angA > 90 ? 180 - angA : angA;
-                DrawAngleLine(_vermP1Abs, _vermP2Abs, e1, e2, rEA, angD.ToString("F2", inv) + "°");
+                DrawAngleLine(_vermP1Abs, _vermP2Abs, e1, e2, rEA, angA.ToString("F2", inv) + "°");
             }
         }
         else if (_vermState == 5 && _vermActiveKind == VermKind.PointDist && _vermP1Idx >= 0)
@@ -3631,9 +3753,8 @@ public partial class MainWindow : Window
                     double tPrev = AngleTParam(_vermMouseMm.x, _vermMouseMm.y, _vermP1Abs, _vermP2Abs);
                     double rPrev = AngleArcRadius(tPrev, _vermP1Abs, _vermP2Abs, inter.Value);
                     double angA2 = VermArcSpanActual(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs);
-                    double angD2 = angA2 > 90 ? 180 - angA2 : angA2;
                     DrawAngleLine(_vermP1Abs, _vermP2Abs, _vermQ1Abs, _vermQ2Abs,
-                        rPrev, angD2.ToString("F2", inv) + "°");
+                        rPrev, angA2.ToString("F2", inv) + "°");
                 }
             }
         }
