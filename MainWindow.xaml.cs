@@ -2749,7 +2749,8 @@ public partial class MainWindow : Window
         var p1 = GetPfadAbsAt(p1Idx); var p2v = GetPfadAbsAt(p2Idx);
         if (p1 == null || p2v == null) return;
         double dx, dy;
-        if ((Math.Abs(dirX) > 1e-9 || Math.Abs(dirY) > 1e-9) && !SegmentHasDirectionConstraint(p1Idx, p2Idx))
+        if ((Math.Abs(dirX) > 1e-9 || Math.Abs(dirY) > 1e-9) && !SegmentHasDirectionConstraint(p1Idx, p2Idx)
+            && !IsPositionDrivenByAngle(p1Idx) && !IsPositionDrivenByAngle(p2Idx))
         {
             // Gespeicherten Normalvektor verwenden → Winkel bleibt immer erhalten,
             // solange keine andere Vermassung die Richtung dieses Segments aktiv vorgibt.
@@ -2792,6 +2793,109 @@ public partial class MainWindow : Window
             p2IsAnchor = IsClosedChainEndpoint(p2Idx);
             p1IsAnchor = IsClosedChainEndpoint(p1Idx);
         }
+
+        // Sonderfall: Der Punkt, den die normale Anker-Logik gerade bewegen würde, ist in
+        // Wirklichkeit durch eine WINKEL-Bemassung auf einem anderen (angrenzenden) Segment
+        // bereits vollständig und eindeutig positioniert (z.B. ein Eckpunkt, dessen Lage sich
+        // aus einer Winkel- + Längen-Bemassung der angrenzenden schrägen Linie ergibt). Er darf
+        // dann NICHT erneut verschoben werden — sonst reißt die Längen-Bemassung diese Position
+        // bei jeder Propagation wieder um, und beide Bemassungen pendeln sich gegenseitig hoch,
+        // ohne exakt zu konvergieren (Symptom: der Winkel bleibt dauerhaft leicht daneben, z.B.
+        // 88.9° statt 70°). Bleibt dem eigentlichen Anker-Punkt dabei genau EINE freie (nicht
+        // kantenfixierte) Achse, wird stattdessen ER verschoben — aber nur entlang dieser freien
+        // Achse, über die geometrische Kreis-Schnittpunkt-Lösung: er muss auf dem Kreis mit
+        // Radius newLen um den (fixen) winkelbemassten Punkt liegen, bei fester X- bzw.
+        // Y-Koordinate. Von den zwei möglichen Schnittpunkten wird der näher an der aktuellen
+        // Position gewählt (stabile, kontinuierliche Konvergenz statt Sprung).
+        int provMoveIdx   = (p2IsAnchor && !p1IsAnchor) ? p1Idx : p2Idx;
+        int provAnchorIdx = (p2IsAnchor && !p1IsAnchor) ? p2Idx : p1Idx;
+        if (IsPositionDrivenByAngle(provMoveIdx) && !IsPositionDrivenByAngle(provAnchorIdx))
+        {
+            bool anchorXFixed = IsAxisFixed(provAnchorIdx, axisXFixed);
+            bool anchorYFixed = IsAxisFixed(provAnchorIdx, axisYFixed);
+
+            // Bevorzugte Lösung: Statt die komplette Ausgleichsbewegung dem Anker aufzubürden,
+            // wird sie zwischen dem Anker und dem "Pivot" der winkelbemassenden Nachbar-Linie
+            // aufgeteilt (z.B. untere UND rechte Linie, statt nur die rechte). Der Pivot ist der
+            // andere Endpunkt derselben Winkel-Bemassung, die provMoveIdx positioniert — da diese
+            // Bemassung Länge UND Winkel fixiert, ist der Versatz zwischen Pivot und provMoveIdx
+            // konstant, d.h. provMoveIdx verschiebt sich exakt um denselben Betrag wie der Pivot
+            // (reine Translation). So bleibt der eigene (unbemasste) Winkel dieser Länge-Linie
+            // erhalten, weil ihre Richtung (cosT/sinT unten) beim Verlängern/Verkürzen konstant
+            // gehalten wird, und die nötige Verschiebung wird über zwei orthogonale freie Achsen
+            // (Anker + Pivot) eindeutig aufgelöst.
+            int pivotIdx = FindAngleDrivenPivot(provMoveIdx);
+            if (pivotIdx >= 0 && pivotIdx != provAnchorIdx && pivotIdx != provMoveIdx)
+            {
+                bool pivotXFixed = IsAxisFixed(pivotIdx, axisXFixed);
+                bool pivotYFixed = IsAxisFixed(pivotIdx, axisYFixed);
+                if (anchorXFixed != anchorYFixed && pivotXFixed != pivotYFixed && anchorXFixed != pivotXFixed)
+                {
+                    var anchorOld = GetPfadAbsAt(provAnchorIdx);
+                    var moveOld   = GetPfadAbsAt(provMoveIdx);
+                    var pivotOld  = GetPfadAbsAt(pivotIdx);
+                    if (anchorOld != null && moveOld != null && pivotOld != null)
+                    {
+                        double vx = moveOld.Value.x - anchorOld.Value.x;
+                        double vy = moveOld.Value.y - anchorOld.Value.y;
+                        double l0 = Math.Sqrt(vx*vx + vy*vy);
+                        if (l0 > 1e-9)
+                        {
+                            double cosT = vx / l0, sinT = vy / l0;
+                            double dLen = newLen - l0;
+                            double Dx = dLen * cosT, Dy = dLen * sinT;
+                            double dAnchorX = 0, dAnchorY = 0, dPivotX = 0, dPivotY = 0;
+                            if (anchorXFixed) { dPivotX = Dx; dAnchorY = -Dy; }   // Anker frei in Y, Pivot frei in X
+                            else               { dAnchorX = -Dx; dPivotY = Dy; }  // Anker frei in X, Pivot frei in Y
+                            UpdatePfadPunktPos(pivotIdx, pivotOld.Value.x + dPivotX, pivotOld.Value.y + dPivotY, preserveFollowers: true);
+                            UpdatePfadPunktPos(provAnchorIdx, anchorOld.Value.x + dAnchorX, anchorOld.Value.y + dAnchorY, preserveFollowers: true);
+                            UpdatePfadPunktPos(provMoveIdx, moveOld.Value.x + dPivotX, moveOld.Value.y + dPivotY, preserveFollowers: true);
+                            DrawSkia?.InvalidateVisual();
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if (anchorXFixed != anchorYFixed)   // genau eine Achse frei
+            {
+                var fixedPt   = GetPfadAbsAt(provMoveIdx);
+                var curAnchor = GetPfadAbsAt(provAnchorIdx);
+                if (fixedPt != null && curAnchor != null)
+                {
+                    double cx = fixedPt.Value.x, cy = fixedPt.Value.y;
+                    if (anchorXFixed)
+                    {
+                        double ax = curAnchor.Value.x;
+                        double rem = newLen*newLen - (ax - cx)*(ax - cx);
+                        if (rem >= 0)
+                        {
+                            double d = Math.Sqrt(rem);
+                            double solA = cy + d, solB = cy - d;
+                            double chosen = Math.Abs(solA - curAnchor.Value.y) <= Math.Abs(solB - curAnchor.Value.y) ? solA : solB;
+                            UpdatePfadPunktPos(provAnchorIdx, ax, chosen, preserveFollowers: provAnchorIdx <= provMoveIdx);
+                            DrawSkia?.InvalidateVisual();
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        double ay = curAnchor.Value.y;
+                        double rem = newLen*newLen - (ay - cy)*(ay - cy);
+                        if (rem >= 0)
+                        {
+                            double d = Math.Sqrt(rem);
+                            double solA = cx + d, solB = cx - d;
+                            double chosen = Math.Abs(solA - curAnchor.Value.x) <= Math.Abs(solB - curAnchor.Value.x) ? solA : solB;
+                            UpdatePfadPunktPos(provAnchorIdx, chosen, ay, preserveFollowers: provAnchorIdx <= provMoveIdx);
+                            DrawSkia?.InvalidateVisual();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         double movedX, movedY; int movedIdx;
         if (p2IsAnchor && !p1IsAnchor)
         {
@@ -2841,11 +2945,72 @@ public partial class MainWindow : Window
         DrawSkia?.InvalidateVisual();
     }
 
+    // True, wenn idx der aktiv von einer Länge-/Punktabstand-Bemassung bewegte Zielpunkt ist
+    // (also P2Idx eines Length- oder PointDist-Eintrags). Wird benutzt, um bei der Winkel-
+    // Korrektur den richtigen Endpunkt zu drehen: der Punkt, dessen Position gerade durch eine
+    // eigene Längen-Bemassung bestimmt wird, darf nicht von der Winkel-Korrektur wieder
+    // verschoben werden — sonst zerstört die Winkel-Bemassung die soeben gesetzte Länge (und
+    // umgekehrt), und beide Vermassungen pendeln sich gegenseitig hoch statt zu konvergieren.
+    private bool IsPositionDrivenByLength(int idx)
+    {
+        foreach (var en in _vermPlaced)
+            if ((en.Kind == VermKind.Length || en.Kind == VermKind.PointDist) && SamePathCorner(en.P2Idx, idx))
+                return true;
+        return false;
+    }
+
+    // True, wenn idx (oder sein SamePathCorner-Zwilling) als Q1Idx/Q2Idx einer Winkel-Bemassung
+    // (Angle/Perpendicular/Parallel) referenziert wird — seine Position wird also (mit)bestimmt
+    // durch eine Winkel-Korrektur auf einem angrenzenden Segment. Analog zu IsPositionDrivenByLength,
+    // aber für Winkel statt Länge: wird benutzt, damit eine Längen-Bemassung auf einem NACHBAR-
+    // Segment einen solchen Punkt nicht einfach entlang ihrer eigenen (eingefrorenen) Richtung
+    // verschiebt — das würde die vom Winkel gerade korrekt bestimmte Position wieder zerstören.
+    private bool IsPositionDrivenByAngle(int idx)
+    {
+        foreach (var en in _vermPlaced)
+            if ((en.Kind == VermKind.Angle || en.Kind == VermKind.Perpendicular || en.Kind == VermKind.Parallel)
+                && (SamePathCorner(en.Q1Idx, idx) || SamePathCorner(en.Q2Idx, idx)))
+                return true;
+        return false;
+    }
+
+    // Findet den "anderen" Q-Punkt der Winkel-Bemassung, die drivenIdx positioniert (siehe
+    // IsPositionDrivenByAngle). Da diese Bemassung sowohl Länge als auch Winkel des Segments
+    // (Q1Idx,Q2Idx) fixiert, ist der Versatz zwischen diesem Pivot-Punkt und drivenIdx konstant —
+    // verschiebt sich der Pivot, verschiebt sich drivenIdx um exakt denselben Betrag (reine
+    // Translation, keine Rotation). Wird in ApplyLengthConstraint genutzt, um die Ausgleichs-
+    // bewegung einer Nachbar-Längen-Bemassung zwischen Anker und Pivot aufzuteilen, statt sie
+    // komplett dem Anker aufzubürden.
+    private int FindAngleDrivenPivot(int drivenIdx)
+    {
+        foreach (var en in _vermPlaced)
+        {
+            if (en.Kind != VermKind.Angle && en.Kind != VermKind.Perpendicular && en.Kind != VermKind.Parallel) continue;
+            if (SamePathCorner(en.Q1Idx, drivenIdx)) return en.Q2Idx;
+            if (SamePathCorner(en.Q2Idx, drivenIdx)) return en.Q1Idx;
+        }
+        return -1;
+    }
+
     private void ApplyAngleConstraint(int p1Idx, int p2Idx, int q1Idx, int q2Idx, double newAngleDeg)
     {
         var p1 = GetPfadAbsAt(p1Idx); var p2 = GetPfadAbsAt(p2Idx);
         var q1 = GetPfadAbsAt(q1Idx); var q2 = GetPfadAbsAt(q2Idx);
         if (p1 == null || p2 == null || q1 == null || q2 == null) return;
+
+        // Kantenfixierte Punkte (direkt über EdgeDist/PointEdgeDist/CoincidentCorner, oder
+        // indirekt über eine starre achsparallele/-senkrechte Kette wie eine horizontale/
+        // vertikale Nachbarlinie, siehe GetAxisFixedPoints) haben oberste Priorität — sie dürfen
+        // von der Winkel-Korrektur NIE bewegt werden, auch nicht wenn der jeweils andere Q-Punkt
+        // "nur" durch eine Längen-Bemassung positioniert ist. Der längenbemasste Punkt kann sich
+        // dagegen meist noch über sein JEWEILS ANDERES Ende neu einpendeln (z.B. wird eine
+        // unvermasste Nachbarlinie länger/kürzer), ein kantenfixierter Punkt hat dagegen keinen
+        // Freiheitsgrad mehr. Ohne diese Priorisierung würde z.B. bei einer horizontalen,
+        // kantenbemassten Unterkante deren (via Ringschluss indirekt kantenfixierte) Ecke von der
+        // Winkel-Korrektur einer angrenzenden Bemassung mitgedreht — die Kanten-Vermassung zieht
+        // sie danach zurück, wodurch der Winkel nie exakt konvergiert (pendelt/bleibt leicht daneben).
+        var (angAxisXFixed, angAxisYFixed) = GetAxisFixedPoints();
+        bool IsPtAxisFixed(int idx) => IsAxisFixed(idx, angAxisXFixed) || IsAxisFixed(idx, angAxisYFixed);
 
         if (Math.Abs(newAngleDeg) < 0.5 || Math.Abs(newAngleDeg - 90.0) < 0.5)
         {
@@ -2858,7 +3023,17 @@ public partial class MainWindow : Window
             // Constraints schräg gezogen werden kann, ohne dass sie zurückkorrigiert wird.
             bool q1IsSharedPar = SamePathCorner(q1Idx, p1Idx) || SamePathCorner(q1Idx, p2Idx);
             bool q2IsSharedPar = SamePathCorner(q2Idx, p1Idx) || SamePathCorner(q2Idx, p2Idx);
-            bool pivotIsQ1Par = !(q2IsSharedPar && !q1IsSharedPar); // gemeinsamer Eckpunkt fix, sonst Q1 als Konvention
+            bool q1AxisFixedPar = IsPtAxisFixed(q1Idx);
+            bool q2AxisFixedPar = IsPtAxisFixed(q2Idx);
+            bool q1LenDrivenPar = IsPositionDrivenByLength(q1Idx);
+            bool q2LenDrivenPar = IsPositionDrivenByLength(q2Idx);
+            bool pivotIsQ1Par;
+            if (q1AxisFixedPar != q2AxisFixedPar)
+                pivotIsQ1Par = q1AxisFixedPar;   // kantenfixierter Punkt hat Vorrang vor allem anderen
+            else if (q1LenDrivenPar != q2LenDrivenPar)
+                pivotIsQ1Par = q1LenDrivenPar;   // der längenbemasste Punkt bleibt fix, siehe IsPositionDrivenByLength
+            else
+                pivotIsQ1Par = !(q2IsSharedPar && !q1IsSharedPar); // gemeinsamer Eckpunkt fix, sonst Q1 als Konvention
 
             var pivotPar     = pivotIsQ1Par ? q1.Value : q2.Value;
             var movePointPar = pivotIsQ1Par ? q2.Value : q1.Value;
@@ -2907,12 +3082,27 @@ public partial class MainWindow : Window
         if (inter == null) return;
 
         // Pivot = gemeinsamer Eckpunkt der beiden Segmente (P und Q teilen ihn).
-        // Wenn kein gemeinsamer Eckpunkt: Punkt näher am Schnittpunkt.
+        // Wenn kein eindeutiger gemeinsamer Punkt: Punkt näher am Schnittpunkt.
         // Das verhindert, dass beim Propagieren rückwärts der falsche Punkt bewegt wird.
         bool q1IsShared = SamePathCorner(q1Idx, p1Idx) || SamePathCorner(q1Idx, p2Idx);
         bool q2IsShared = SamePathCorner(q2Idx, p1Idx) || SamePathCorner(q2Idx, p2Idx);
+        // Vorrangig: ein Punkt, der bereits aktiv durch eine EIGENE Längen-/Punktabstand-
+        // Bemassung positioniert wird (z.B. weil der Nutzer gerade die anliegende Linie auf
+        // eine bestimmte Länge vermasst hat), bleibt fix — sonst reißt die Winkel-Korrektur die
+        // gerade gesetzte Länge wieder um, und beide Bemassungen pendeln sich gegenseitig hoch
+        // statt zu konvergieren (z.B.: obere Linie auf 300mm vermasst, während die schräge Linie
+        // bereits Länge+Winkel hat — dann muss sich stattdessen die unvermasste untere Linie
+        // anpassen, nicht die schräge).
+        bool q1AxisFixed = IsPtAxisFixed(q1Idx);
+        bool q2AxisFixed = IsPtAxisFixed(q2Idx);
+        bool q1LenDriven = IsPositionDrivenByLength(q1Idx);
+        bool q2LenDriven = IsPositionDrivenByLength(q2Idx);
         bool pivotIsQ1;
-        if (q1IsShared && !q2IsShared)
+        if (q1AxisFixed != q2AxisFixed)
+            pivotIsQ1 = q1AxisFixed;   // kantenfixierter Punkt hat Vorrang vor allem anderen
+        else if (q1LenDriven != q2LenDriven)
+            pivotIsQ1 = q1LenDriven;
+        else if (q1IsShared && !q2IsShared)
             pivotIsQ1 = true;   // Q1 = gemeinsamer Eckpunkt → pivot Q1, move Q2
         else if (q2IsShared && !q1IsShared)
             pivotIsQ1 = false;  // Q2 = gemeinsamer Eckpunkt → pivot Q2, move Q1
@@ -2973,7 +3163,7 @@ public partial class MainWindow : Window
         // Punkte, die bereits durch eine ANDERE platzierte Masslinie fixiert sind, dürfen dabei
         // nicht mitverschoben werden (siehe LockedPfadIndices) — die Verschiebung bricht dort ab,
         // sodass die dazwischenliegende unvermasste Pfadlinie die Längendifferenz aufnimmt.
-        var locked = LockedPfadIndices(self);
+        var locked = LockedPfadIndices(self, xAxis: edge == 1 || edge == 2);
         var (chainSt1, chainEn1) = FindChainBounds(p1Idx);
         var (chainSt2, chainEn2) = FindChainBounds(p2Idx);
         if (chainSt1 == chainSt2)
@@ -3002,7 +3192,7 @@ public partial class MainWindow : Window
         // Wie bei ApplyEdgeDistConstraint: die komplette Kette verschieben statt nur den
         // vermassten Punkt, aber an bereits anderweitig fixierten Punkten abbrechen (s.u.).
         var (chainSt, chainEn) = FindChainBounds(ptIdx);
-        ShiftPfadChain(chainSt, chainEn, dx, dy, ptIdx, ptIdx, LockedPfadIndices(self));
+        ShiftPfadChain(chainSt, chainEn, dx, dy, ptIdx, ptIdx, LockedPfadIndices(self, xAxis: edge == 1 || edge == 2));
         DrawSkia?.InvalidateVisual();
     }
 
@@ -3015,7 +3205,17 @@ public partial class MainWindow : Window
     // Bemassung fixierten Punkts) starr neu fest — das bereits gesetzte Maß würde dadurch
     // bei jeder Propagation verändert statt die dazwischenliegende, unvermasste Linie
     // anzupassen. LockedPfadIndices lässt ShiftPfadChain an solchen Punkten anhalten.
-    private HashSet<int> LockedPfadIndices(VermEntry? exclude)
+    //
+    // xAxis: für welche Achse die Sperre gilt. EdgeDist/PointEdgeDist fixieren je nach Kante
+    // (Edge 1/2 = X, Edge 3/4 = Y) NUR eine Achse — eine bereits zur rechten Kante vermasste Ecke
+    // darf trotzdem noch frei nach unten/oben verschoben werden, wenn anschließend eine ANDERE
+    // Ecke zur unteren Kante vermasst wird. Ohne diese Unterscheidung wurde die X-Sperre
+    // fälschlich auch für den Y-Shift übernommen, wodurch ShiftPfadChain die Verschiebung schon
+    // an dieser (nur in X fixierten) Ecke abgebrochen hat — nur ein Teil der Kette wanderte nach
+    // unten, der Rest blieb stehen, und das Rechteck wurde dadurch verzerrt/verkleinert statt nur
+    // verschoben. Länge/PointDist/Coincident/CoincidentCorner sind dagegen echte 2D-Fixierungen
+    // (kein Kanten-Bezug) und sperren daher weiterhin beide Achsen.
+    private HashSet<int> LockedPfadIndices(VermEntry? exclude, bool xAxis)
     {
         var locked = new HashSet<int>();
         foreach (var en in _vermPlaced)
@@ -3024,9 +3224,13 @@ public partial class MainWindow : Window
             switch (en.Kind)
             {
                 case VermKind.EdgeDist:
-                    locked.Add(en.P1Idx); locked.Add(en.P2Idx);
+                    if ((en.Edge == 1 || en.Edge == 2) == xAxis)
+                    { locked.Add(en.P1Idx); locked.Add(en.P2Idx); }
                     break;
                 case VermKind.PointEdgeDist:
+                    if ((en.Edge == 1 || en.Edge == 2) == xAxis)
+                        locked.Add(en.P2Idx);
+                    break;
                 case VermKind.Length:
                 case VermKind.PointDist:
                 case VermKind.Coincident:
@@ -3213,11 +3417,27 @@ public partial class MainWindow : Window
         double dx0 = p2.Value.x - p1.Value.x, dy0 = p2.Value.y - p1.Value.y;
         double segLen = Math.Sqrt(dx0*dx0 + dy0*dy0);
         if (segLen < 1e-9) return;
+        // Ist P1 (der feste Anker) gerade selbst durch eine eigene Längen-/Punktabstand-
+        // Bemassung positioniert worden (z.B. weil eine ANGRENZENDE Linie gerade auf eine neue
+        // Länge vermasst wurde), dann ist die aktuelle Distanz |P1P2| vorübergehend verfälscht —
+        // sie spiegelt nur die neue P1-Position wider, nicht die tatsächlich gewünschte Länge
+        // dieses (unvermassten) Segments. Würde man diese verfälschte segLen trotzdem als "zu
+        // erhaltende Länge" übernehmen, würde sich die unvermasste Linie künstlich verlängern/
+        // verkürzen, obwohl sie eigentlich einfach nur starr mit P1 hätte mitwandern sollen. In
+        // diesem Fall daher NICHT die Länge erhalten, sondern nur die durch die Achsen-Vorgabe
+        // zwingend geforderte Koordinate anpassen (reine Projektion) — die andere Koordinate von
+        // P2 bleibt unverändert stehen, wodurch sich P2 effektiv exakt wie P1 verschiebt
+        // (Translation statt Streckung).
+        bool preservePerpCoord = IsPositionDrivenByLength(p1Idx) && !IsPositionDrivenByLength(p2Idx);
         if (Math.Abs(newAngleDeg - 90.0) < 0.5)      // PerpendicularEdge
         {
             // senkrecht zur Kante → horizontal wenn Kante vertikal, sonst vertikal
             double nx2 = isVerticalEdge ? p1.Value.x + (dx0 >= 0 ? segLen : -segLen) : p1.Value.x;
             double ny2 = isVerticalEdge ? p1.Value.y : p1.Value.y + (dy0 >= 0 ? segLen : -segLen);
+            if (preservePerpCoord)
+            {
+                if (isVerticalEdge) nx2 = p2.Value.x; else ny2 = p2.Value.y;
+            }
             // P1 < P2 im Pfad (Segment aus zwei aufeinanderfolgenden Punkten) → P1 ist nie
             // ein Folge-Punkt von P2, preserveFollowers=false verschiebt daher nur echte
             // nachfolgende Pfad-Punkte, nicht den fixen Anker P1.
@@ -3236,6 +3456,10 @@ public partial class MainWindow : Window
             // parallel zur Kante → vertikal wenn Kante vertikal, sonst horizontal
             double nx2 = isVerticalEdge ? p1.Value.x : p1.Value.x + (dx0 >= 0 ? segLen : -segLen);
             double ny2 = isVerticalEdge ? p1.Value.y + (dy0 >= 0 ? segLen : -segLen) : p1.Value.y;
+            if (preservePerpCoord)
+            {
+                if (isVerticalEdge) ny2 = p2.Value.y; else nx2 = p2.Value.x;
+            }
             // Gleiche Toleranz-Angleichung wie im PerpendicularEdge-Zweig oben (0.001mm statt 1e-6).
             if (Math.Abs(nx2 - p2.Value.x) > 1e-3 || Math.Abs(ny2 - p2.Value.y) > 1e-3)
                 UpdatePfadPunktPos(p2Idx, nx2, ny2, preserveFollowers: false);
@@ -4602,7 +4826,7 @@ public partial class MainWindow : Window
                         canvas.DrawLine(ox - ux * sz, oy - uy * sz, ox + ux * sz, oy + uy * sz, sp);
                     }
                 }
-                else // PerpendicularEdge — L-Symbol an der Ecke, wo das Segment auf die Kante trifft
+                else // PerpendicularEdge — Winkel-Häkchen an der Ecke, Spitze zeigt in die Konturecke
                 {
                     double ddx = p2a.Value.x - p1a.Value.x, ddy = p2a.Value.y - p1a.Value.y;
                     double l = Math.Sqrt(ddx*ddx+ddy*ddy); if (l < 1e-9) continue;
@@ -4615,16 +4839,41 @@ public partial class MainWindow : Window
                         4 => Math.Abs(pt.y - WorkY),
                         _ => 0
                     };
-                    var corner = DistToEdge(p1a.Value) <= DistToEdge(p2a.Value) ? p1a.Value : p2a.Value;
+                    bool p1IsCorner = DistToEdge(p1a.Value) <= DistToEdge(p2a.Value);
+                    var corner = p1IsCorner ? p1a.Value : p2a.Value;
+                    var far    = p1IsCorner ? p2a.Value : p1a.Value;
                     var (cx2, cy2) = Px(corner.x, corner.y);
+                    var (fx2, fy2) = Px(far.x, far.y);
 
-                    float sq = symR * 0.85f;
-                    float ux1 = (float)(ddx/l * sq), uy1 = (float)(-ddy/l * sq);
-                    float ux2 = (float)(ddy/l * sq), uy2 = (float)(ddx/l  * sq);
+                    // Schenkel 1: entlang Segment P, weg von der Ecke (reale Richtung, kein Raten).
+                    float t1x = fx2 - cx2, t1y = fy2 - cy2;
+                    float t1l = (float)Math.Sqrt(t1x*t1x + t1y*t1y); if (t1l < 1e-6) continue;
+                    t1x /= t1l; t1y /= t1l;
+
+                    // Schenkel 2: entlang der Werkstückkante (deterministisch aus Kantengeometrie).
+                    float t2x = en.Edge is 1 or 2 ? 0f : 1f;
+                    float t2y = en.Edge is 1 or 2 ? 1f : 0f;
+
+                    // Winkelspitze (echte 90°, da t1⊥t2) nahe der Ecke, verschoben auf die dem
+                    // Werkzeug-Versatz gegenüberliegende Seite (gleiche Logik wie "="-Symbol oben) —
+                    // die Schenkel laufen von dort entlang der realen Linien nach aussen, sodass
+                    // die Spitze in die Konturecke zeigt und das Symbol wie ein Rechtwinkel aussieht.
+                    float bx1 = t1x + t2x, by1 = t1y + t2y;
+                    float bl1 = (float)Math.Sqrt(bx1*bx1 + by1*by1); if (bl1 < 1e-6) continue;
+                    bx1 /= bl1; by1 /= bl1;
+                    var rk4b = GetRadiuskorrekturForSeg(en.P1Idx, en.P2Idx);
+                    float sgToolpath4b = rk4b == "Links" ? 1f : rk4b == "Rechts" ? -1f : 0f;
+                    float side4b = -(sgToolpath4b != 0 ? sgToolpath4b : 1f);
+
+                    float legLen = symR * 0.9f, tipShift = symR * 1.5f;
+                    float tipX  = cx2 + bx1 * side4b * tipShift, tipY = cy2 + by1 * side4b * tipShift;
+                    float armX1 = tipX + t1x * legLen, armY1 = tipY + t1y * legLen;
+                    float armX2 = tipX + t2x * legLen, armY2 = tipY + t2y * legLen;
+
                     using var sqPath2 = new SKPath();
-                    sqPath2.MoveTo(cx2 + ux1, cy2 + uy1);
-                    sqPath2.LineTo(cx2 + ux1 + ux2, cy2 + uy1 + uy2);
-                    sqPath2.LineTo(cx2 + ux2, cy2 + uy2);
+                    sqPath2.MoveTo(armX1, armY1);
+                    sqPath2.LineTo(tipX, tipY);
+                    sqPath2.LineTo(armX2, armY2);
                     canvas.DrawPath(sqPath2, sp);
                 }
             }
@@ -4674,24 +4923,54 @@ public partial class MainWindow : Window
                         canvas.DrawLine(ox - ux * sz, oy - uy * sz, ox + ux * sz, oy + uy * sz, sp);
                     }
                 }
-                else // Perpendicular — L-Symbol an der gemeinsamen Ecke beider Segmente (falls vorhanden)
+                else // Perpendicular — Winkel-Häkchen an der gemeinsamen Ecke, Spitze zeigt in die Konturecke
                 {
                     // Gemeinsamer Punkt der beiden Segmente = die tatsächliche rechtwinklige Ecke
                     int sharedIdx = en.P1Idx == en.Q1Idx || en.P1Idx == en.Q2Idx ? en.P1Idx
                                   : en.P2Idx == en.Q1Idx || en.P2Idx == en.Q2Idx ? en.P2Idx
                                   : -1;
+                    var q1a = GetPfadAbsAt(en.Q1Idx); var q2a = GetPfadAbsAt(en.Q2Idx);
                     var cornerAbs = sharedIdx >= 0 ? GetPfadAbsAt(sharedIdx) : null;
                     (double x, double y) corner = cornerAbs
                         ?? ((p1a.Value.x + p2a.Value.x) / 2, (p1a.Value.y + p2a.Value.y) / 2);
+                    (double x, double y) pFar = sharedIdx == en.P1Idx ? p2a.Value
+                                               : sharedIdx == en.P2Idx ? p1a.Value : p2a.Value;
+                    (double x, double y) qFar = q1a == null || q2a == null ? pFar
+                                               : sharedIdx == en.Q1Idx ? q2a.Value
+                                               : sharedIdx == en.Q2Idx ? q1a.Value : q2a.Value;
                     var (cx3, cy3) = Px(corner.x, corner.y);
+                    var (pfx, pfy) = Px(pFar.x, pFar.y);
+                    var (qfx, qfy) = Px(qFar.x, qFar.y);
 
-                    float sq = symR * 0.85f;
-                    float ux1 = (float)(ddx/l * sq), uy1 = (float)(-ddy/l * sq);
-                    float ux2 = (float)(ddy/l * sq), uy2 = (float)(ddx/l  * sq);
+                    // Schenkel entlang der realen Segmentrichtungen, weg von der Ecke (kein Raten
+                    // über eine 90°-Rotation — Q kann unabhängig von P orientiert sein).
+                    float t1x = pfx - cx3, t1y = pfy - cy3;
+                    float t1l = (float)Math.Sqrt(t1x*t1x + t1y*t1y); if (t1l < 1e-6) continue;
+                    t1x /= t1l; t1y /= t1l;
+                    float t2x = qfx - cx3, t2y = qfy - cy3;
+                    float t2l = (float)Math.Sqrt(t2x*t2x + t2y*t2y);
+                    if (t2l < 1e-6) { t2x = -t1y; t2y = t1x; } else { t2x /= t2l; t2y /= t2l; }
+
+                    // Winkelspitze (echte 90°, da t1⊥t2) nahe der Ecke, verschoben auf die dem
+                    // Werkzeug-Versatz gegenüberliegende Seite (gleiche Logik wie "="-Symbol oben) —
+                    // die Schenkel laufen von dort entlang der realen Linien nach aussen, sodass
+                    // die Spitze in die Konturecke zeigt und das Symbol wie ein Rechtwinkel aussieht.
+                    float bx2 = t1x + t2x, by2 = t1y + t2y;
+                    float bl2 = (float)Math.Sqrt(bx2*bx2 + by2*by2); if (bl2 < 1e-6) continue;
+                    bx2 /= bl2; by2 /= bl2;
+                    var rk5b = GetRadiuskorrekturForSeg(en.P1Idx, en.P2Idx);
+                    float sgToolpath5b = rk5b == "Links" ? 1f : rk5b == "Rechts" ? -1f : 0f;
+                    float side5b = -(sgToolpath5b != 0 ? sgToolpath5b : 1f);
+
+                    float legLen = symR * 0.9f, tipShift = symR * 1.5f;
+                    float tipX  = cx3 + bx2 * side5b * tipShift, tipY = cy3 + by2 * side5b * tipShift;
+                    float armX1 = tipX + t1x * legLen, armY1 = tipY + t1y * legLen;
+                    float armX2 = tipX + t2x * legLen, armY2 = tipY + t2y * legLen;
+
                     using var sqPath3 = new SKPath();
-                    sqPath3.MoveTo(cx3 + ux1, cy3 + uy1);
-                    sqPath3.LineTo(cx3 + ux1 + ux2, cy3 + uy1 + uy2);
-                    sqPath3.LineTo(cx3 + ux2, cy3 + uy2);
+                    sqPath3.MoveTo(armX1, armY1);
+                    sqPath3.LineTo(tipX, tipY);
+                    sqPath3.LineTo(armX2, armY2);
                     canvas.DrawPath(sqPath3, sp);
                 }
             }
