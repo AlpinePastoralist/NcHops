@@ -230,9 +230,17 @@ public partial class WerkzeugeDialog : Window
         _save();
     }
 
-    private static string WerkzeugBilderOrdner => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "NCHops", "WerkzeugBilder");
+    // Ordner liegt im Projektverzeichnis (siehe ProjektPfade), damit die Bilder mit
+    // "git pull" bei allen ankommen. w.BildPfad speichert dazu nur den Dateinamen
+    // (relativ), nie den absoluten Pfad – der wäre pro Rechner/Klon unterschiedlich.
+    private static string WerkzeugBilderOrdner => ProjektPfade.WerkzeugBilderOrdner;
+
+    private static string? VollerBildPfad(string? bildPfad)
+    {
+        if (string.IsNullOrEmpty(bildPfad)) return null;
+        // Rückwärtskompatibel: ältere Dateien können noch einen absoluten Pfad enthalten.
+        return Path.IsPathRooted(bildPfad) ? bildPfad : Path.Combine(WerkzeugBilderOrdner, bildPfad);
+    }
 
     private void OnBildWaehlen(object sender, RoutedEventArgs e)
     {
@@ -248,17 +256,18 @@ public partial class WerkzeugeDialog : Window
         try
         {
             Directory.CreateDirectory(WerkzeugBilderOrdner);
-            var ziel = Path.Combine(WerkzeugBilderOrdner, $"{Guid.NewGuid():N}{Path.GetExtension(dlg.FileName)}");
+            var dateiname = $"{Guid.NewGuid():N}{Path.GetExtension(dlg.FileName)}";
+            var ziel      = Path.Combine(WerkzeugBilderOrdner, dateiname);
             File.Copy(dlg.FileName, ziel, overwrite: true);
 
-            var alt = w.BildPfad;
-            w.BildPfad  = ziel;
+            var altVoll = VollerBildPfad(w.BildPfad);
+            w.BildPfad  = dateiname;
             w.Geaendert = DateTime.Now;
             RefreshBildVorschau();
             _save();
 
-            if (!string.IsNullOrEmpty(alt) && File.Exists(alt))
-                try { File.Delete(alt); } catch { /* egal */ }
+            if (!string.IsNullOrEmpty(altVoll) && File.Exists(altVoll))
+                try { File.Delete(altVoll); } catch { /* egal */ }
         }
         catch
         {
@@ -271,8 +280,9 @@ public partial class WerkzeugeDialog : Window
     {
         if (LstWerkzeuge.SelectedItem is not Werkzeug w) return;
 
-        if (!string.IsNullOrEmpty(w.BildPfad) && File.Exists(w.BildPfad))
-            try { File.Delete(w.BildPfad); } catch { /* egal */ }
+        var voll = VollerBildPfad(w.BildPfad);
+        if (!string.IsNullOrEmpty(voll) && File.Exists(voll))
+            try { File.Delete(voll); } catch { /* egal */ }
 
         w.BildPfad  = null;
         w.Geaendert = DateTime.Now;
@@ -284,14 +294,15 @@ public partial class WerkzeugeDialog : Window
     {
         ImgVorschau.Source = null;
         if (LstWerkzeuge.SelectedItem is not Werkzeug w) return;
-        if (string.IsNullOrEmpty(w.BildPfad) || !File.Exists(w.BildPfad)) return;
+        var voll = VollerBildPfad(w.BildPfad);
+        if (string.IsNullOrEmpty(voll) || !File.Exists(voll)) return;
 
         try
         {
             var bmp = new BitmapImage();
             bmp.BeginInit();
             bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.UriSource   = new Uri(w.BildPfad, UriKind.Absolute);
+            bmp.UriSource   = new Uri(voll, UriKind.Absolute);
             bmp.EndInit();
             bmp.Freeze();
             ImgVorschau.Source = bmp;

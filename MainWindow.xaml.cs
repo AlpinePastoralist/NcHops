@@ -206,9 +206,7 @@ public partial class MainWindow : Window
     private GraviereParams?  _previewGravParams;
     private RechteckParams?  _previewRktParams;
     private KreisParams?     _previewKreisParams;
-    private static readonly string WerkzeugDatei = System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "NCHops", "werkzeuge.json");
+    private static readonly string WerkzeugDatei = ProjektPfade.WerkzeugDatei;
 
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
