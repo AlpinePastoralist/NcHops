@@ -10,15 +10,22 @@ public static class GCodeGenerator
     private static string F(double v) => v.ToString("F4", CultureInfo.InvariantCulture);
     private static string Sz() => $"G00 Z{F(SafeZ)}";
 
+    public static string WerkzeugWechsel(WerkzeugWechselParams p)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"({p.WerkzeugName})");
+        sb.AppendLine($"(D={F(p.Durchmesser)} a={F(p.SchneidenWinkel)})");
+        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
+        return sb.ToString();
+    }
+
     public static string Planfräsen(PlanfräsenParams p)
     {
         double schritt = p.FraeserD * p.Faktor;
         var sb = new StringBuilder();
         sb.AppendLine("(Benötigte Werkzeuge:)");
         sb.AppendLine("(planfräser)");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
         sb.AppendLine();
-        sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine(Sz());
         sb.AppendLine();
         sb.AppendLine($"G00 X{F(p.X0)} Y{F(p.Y0)}");
@@ -63,7 +70,6 @@ public static class GCodeGenerator
 
         sb.AppendLine();
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -72,7 +78,6 @@ public static class GCodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("(Bohrung)");
         sb.AppendLine($"(D={p.Durchmesser}, Bezug={p.Bezugspunkt})");
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
 
         var (x, y) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
@@ -88,7 +93,6 @@ public static class GCodeGenerator
             sb.AppendLine(Sz());
         }
 
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -102,7 +106,6 @@ public static class GCodeGenerator
         sb.AppendLine($"(D={p.Diameter})");
         sb.AppendLine($"(Bohrtiefe={p.Bohrtiefe})");
         sb.AppendLine($"(Zustellung={p.Zustellung})");
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
 
         var depth = -Math.Abs(p.Bohrtiefe);
@@ -126,7 +129,6 @@ public static class GCodeGenerator
             }
         }
 
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -168,16 +170,13 @@ public static class GCodeGenerator
         sb.AppendLine("(Tasche fräsen)");
         sb.AppendLine($"(X={F(ax)} Y={F(ay)} B={F(p.Breite)} H={F(p.Höhe)})");
         sb.AppendLine($"(D={p.FraeserD}, Bezug={p.Bezugspunkt})");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
 
         if (ix1 <= ix0 || iy1 <= iy0)
         {
             sb.AppendLine("(Tasche zu klein für Werkzeug)");
-            sb.AppendLine("M05");
             return sb.ToString();
         }
 
-        sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine(Sz());
 
         double depth = -Math.Abs(p.ZTiefe);
@@ -384,7 +383,6 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -423,16 +421,13 @@ public static class GCodeGenerator
         sb.AppendLine("(Nut fräsen)");
         sb.AppendLine($"(X={F(ax)} Y={F(ay)} L={F(p.Länge)} B={F(p.Breite)})");
         sb.AppendLine($"(D={p.FraeserD}, Bezug={p.Bezugspunkt})");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
 
         if (ix1 < ix0 - 1e-6 || iy1 < iy0 - 1e-6)
         {
             sb.AppendLine("(Nut zu schmal für Werkzeug)");
-            sb.AppendLine("M05");
             return sb.ToString();
         }
 
-        sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine(Sz());
 
         double depth = -Math.Abs(p.ZTiefe);
@@ -486,7 +481,6 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -505,16 +499,13 @@ public static class GCodeGenerator
         sb.AppendLine("(Kreistasche fräsen)");
         sb.AppendLine($"(Mitte X={F(cx)} Y={F(cy)}, D={F(p.Durchmesser)})");
         sb.AppendLine($"(D={p.FraeserD}, Eintauchwinkel={p.Eintauchwinkel}°, Bezug={p.Bezugspunkt})");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
 
         if (Rm <= 0)
         {
             sb.AppendLine("(Tasche zu klein für Werkzeug)");
-            sb.AppendLine("M05");
             return sb.ToString();
         }
 
-        sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine(Sz());
 
         double depth     = -Math.Abs(p.ZTiefe);
@@ -591,7 +582,6 @@ public static class GCodeGenerator
         sb.AppendLine($"G02 X{F(cx + Rm)} Y{F(cy)} I{F(-Rm)} J0 F{(int)p.Vorschub}");
 
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -599,7 +589,6 @@ public static class GCodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("(Umfahren)");
-        sb.AppendLine($"(TOOL D={F(p.Diameter)} ANGLE=180)");
         sb.AppendLine($"(A={p.A})");
         sb.AppendLine($"(D={p.Diameter})");
         sb.AppendLine($"(Fertigradius={p.Radius})");
@@ -607,7 +596,6 @@ public static class GCodeGenerator
         sb.AppendLine($"(Startseite={p.StartSide})");
         sb.AppendLine($"(Drehzahl={p.Drehzahl})");
         sb.AppendLine($"(Fräsrichtung={p.Direction})");
-        sb.AppendLine($"M03 S{p.Drehzahl}");
         sb.AppendLine(Sz());
 
         var toolOffset = p.Diameter / 2.0;
@@ -619,7 +607,6 @@ public static class GCodeGenerator
         if (x1 <= x0 || y1 <= y0)
         {
             sb.AppendLine("(Ungültige Umfahrungsbreite)");
-            sb.AppendLine("M05");
             return sb.ToString();
         }
 
@@ -859,7 +846,6 @@ public static class GCodeGenerator
                 sb.AppendLine($"G00 X{F(approachX)} Y{F(approachY)}");
         }
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -867,7 +853,6 @@ public static class GCodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("(Rechteck fräsen)");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
         sb.AppendLine($"(B={F(p.Breite)} H={F(p.Hoehe)}, Fraesung={p.Fraesung}, {p.Laufrichtung})");
 
         // Position der unteren-linken Ecke berechnen
@@ -900,7 +885,6 @@ public static class GCodeGenerator
         if (mX1 - mX0 < 1e-6 || mY1 - mY0 < 1e-6)
         {
             sb.AppendLine("(Rechteck zu klein für gewählte Fräsung/Fräser)");
-            sb.AppendLine("M05");
             return sb.ToString();
         }
 
@@ -1009,7 +993,6 @@ public static class GCodeGenerator
         }
         zLevels.Add(p.ZTiefe);
 
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(startX)} Y{F(startY)}");
         double prevZ = 0;
@@ -1021,7 +1004,6 @@ public static class GCodeGenerator
             prevZ = zLevels[pass];
         }
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -1029,7 +1011,6 @@ public static class GCodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("(Kreis fräsen)");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
         sb.AppendLine($"(R={F(p.Radius)}, Fraesung={p.Fraesung}, {p.Laufrichtung})");
 
         if (p.IsTasche)
@@ -1064,7 +1045,6 @@ public static class GCodeGenerator
 
         string Sz() => $"G00 Z{F(5)}";
 
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(startX)} Y{F(startY)}");
 
@@ -1115,7 +1095,6 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -1290,9 +1269,12 @@ public static class GCodeGenerator
             var (rPts, rMids) = hasRounding
                 ? InsertLineCornerArcs(pts, arcMids, verrundungen, closed)
                 : (pts, arcMids);
+            // BuildBogenMoves erhält bereits die vollen Punkte inkl. des doppelten
+            // Schlusspunkts (pts[^1] == pts[0]) und schließt den Pfad damit selbst
+            // (letzter Move endet exakt auf moves[0]) – ein zusätzliches
+            // moves.Add(moves[0]) hier würde nur einen doppelten/Null-Move
+            // (und bei Bogen-Abschluss ein doppeltes G02/G03) erzeugen.
             moves = BuildBogenMoves(rPts, rMids, corr ? r : 0, corr ? sg : 0, closed);
-            if (closed && moves.Count > 0)
-                moves.Add(moves[0]);
         }
         else
         {
@@ -1322,8 +1304,6 @@ public static class GCodeGenerator
 
         var sb = new StringBuilder();
         sb.AppendLine("(Pfad Fräsen)");
-        sb.AppendLine($"(TOOL D={F(sp.FraeserD)} ANGLE=180)");
-        sb.AppendLine($"M03 S{(int)sp.Drehzahl}");
         sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(moves[0].X)} Y{F(moves[0].Y)}");
 
@@ -1376,7 +1356,6 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -2477,12 +2456,10 @@ public static class GCodeGenerator
         double vWidth         = 2.0 * Math.Abs(p.ZTiefe) * Math.Tan(halfRad);
         double effectiveWidth = (p.FraeserD > 0) ? Math.Min(vWidth, p.FraeserD) : vWidth;
         sb.AppendLine($"(FraeserD={F(effectiveWidth)})");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE={F(p.SchneidenWinkel)})");
         sb.AppendLine("(Gravieren)");
         sb.AppendLine($"(Text: {p.Text.Replace('\n', ' ').Replace('\r', ' ')})");
         sb.AppendLine($"(Font: {p.FontFamily}, {F(p.FontSizeMm)} mm, Winkel={p.SchneidenWinkel}°)");
         sb.AppendLine();
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
 
         foreach (var figure in flat2.Figures)
@@ -2512,7 +2489,6 @@ public static class GCodeGenerator
         }
 
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -2801,7 +2777,7 @@ public static class GCodeGenerator
 
         var geo = ctx.FlatDisplay;
         if (geo.Bounds.IsEmpty || scale < 1e-9)
-        { sb.AppendLine("(kein Text)"); sb.AppendLine("M05"); return sb.ToString(); }
+        { sb.AppendLine("(kein Text)"); return sb.ToString(); }
 
         // WPF-PathFigure → Clipper2 PathD (in WPF-Koordinaten, Y nach unten)
         Clipper2Lib.PathD FigToPath(System.Windows.Media.PathFigure fig)
@@ -2866,12 +2842,10 @@ public static class GCodeGenerator
             return true;
         }
 
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE=180)");
         sb.AppendLine("(Textfeld-Tasche fräsen)");
         sb.AppendLine($"(Text: {p.Text.Replace('\n', ' ').Replace('\r', ' ')})");
         sb.AppendLine($"(Font: {p.FontFamily}, {F(p.FontSizeMm)} mm)");
         sb.AppendLine();
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
 
         var groups = GroupFiguresByLetter(geo.Figures.ToList());
@@ -2991,7 +2965,6 @@ public static class GCodeGenerator
             }
         }
 
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 
@@ -3814,9 +3787,7 @@ public static class GCodeGenerator
         sb.AppendLine($"(Schrift: {p.FontFamily}, Höhe: {p.FontSizeMm:F2} mm)");
         sb.AppendLine($"(Stichel: Winkel={p.SchneidenWinkel}°, D={p.FraeserD:F2} mm)");
         sb.AppendLine($"(Max. Tiefe: {p.ZTiefe:F3} mm)");
-        sb.AppendLine($"(TOOL D={F(p.FraeserD)} ANGLE={F(p.SchneidenWinkel)})");
         sb.AppendLine();
-        sb.AppendLine($"M03 S{(int)p.Drehzahl}");
         sb.AppendLine(Sz());
 
         int    prevFi = -1;
@@ -3851,7 +3822,6 @@ public static class GCodeGenerator
         sb.AppendLine();
         sb.AppendLine($"G01 X{F(lastX)} Y{F(lastY)} Z0 F{zFeed}");
         sb.AppendLine(Sz());
-        sb.AppendLine("M05");
         return sb.ToString();
     }
 }

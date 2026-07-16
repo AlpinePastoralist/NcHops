@@ -16,7 +16,8 @@ public partial class PfadPunktDialog : Window
         if (werkzeuge?.Count > 0)
         {
             CbWerkzeug.ItemsSource = werkzeuge;
-            if (prefill == null) CbWerkzeug.SelectedIndex = 0;
+            if (prefill == null || werkzeuge.Count == 1) CbWerkzeug.SelectedIndex = 0;
+            CbWerkzeug.IsEnabled = werkzeuge.Count > 1;
         }
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         if (!isStart)

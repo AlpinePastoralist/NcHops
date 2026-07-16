@@ -45,6 +45,7 @@ public partial class GravierenDialog : Window
                 w => w.Name.IndexOf("Gravierstichel", StringComparison.OrdinalIgnoreCase) >= 0)
                 ?? vFräser.FirstOrDefault();
             CbWerkzeug.SelectedItem = defaultTool;
+            CbWerkzeug.IsEnabled = vFräser.Count > 1;
         }
 
         var inv = System.Globalization.CultureInfo.InvariantCulture;
@@ -145,7 +146,8 @@ public partial class GravierenDialog : Window
             Vorschub:        w?.VorschubFxy ?? 800,
             Drehzahl:        w?.Drehzahl    ?? 20000,
             Bezugspunkt:     bezug,
-            Ausrichtung:     ausrichtung);
+            Ausrichtung:     ausrichtung,
+            WerkzeugNr:      w?.Nr ?? 0);
 
         DialogResult = true;
     }

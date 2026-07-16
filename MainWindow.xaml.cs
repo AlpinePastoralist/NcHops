@@ -183,6 +183,7 @@ public partial class MainWindow : Window
     private Dictionary<HistoryEntry, (int start, int end)> _historyLineMap = [];
     private bool _suppressHistoryRegen;
     private readonly ObservableCollection<Werkzeug> _werkzeuge = [];
+    private Werkzeug? _aktivesWerkzeug;
     private bool _suppressSave;
     private bool _suppressGCodeUiUpdate;
 
@@ -347,7 +348,6 @@ public partial class MainWindow : Window
                 && e.OldStartingIndex >= 0)
                 CleanupVermAfterRemove(e.OldStartingIndex);
         };
-        WerkzeugGrid.ItemsSource = _werkzeuge;
         _werkzeuge.CollectionChanged += (_, _) => SaveWerkzeuge();
         LoadWerkzeuge();
 #if false
@@ -438,14 +438,13 @@ public partial class MainWindow : Window
     private void OnBeenden(object sender, RoutedEventArgs e) => Close();
     private void OnWindowClosing(object sender, System.ComponentModel.CancelEventArgs e)
     {
-        WerkzeugGrid.CommitEdit(DataGridEditingUnit.Cell, exitEditingMode: true);
-        WerkzeugGrid.CommitEdit(DataGridEditingUnit.Row,  exitEditingMode: true);
         SaveWerkzeuge();
     }
 
     private void OnPlanfraesen(object sender, RoutedEventArgs e)
     {
-        var dlg = new PlanfräsenDialog(WorkX, WorkY, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var dlg = new PlanfräsenDialog(WorkX, WorkY, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Planfräsen",
@@ -454,7 +453,8 @@ public partial class MainWindow : Window
 
     private void OnBohrung(object sender, RoutedEventArgs e)
     {
-        var dlg = new BohrungDialog(WorkZ + 3, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var dlg = new BohrungDialog(WorkZ + 3, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Bohrung",
@@ -463,7 +463,8 @@ public partial class MainWindow : Window
 
     private void OnReihenlochbohrung(object sender, RoutedEventArgs e)
     {
-        var dlg = new ReihenlochbohrungDialog(WorkZ + 3, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var dlg = new ReihenlochbohrungDialog(WorkZ + 3, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Reihenlochbohrung",
@@ -472,7 +473,8 @@ public partial class MainWindow : Window
 
     private void OnUmfahren(object sender, RoutedEventArgs e)
     {
-        var dlg = new UmfahrenDialog(WorkZ, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var dlg = new UmfahrenDialog(WorkZ, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Umfahren",
@@ -481,7 +483,8 @@ public partial class MainWindow : Window
 
     private void OnTasche(object sender, RoutedEventArgs e)
     {
-        var dlg = new TascheFräsenDialog(-(WorkZ + 3), werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var dlg = new TascheFräsenDialog(-(WorkZ + 3), werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Tasche",
@@ -490,7 +493,8 @@ public partial class MainWindow : Window
 
     private void OnNut(object sender, RoutedEventArgs e)
     {
-        var dlg = new NutFräsenDialog(-(WorkZ + 3), WorkX + 20, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var dlg = new NutFräsenDialog(-(WorkZ + 3), WorkX + 20, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Nut",
@@ -499,7 +503,8 @@ public partial class MainWindow : Window
 
     private void OnKreistasche(object sender, RoutedEventArgs e)
     {
-        var dlg = new KreistascheDialog(-(WorkZ + 3), werkzeuge: _werkzeuge.ToList()) { Owner = this };
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var dlg = new KreistascheDialog(-(WorkZ + 3), werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
         _history.Add(new HistoryEntry("Kreistasche",
@@ -628,7 +633,8 @@ public partial class MainWindow : Window
 
     private void AddPfadStart(double mmX, double mmY)
     {
-        var wz = _werkzeuge.FirstOrDefault();
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var wz = _aktivesWerkzeug;
         var p = new PfadPunktParams(
             XRel: Math.Round(mmX, 3), YRel: Math.Round(mmY, 3),
             ZTiefe:        wz != null ? WorkZ + 3 : 5,
@@ -654,7 +660,8 @@ public partial class MainWindow : Window
     // ── Rechteck ────────────────────────────────────────────────
     private void AddRechteck(double x0mm, double y0mm, double bMm, double hMm)
     {
-        var wz = _werkzeuge.FirstOrDefault();
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var wz = _aktivesWerkzeug;
         var p = new RechteckParams(
             XRel:        Math.Round(x0mm, 3),
             YRel:        Math.Round(y0mm, 3),
@@ -710,16 +717,9 @@ public partial class MainWindow : Window
         string lauf = (RktEigGleich.IsChecked == true) ? "Gleichlauf" : "Gegenlauf";
         bool isTasche = RktModusTasche.IsChecked == true;
 
-        var wz = RktEigWerkzeug.SelectedItem as Werkzeug;
         var np = rkt with
         {
             XRel = x, YRel = y, Breite = b, Hoehe = h, ZTiefe = z,
-            FraeserD   = wz?.Durchmesser ?? rkt.FraeserD,
-            Drehzahl   = wz?.Drehzahl    ?? rkt.Drehzahl,
-            Vorschub   = wz?.VorschubFxy ?? rkt.Vorschub,
-            VorschubFz     = wz?.VorschubFz     ?? rkt.VorschubFz,
-            WerkzeugNr     = wz?.Nr             ?? rkt.WerkzeugNr,
-            Eintauchwinkel = wz?.Eintauchwinkel ?? rkt.Eintauchwinkel,
             Bezugspunkt         = bezug,
             Fraesung            = fraesung,
             Laufrichtung        = lauf,
@@ -821,7 +821,8 @@ public partial class MainWindow : Window
 
     private void AddKreis(double cxMm, double cyMm, double radiusMm)
     {
-        var wz = _werkzeuge.FirstOrDefault();
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var wz = _aktivesWerkzeug;
         string bezug = KrBezugName();
         var (xRel, yRel) = AbsToRel(bezug, cxMm, cyMm, WorkX, WorkY);
         var p = new KreisParams(
@@ -876,8 +877,6 @@ public partial class MainWindow : Window
         bool isTasche = KrModusTasche.IsChecked == true;
         string bezug  = KrBezugName();
 
-        var wz = KrEigWerkzeug.SelectedItem as Werkzeug;
-
         // Recalculate XRel/YRel if bezugspunkt changed
         var (oldAbsX, oldAbsY) = GCodeGenerator.ConvertBezugspunkt(kr.Bezugspunkt, kr.XRel, kr.YRel, WorkX, WorkY);
         var (newRelX, newRelY) = kr.Bezugspunkt != bezug
@@ -888,12 +887,6 @@ public partial class MainWindow : Window
         {
             XRel = Math.Round(newRelX, 3), YRel = Math.Round(newRelY, 3),
             Radius = rad, ZTiefe = z,
-            FraeserD   = wz?.Durchmesser ?? kr.FraeserD,
-            Drehzahl   = wz?.Drehzahl    ?? kr.Drehzahl,
-            Vorschub   = wz?.VorschubFxy ?? kr.Vorschub,
-            VorschubFz     = wz?.VorschubFz     ?? kr.VorschubFz,
-            WerkzeugNr     = wz?.Nr             ?? kr.WerkzeugNr,
-            Eintauchwinkel = wz?.Eintauchwinkel ?? kr.Eintauchwinkel,
             Fraesung            = fraesung,
             Laufrichtung        = lauf,
             MehrfachZustellung  = mehrfach,
@@ -5107,10 +5100,20 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void OpenGravierenDialog(bool isVCarve = false, bool isTasche = false)
     {
+        if (!SicherstellenAktivesWerkzeug()) return;
+        if (_aktivesWerkzeug!.Schneidenwinkel >= 180)
+        {
+            MessageBox.Show(this,
+                "Das aktive Werkzeug ist kein Gravierwerkzeug (Schneidenwinkel muss < 180° sein). " +
+                "Bitte zuerst über 'Werkzeug wechsel' ein passendes Werkzeug wählen.",
+                "Ungeeignetes Werkzeug", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         string title = isTasche ? "Gravieren – Textfeld A Tasche"
                      : isVCarve ? "Gravieren – Textfeld A carve"
                      : "Gravieren – Textfeld A umriss";
-        var dlg = new GravierenDialog(werkzeuge: _werkzeuge.ToList(), workX: WorkX, workY: WorkY)
+        var dlg = new GravierenDialog(werkzeuge: [_aktivesWerkzeug], workX: WorkX, workY: WorkY)
                       { Owner = this, Title = title };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result! with
@@ -5185,19 +5188,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             EigAusrLinks.IsChecked  = p.Ausrichtung == "Links"  || string.IsNullOrEmpty(p.Ausrichtung);
             EigAusrMitte.IsChecked  = p.Ausrichtung == "Mitte";
             EigAusrRechts.IsChecked = p.Ausrichtung == "Rechts";
-            // Fräser-Auswahl — bei WerkzeugNr=0 ersten Gravierfräser vorauswählen
-            EigWerkzeug.ItemsSource = _werkzeuge.Where(w => w.Schneidenwinkel < 180.0).ToList();
-            EigWerkzeug.SelectedItem = EigWerkzeug.Items.OfType<Werkzeug>()
-                .FirstOrDefault(w => p.WerkzeugNr > 0 ? w.Nr == p.WerkzeugNr
-                                                       : true);   // erster Eintrag als Standard
+            // Fräser-Info (rein informativ, kein Auswahl mehr im Eigenschaften-Panel)
+            var eigWzInfo = _werkzeuge.FirstOrDefault(w => w.Nr == p.WerkzeugNr);
             // V-Carve-Felder
             PnlVCarveEig.Visibility = p.IsVCarve ? Visibility.Visible : Visibility.Collapsed;
             if (p.IsVCarve)
             {
-                var eigWz = EigWerkzeug.SelectedItem as Werkzeug;
                 // Max. Tiefe: Werkzeug-ZZustellung wenn noch kein expliziter Wert gesetzt (WerkzeugNr=0)
-                double dispZt = (p.WerkzeugNr == 0 && eigWz?.ZZustellung > 0)
-                    ? eigWz.ZZustellung : p.ZTiefe;
+                double dispZt = (p.WerkzeugNr == 0 && eigWzInfo?.ZZustellung > 0)
+                    ? eigWzInfo.ZZustellung : p.ZTiefe;
                 // Auflösung: berechneten Auto-Wert anzeigen wenn SampleStepMm = 0
                 double dispStep = p.SampleStepMm > 0
                     ? p.SampleStepMm
@@ -5249,10 +5248,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             if (isStart)
             {
                 if (entryChanged || !PfadEigZ.IsKeyboardFocused) PfadEigZ.Text = pfad.ZTiefe.ToString(inv);
-                PfadEigWerkzeug.ItemsSource  = _werkzeuge.ToList();
-                PfadEigWerkzeug.SelectedItem = _werkzeuge.FirstOrDefault(w =>
-                    Math.Abs(w.Durchmesser - pfad.FraeserD) < 0.01 &&
-                    Math.Abs(w.Drehzahl    - pfad.Drehzahl) < 1);
                 PfadEigRadius.SelectedIndex = pfad.Radiuskorrektur switch
                     { "Links" => 0, "Rechts" => 2, _ => 1 };
             }
@@ -5321,9 +5316,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             _eigSuppressUpdate = true;
-            RktEigWerkzeug.ItemsSource  = _werkzeuge.ToList();
-            RktEigWerkzeug.SelectedItem = _werkzeuge.FirstOrDefault(w => w.Nr == rkt.WerkzeugNr)
-                                       ?? _werkzeuge.FirstOrDefault();
             if (!RktEigX.IsKeyboardFocused)      RktEigX.Text      = rkt.XRel.ToString(inv);
             if (!RktEigY.IsKeyboardFocused)      RktEigY.Text      = rkt.YRel.ToString(inv);
             if (!RktEigBreite.IsKeyboardFocused) RktEigBreite.Text = rkt.Breite.ToString(inv);
@@ -5356,9 +5348,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             _eigSuppressUpdate = true;
-            KrEigWerkzeug.ItemsSource  = _werkzeuge.ToList();
-            KrEigWerkzeug.SelectedItem = _werkzeuge.FirstOrDefault(w => w.Nr == kr.WerkzeugNr)
-                                       ?? _werkzeuge.FirstOrDefault();
             if (!KrEigX.IsKeyboardFocused)      KrEigX.Text      = kr.XRel.ToString(inv);
             if (!KrEigY.IsKeyboardFocused)      KrEigY.Text      = kr.YRel.ToString(inv);
             if (!KrEigRadius.IsKeyboardFocused) KrEigRadius.Text = kr.Radius.ToString(inv);
@@ -5410,17 +5399,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             if (!double.TryParse(Norm(PfadEigZ.Text), sty, inv, out var z)) return;
             string radius = PfadEigRadius.SelectedIndex switch { 0 => "Links", 2 => "Rechts", _ => "Mittig" };
-            var wz = PfadEigWerkzeug.SelectedItem as Werkzeug;
             np  = pfad with
             {
                 XRel = xRel, YRel = yRel, ZTiefe = z,
                 Radiuskorrektur = radius, Bezugspunkt = bezug,
-                FraeserD       = wz?.Durchmesser   ?? pfad.FraeserD,
-                Drehzahl       = wz?.Drehzahl       ?? pfad.Drehzahl,
-                Vorschub       = wz?.VorschubFxy    ?? pfad.Vorschub,
-                VorschubFz     = wz?.VorschubFz     ?? pfad.VorschubFz,
-                ZZustellung    = wz?.ZZustellung    ?? pfad.ZZustellung,
-                Eintauchwinkel = wz?.Eintauchwinkel ?? pfad.Eintauchwinkel,
             };
             lbl = "Pfad Start";
             det = $"X={np.XRel} Y={np.YRel}, Z={np.ZTiefe}";
@@ -5465,7 +5447,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void OnPfadEigLostFocus(object sender, RoutedEventArgs e)                => ApplyPfadStartEig();
     private void OnPfadEigSelChanged(object sender, SelectionChangedEventArgs e)     => ApplyPfadStartEig();
-    private void OnPfadEigWerkzeugChanged(object sender, SelectionChangedEventArgs e) => ApplyPfadStartEig();
     private void OnPfadEigTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) => ApplyPfadStartEig();
 
     // ── Endpunkt-Panel (geschlossener Pfad) ──────────────────────────────────
@@ -5605,10 +5586,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         string bezugApply  = (EigBezugspunkt.SelectedItem as ComboBoxItem)?.Content as string ?? p.Bezugspunkt;
         double xrApply     = double.TryParse(Norm(EigXRel.Text), sty, inv, out var vxa) ? vxa : p.XRel;
         double yrApply     = double.TryParse(Norm(EigYRel.Text), sty, inv, out var vya) ? vya : p.YRel;
-        var    wzApply     = EigWerkzeug.SelectedItem as Werkzeug;
 
-        double zt  = wzApply != null ? (wzApply.ZZustellung > 0 ? wzApply.ZZustellung : p.ZTiefe) : p.ZTiefe;
-        double sw  = wzApply?.Schneidenwinkel ?? p.SchneidenWinkel;
+        double zt  = p.ZTiefe;
+        double sw  = p.SchneidenWinkel;
         double halfRad = sw / 2.0 * Math.PI / 180.0;
         double effW    = 2.0 * zt * Math.Tan(halfRad);
 
@@ -5636,12 +5616,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             TextBreite      = tw,
             TextHoehe       = th,
             Ausrichtung     = ausrichtung,
-            WerkzeugNr      = wzApply?.Nr ?? p.WerkzeugNr,
             ZTiefe          = zt,
-            SchneidenWinkel = sw,
-            FraeserD        = wzApply?.Durchmesser  ?? p.FraeserD,
-            Vorschub        = wzApply?.VorschubFxy  ?? p.Vorschub,
-            Drehzahl        = wzApply?.Drehzahl     ?? p.Drehzahl,
             SampleStepMm    = sampleStep,
             VereinfachungMm = spitzenTol,
         };
@@ -5689,9 +5664,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             double th = double.TryParse(Norm(EigTextHoehe.Text),      sty, inv, out var v3)           ? v3 : gp.TextHoehe;
             string ausr = EigAusrRechts.IsChecked == true ? "Rechts"
                         : EigAusrMitte.IsChecked  == true ? "Mitte" : "Links";
-            var wz = EigWerkzeug.SelectedItem as Werkzeug;
 
-            double previewZt = wz != null ? (wz.ZZustellung > 0 ? wz.ZZustellung : gp.ZTiefe) : gp.ZTiefe;
+            double previewZt = gp.ZTiefe;
             if (gp.IsVCarve && double.TryParse(Norm(EigMaxTiefe.Text),  sty, inv, out var pvzt) && pvzt > 0) previewZt = pvzt;
             double previewStep = gp.SampleStepMm;
             double previewSimp = gp.VereinfachungMm;
@@ -5712,12 +5686,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 TextBreite      = tw,
                 TextHoehe       = th,
                 Ausrichtung     = ausr,
-                WerkzeugNr      = wz?.Nr      ?? gp.WerkzeugNr,
                 ZTiefe          = previewZt,
-                SchneidenWinkel = wz?.Schneidenwinkel ?? gp.SchneidenWinkel,
-                FraeserD        = wz?.Durchmesser     ?? gp.FraeserD,
-                Vorschub        = wz?.VorschubFxy     ?? gp.Vorschub,
-                Drehzahl        = wz?.Drehzahl        ?? gp.Drehzahl,
                 SampleStepMm    = previewStep,
                 VereinfachungMm = previewSimp,
             };
@@ -5744,17 +5713,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     // Auswahl-Events → sofort Preview (kein G-Code)
     private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)     => UpdatePreviewFromFields();
     private void OnEigFontKeyUp(object sender, KeyEventArgs e)                    => RestartEigTimer();
-    private void OnEigWerkzeugChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_eigSuppressUpdate && EigWerkzeug.SelectedItem is Werkzeug wz && wz.ZZustellung > 0
-            && (HistoryList.SelectedItem as HistoryEntry)?.Params is GraviereParams { IsVCarve: true })
-        {
-            _eigSuppressUpdate = true;
-            EigMaxTiefe.Text = wz.ZZustellung.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            _eigSuppressUpdate = false;
-        }
-        UpdatePreviewFromFields();
-    }
     private void RestartEigTimer()
     {
         if (_eigSuppressUpdate) return;    // Programmatische Textzuweisung → kein Timer
@@ -5937,12 +5895,13 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void EditHistoryEntry(HistoryEntry entry)
     {
+        if (!SicherstellenAktivesWerkzeug()) return;
         int idx = _history.IndexOf(entry);
         switch (entry.Params)
         {
             case PlanfräsenParams p:
             {
-                var dlg = new PlanfräsenDialog(WorkX, WorkY, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                var dlg = new PlanfräsenDialog(WorkX, WorkY, p, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Planfräsen",
@@ -5951,7 +5910,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             case BohrungParams p:
             {
-                var dlg = new BohrungDialog(WorkZ + 3, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                var dlg = new BohrungDialog(WorkZ + 3, p, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Bohrung",
@@ -5960,7 +5919,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             case ReihenlochbohrungParams p:
             {
-                var dlg = new ReihenlochbohrungDialog(WorkZ + 3, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                var dlg = new ReihenlochbohrungDialog(WorkZ + 3, p, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Reihenlochbohrung",
@@ -5969,7 +5928,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             case UmfahrenParams p:
             {
-                var dlg = new UmfahrenDialog(WorkZ, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                var dlg = new UmfahrenDialog(WorkZ, p, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Umfahren",
@@ -5978,7 +5937,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             case TascheFräsenParams p:
             {
-                var dlg = new TascheFräsenDialog(-(WorkZ + 3), p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                var dlg = new TascheFräsenDialog(-(WorkZ + 3), p, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Tasche",
@@ -5987,7 +5946,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             case NutParams p:
             {
-                var dlg = new NutFräsenDialog(-(WorkZ + 3), p.Länge, p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                var dlg = new NutFräsenDialog(-(WorkZ + 3), p.Länge, p, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Nut",
@@ -5996,7 +5955,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             case KreistascheParams p:
             {
-                var dlg = new KreistascheDialog(-(WorkZ + 3), p, werkzeuge: _werkzeuge.ToList()) { Owner = this };
+                var dlg = new KreistascheDialog(-(WorkZ + 3), p, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result!;
                 _history[idx] = new HistoryEntry("Kreistasche",
@@ -6013,7 +5972,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 };
                 var dlg = new PfadPunktDialog(title, -(WorkZ + 3),
                     isStart: p.Typ == PfadPunktTyp.Start, p,
-                    werkzeuge: _werkzeuge.ToList(),
+                    werkzeuge: [_aktivesWerkzeug!],
                     isBogen: p.Typ == PfadPunktTyp.Bogen) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result! with { Typ = p.Typ };
@@ -6036,10 +5995,18 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             case GraviereParams p:
             {
+                if (_aktivesWerkzeug!.Schneidenwinkel >= 180)
+                {
+                    MessageBox.Show(this,
+                        "Das aktive Werkzeug ist kein Gravierwerkzeug (Schneidenwinkel muss < 180° sein). " +
+                        "Bitte zuerst über 'Werkzeug wechsel' ein passendes Werkzeug wählen.",
+                        "Ungeeignetes Werkzeug", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
                 string dlgTitle = p.IsTasche ? "Gravieren – Textfeld A Tasche"
                                 : p.IsVCarve ? "Gravieren – Textfeld A carve"
                                 : "Gravieren – Textfeld A umriss";
-                var dlg = new GravierenDialog(p, werkzeuge: _werkzeuge.ToList())
+                var dlg = new GravierenDialog(p, werkzeuge: [_aktivesWerkzeug])
                               { Owner = this, Title = dlgTitle };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result! with
@@ -6133,6 +6100,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             double lastFraeserD        = 0;
             int lineCounter = 1;  // nächste Zeile im entstehenden Dokument (1-basiert)
             var lineMap = new Dictionary<HistoryEntry, (int start, int end)>();
+            bool spindleOn = false;   // Spindel läuft bereits (M03 wurde ausgegeben, M05 steht noch aus)
 
             // Zählt Zeilen, die sb.AppendLine(code) hinzufügt
             int LinesIn(string s) => s.Count(c => c == '\n') + 1;
@@ -6195,8 +6163,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     GraviereParams p when p.IsTasche => GCodeGenerator.TextfeldTasche(p, workX, workY),
                     GraviereParams p when p.IsVCarve => GCodeGenerator.VCarve(p, workX, workY),
                     GraviereParams p                 => GCodeGenerator.Gravieren(p, workX, workY),
+                    WerkzeugWechselParams p          => GCodeGenerator.WerkzeugWechsel(p),
                     _                                => string.Empty
                 };
+
+                // Werkzeugwechsel startet die Spindel (M03) neu – läuft bereits eine
+                // Spindel vom vorherigen Werkzeug, muss sie davor gestoppt werden (M05).
+                if (entry.Params is WerkzeugWechselParams && spindleOn && !string.IsNullOrEmpty(code))
+                    code = "M05" + Environment.NewLine + code;
+                if (entry.Params is WerkzeugWechselParams)
+                    spindleOn = true;
+
                 if (!string.IsNullOrEmpty(code))
                 {
                     int ls = lineCounter;
@@ -6206,6 +6183,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 }
             }
             FlushPfad();
+
+            // Spindel am Programmende stoppen, falls sie noch läuft
+            if (spindleOn)
+                sb.AppendLine("M05");
 
             if (cts.IsCancellationRequested) return;
             var result = sb.ToString();
@@ -6691,6 +6672,39 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void OnToolZoom(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.Zoom ? CanvasTool.Select : CanvasTool.Zoom);
+
+    private void OnToolWerkzeugWechsel(object sender, RoutedEventArgs e) => WerkzeugWechselDialog();
+
+    /// <summary>
+    /// Öffnet die Werkzeugliste im Auswahlmodus. Bei Auswahl wird das Werkzeug als aktives
+    /// Werkzeug übernommen und ein "Werkzeugwechsel"-Eintrag im Verlauf angelegt.
+    /// Gibt true zurück, wenn ein Werkzeug gewählt wurde, sonst false (Abbruch).
+    /// </summary>
+    private bool WerkzeugWechselDialog()
+    {
+        var dlg = new WerkzeugeDialog(_werkzeuge, SaveWerkzeuge, waehlModus: true) { Owner = this };
+        if (dlg.ShowDialog() != true || dlg.Ausgewaehlt == null) return false;
+
+        _aktivesWerkzeug = dlg.Ausgewaehlt;
+        BtnToolWerkzeugWechsel.ToolTip = $"Werkzeug wechsel – aktiv: {_aktivesWerkzeug.DisplayName}";
+
+        _history.Add(new HistoryEntry("Werkzeugwechsel", _aktivesWerkzeug.DisplayName,
+            new WerkzeugWechselParams(_aktivesWerkzeug.Nr, _aktivesWerkzeug.Name, _aktivesWerkzeug.Drehzahl,
+                _aktivesWerkzeug.Durchmesser, _aktivesWerkzeug.Schneidenwinkel)));
+        HistoryList.SelectedItem = _history[^1];
+        return true;
+    }
+
+    /// <summary>
+    /// Stellt sicher, dass ein aktives Werkzeug gesetzt ist. Ist noch keines gewählt,
+    /// öffnet sich automatisch die Werkzeugauswahl. Gibt false zurück, wenn der Benutzer
+    /// die Auswahl abbricht (in diesem Fall soll die aufrufende Aktion nicht ausgeführt werden).
+    /// </summary>
+    private bool SicherstellenAktivesWerkzeug()
+    {
+        if (_aktivesWerkzeug != null) return true;
+        return WerkzeugWechselDialog();
+    }
 
     private void OnToolVCarveText(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.VCarveText ? CanvasTool.Select : CanvasTool.VCarveText);
@@ -10732,9 +10746,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         TabGCode.Visibility = MnuGCodeAnzeigen.IsChecked ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void OnWerkzeugeAnzeigen(object sender, RoutedEventArgs e)
+    private void OnWerkzeugliste(object sender, RoutedEventArgs e)
     {
-        TabWerkzeuge.Visibility = MnuWerkzeugeAnzeigen.IsChecked ? Visibility.Visible : Visibility.Collapsed;
+        var dlg = new WerkzeugeDialog(_werkzeuge, SaveWerkzeuge) { Owner = this };
+        dlg.ShowDialog();
     }
 
     private bool _showFraesbreite = false;
@@ -10751,43 +10766,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _textGeoCache.Clear();
         _vCarvePending.Clear();
         UpdateAll();
-    }
-
-    private void OnWerkzeugCellsChanged(object sender, SelectedCellsChangedEventArgs e)
-    {
-        if (WerkzeugGrid.SelectedCells.Count > 0)
-            WerkzeugGrid.BeginEdit();
-    }
-
-    private void OnWerkzeugCellPreparing(object sender, DataGridPreparingCellForEditEventArgs e)
-    {
-        if (e.EditingElement is TextBox tb)
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
-                () => { tb.SelectAll(); tb.Focus(); });
-    }
-
-    private void OnWerkzeugKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter) return;
-        e.Handled = true;
-
-        var item       = WerkzeugGrid.CurrentCell.Item;
-        var currentCol = WerkzeugGrid.CurrentCell.Column;
-
-        WerkzeugGrid.CommitEdit(DataGridEditingUnit.Cell, true);
-
-        var editableCols = WerkzeugGrid.Columns
-            .Where(c => c.Visibility == Visibility.Visible && !c.IsReadOnly)
-            .OrderBy(c => c.DisplayIndex)
-            .ToList();
-
-        if (editableCols.Count == 0 || currentCol == null) return;
-
-        int idx  = editableCols.IndexOf(currentCol);
-        int next = idx < 0 ? 0 : (idx + 1) % editableCols.Count;
-
-        WerkzeugGrid.CurrentCell = new DataGridCellInfo(item, editableCols[next]);
-        WerkzeugGrid.BeginEdit();
     }
 
     private void LoadWerkzeuge()
@@ -10808,7 +10786,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 {
                     Nr = 1, Name = "Werkzeug 1",
                     Durchmesser = 10, Schneidenwinkel = 180, ZZustellung = 4,
-                    Eintauchwinkel = 90, VorschubFxy = 3000, VorschubFz = 2000,
+                    Eintauchwinkel = 20, VorschubFxy = 3000, VorschubFz = 2000,
                     Drehzahl = 18000, RaeumzustellungXY = 75,
                 });
         }
@@ -10827,44 +10805,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             File.WriteAllText(WerkzeugDatei, json);
         }
         catch { }
-    }
-
-    private void OnWerkzeugInitializingNewItem(object sender, InitializingNewItemEventArgs e)
-    {
-        if (e.NewItem is not Werkzeug w) return;
-        int nr = (_werkzeuge.Count > 0 ? _werkzeuge.Max(x => x.Nr) : 0) + 1;
-        var tmpl = _werkzeuge.LastOrDefault();
-        w.Nr = nr;
-        if (tmpl != null)
-        {
-            w.Name              = tmpl.Name;
-            w.Durchmesser       = tmpl.Durchmesser;
-            w.Schneidenwinkel   = tmpl.Schneidenwinkel;
-            w.ZZustellung       = tmpl.ZZustellung;
-            w.Eintauchwinkel    = tmpl.Eintauchwinkel;
-            w.VorschubFxy       = tmpl.VorschubFxy;
-            w.VorschubFz        = tmpl.VorschubFz;
-            w.Drehzahl          = tmpl.Drehzahl;
-            w.RaeumzustellungXY = tmpl.RaeumzustellungXY;
-        }
-        else
-        {
-            w.Durchmesser = 10; w.Schneidenwinkel = 180; w.ZZustellung = 4;
-            w.Eintauchwinkel = 90; w.VorschubFxy = 3000; w.VorschubFz = 2000;
-            w.Drehzahl = 18000; w.RaeumzustellungXY = 75;
-        }
-    }
-
-    private void OnWerkzeugCellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
-    {
-        if (e.EditAction == DataGridEditAction.Commit)
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, SaveWerkzeuge);
-    }
-
-    private void OnWerkzeugLoeschen(object sender, RoutedEventArgs e)
-    {
-        if (WerkzeugGrid.SelectedItem is Werkzeug w)
-            _werkzeuge.Remove(w);
     }
 
     private void OnRasterEinblenden(object sender, RoutedEventArgs e)
@@ -11993,19 +11933,77 @@ public static class GCodeTooltip
     }
 }
 
-public class Werkzeug
+public enum WerkzeugTyp { Fraeser, Bohrer }
+
+public class Werkzeug : System.ComponentModel.INotifyPropertyChanged
 {
-    public int    Nr                { get; set; }
-    public string Name              { get; set; } = "";
-    public string DisplayName       => $"{Nr}. {Name}";
-    public double Durchmesser       { get; set; }
-    public double Schneidenwinkel   { get; set; }
-    public double ZZustellung       { get; set; }
-    public double Eintauchwinkel    { get; set; }
-    public double VorschubFxy       { get; set; }
-    public double VorschubFz        { get; set; }
-    public double Drehzahl          { get; set; }
-    public double RaeumzustellungXY { get; set; } = 75.0;
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+        => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
+    private bool SetField<T>(ref T field, T value,
+        [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return false;
+        field = value;
+        OnChanged(name);
+        return true;
+    }
+
+    private int _nr;
+    public int Nr
+    {
+        get => _nr;
+        set { if (SetField(ref _nr, value)) { OnChanged(nameof(DisplayName)); OnChanged(nameof(ListLabel)); } }
+    }
+
+    private WerkzeugTyp _typ = WerkzeugTyp.Fraeser;
+    public WerkzeugTyp Typ
+    {
+        get => _typ;
+        set { if (SetField(ref _typ, value)) OnChanged(nameof(ListLabel)); }
+    }
+
+    private string _name = "";
+    public string Name
+    {
+        get => _name;
+        set { if (SetField(ref _name, value)) { OnChanged(nameof(DisplayName)); OnChanged(nameof(ListLabel)); } }
+    }
+
+    public string DisplayName => $"{Nr}. {Name}";
+    public string ListLabel   => $"{Nr}. {Name} ({(Typ == WerkzeugTyp.Fraeser ? "Fräser" : "Bohrer")})";
+
+    private string? _bildPfad;
+    public string? BildPfad { get => _bildPfad; set => SetField(ref _bildPfad, value); }
+
+    private double _durchmesser;
+    public double Durchmesser { get => _durchmesser; set => SetField(ref _durchmesser, value); }
+
+    private double _schneidenwinkel;
+    public double Schneidenwinkel { get => _schneidenwinkel; set => SetField(ref _schneidenwinkel, value); }
+
+    private double _zZustellung;
+    public double ZZustellung { get => _zZustellung; set => SetField(ref _zZustellung, value); }
+
+    private double _eintauchwinkel;
+    public double Eintauchwinkel { get => _eintauchwinkel; set => SetField(ref _eintauchwinkel, value); }
+
+    private double _vorschubFxy;
+    public double VorschubFxy { get => _vorschubFxy; set => SetField(ref _vorschubFxy, value); }
+
+    private double _vorschubFz;
+    public double VorschubFz { get => _vorschubFz; set => SetField(ref _vorschubFz, value); }
+
+    private double _drehzahl;
+    public double Drehzahl { get => _drehzahl; set => SetField(ref _drehzahl, value); }
+
+    private double _raeumzustellungXY = 75.0;
+    public double RaeumzustellungXY { get => _raeumzustellungXY; set => SetField(ref _raeumzustellungXY, value); }
+
+    private DateTime _geaendert = DateTime.Now;
+    public DateTime Geaendert { get => _geaendert; set => SetField(ref _geaendert, value); }
 }
 
 public class HistoryEntry(string label, string details, object p, int level = 0)
@@ -12063,6 +12061,14 @@ public record RechteckParams(
     double ZZustellung = 0,
     double Eintauchwinkel = 3,
     bool IsTasche = false
+);
+
+public record WerkzeugWechselParams(
+    int WerkzeugNr,
+    string WerkzeugName,
+    double Drehzahl,
+    double Durchmesser = 10,
+    double SchneidenWinkel = 180
 );
 
 public static class VisualTreeHelperExtensions
