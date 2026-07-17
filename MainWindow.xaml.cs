@@ -5437,7 +5437,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Set(EigXRel,            p.XRel.ToString(inv));
             Set(EigYRel,            p.YRel.ToString(inv));
             Set(EigTextBreite,      p.TextBreite.ToString(inv));
-            Set(EigTextHoehe,       p.TextHoehe.ToString(inv));
+            // TextHoehe wird vom Textfeld übernommen, nicht editierbar
             Set(EigFontSize,        p.FontSizeMm.ToString(inv));
             EigAusrLinks.IsChecked  = p.Ausrichtung == "Links"  || string.IsNullOrEmpty(p.Ausrichtung);
             EigAusrMitte.IsChecked  = p.Ausrichtung == "Mitte";
@@ -5865,7 +5865,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         var sty = System.Globalization.NumberStyles.Float;
         static string Norm(string s) => s.Replace(',', '.');
         if (!double.TryParse(Norm(EigTextBreite.Text), sty, inv, out var tw)) return;
-        if (!double.TryParse(Norm(EigTextHoehe.Text),  sty, inv, out var th)) return;
+        // TextHoehe wird vom Textfeld übernommen
         if (!double.TryParse(Norm(EigFontSize.Text),   sty, inv, out var fs) || fs <= 0) return;
 
         string ausrichtung = EigAusrRechts.IsChecked == true ? "Rechts"
@@ -5903,7 +5903,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             YRel            = yrApply,
             FontSizeMm      = fs,
             TextBreite      = tw,
-            TextHoehe       = th,
+            // TextHoehe bleibt vom Textfeld
             Ausrichtung     = ausrichtung,
             ZTiefe          = zt,
             SampleStepMm    = sampleStep,
@@ -5950,7 +5950,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             double yr = double.TryParse(Norm(EigYRel.Text),           sty, inv, out var vy)           ? vy : gp.YRel;
             double fs = double.TryParse(Norm(EigFontSize.Text),       sty, inv, out var v1) && v1 > 0 ? v1 : gp.FontSizeMm;
             double tw = double.TryParse(Norm(EigTextBreite.Text),     sty, inv, out var v2)           ? v2 : gp.TextBreite;
-            double th = double.TryParse(Norm(EigTextHoehe.Text),      sty, inv, out var v3)           ? v3 : gp.TextHoehe;
+            // TextHoehe wird vom Textfeld übernommen, nicht editierbar
             string ausr = EigAusrRechts.IsChecked == true ? "Rechts"
                         : EigAusrMitte.IsChecked  == true ? "Mitte" : "Links";
 
@@ -5973,7 +5973,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 YRel            = yr,
                 FontSizeMm      = fs,
                 TextBreite      = tw,
-                TextHoehe       = th,
+                // TextHoehe bleibt vom Textfeld
                 Ausrichtung     = ausr,
                 ZTiefe          = previewZt,
                 SampleStepMm    = previewStep,

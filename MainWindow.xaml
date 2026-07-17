@@ -1057,10 +1057,6 @@
                                         <TextBlock Text="Feldbreite (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                         <TextBox x:Name="EigTextBreite" TextChanged="OnEigSizeChanged"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Text="Feldhöhe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigTextHoehe" TextChanged="OnEigSizeChanged"/>
-                                    </StackPanel>
                                 </Grid>
 
                                 <Grid Margin="0,0,0,6">
