@@ -54,7 +54,6 @@ public class SkiaTextEditor : SKElement
         canvas.Clear(SKColors.Transparent);
 
         float x = Padding;
-        float y = Padding + Padding; // Oben-links, mit Padding
 
         var textPaint = new SKPaint
         {
@@ -66,7 +65,8 @@ public class SkiaTextEditor : SKElement
 
         int charIndex = 0;
         float cursorX = x;
-        float cursorY = y;
+        float cursorY = Padding;
+        float y = 0;
 
         // Zeichne Text mit Selection-Highlight
         foreach (var run in _content)
@@ -76,6 +76,7 @@ public class SkiaTextEditor : SKElement
             textPaint.TextSize = run.FontSize;
             textPaint.Typeface = SKTypeface.FromFamilyName(run.FontFamily);
             textPaint.Color = run.Color;
+            y = Padding + run.FontSize;
 
             for (int i = 0; i < run.Text.Length; i++)
             {
@@ -85,7 +86,7 @@ public class SkiaTextEditor : SKElement
                 if (charIndex == _cursorPos)
                 {
                     cursorX = x;
-                    cursorY = y - textPaint.TextSize;
+                    cursorY = y - run.FontSize;
                 }
 
                 // Selection-Highlight
@@ -93,7 +94,7 @@ public class SkiaTextEditor : SKElement
                 {
                     var charWidth = textPaint.MeasureText(charStr);
                     var selectionPaint = new SKPaint { Color = new SKColor(200, 220, 255, 200) };
-                    canvas.DrawRect(new SKRect(x, y - textPaint.TextSize + 2, x + charWidth, y + 2), selectionPaint);
+                    canvas.DrawRect(new SKRect(x, y - run.FontSize + 2, x + charWidth, y + 2), selectionPaint);
                     selectionPaint.Dispose();
                 }
 
@@ -107,7 +108,7 @@ public class SkiaTextEditor : SKElement
         if (charIndex == _cursorPos)
         {
             cursorX = x;
-            cursorY = y - textPaint.TextSize;
+            cursorY = y - (y > 0 ? _content[^1].FontSize : 0);
         }
 
         // Blinkender Cursor
