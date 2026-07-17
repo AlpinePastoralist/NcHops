@@ -7314,7 +7314,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double left   = Math.Round(Math.Max(0, Math.Min(ax, bx)), 2);
         double bottom = Math.Round(Math.Max(0, Math.Min(ay, by)), 2);
         double width  = Math.Round(Math.Abs(bx - ax), 2);
-        double height = Math.Round(Math.Abs(by - ay), 2);
+        double height = Math.Max(20.0, Math.Round(Math.Abs(by - ay), 2)); // Mindestens 20mm Zeilenhöhe
         if (width < 0.5 || height < 0.5) return;
 
         var lastGrav  = _history.Select(h => h.Params).OfType<GraviereParams>().LastOrDefault();
@@ -7357,6 +7357,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Width                = screenW,
             Height               = screenH,
         };
+        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom));
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
