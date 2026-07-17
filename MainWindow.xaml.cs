@@ -43,7 +43,7 @@ public partial class MainWindow : Window
     private Point  _panOrigin;  // _panX/_panY beim Drag-Start
 
     // ── Aktives Werkzeug ─────────────────────────────────────────
-    private enum CanvasTool { Select, Hand, Zoom, VCarveText, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, Rechteck, Kreis }
+    private enum CanvasTool { Select, Hand, Zoom, VCarveText, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, Rechteck, Kreis, NEck }
     private CanvasTool _activeTool    = CanvasTool.Select;
     private bool       _isZoomDragging = false;
     private Point      _zoomDragStart;
@@ -80,6 +80,10 @@ public partial class MainWindow : Window
     private Point            _kreisDragCenter;          // Canvas-Pixel (Mittelpunkt)
     private System.Windows.Shapes.Ellipse? _kreisRubberBand;
     private TextBox?         _kreisInputBox;
+
+    private bool             _neckDragging = false;
+    private Point            _neckDragCenter;           // Canvas-Pixel (Mittelpunkt)
+    private System.Windows.Shapes.Polygon? _neckRubberBand;
 
     // ── Pfad-Punkte verschieben (Move-Werkzeug) ──────────────
     private int              _pfadDragHistIdx = -1;       // History-Idx des gezogenen Pfad-Punkts
@@ -909,6 +913,100 @@ public partial class MainWindow : Window
     private void OnKrEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyKreisEig(); }
     private void OnPfadEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyPfadStartEig(); }
 
+    private void AddNEck(double cxMm, double cyMm, double radiusMm, int eckenAnzahl = 6)
+    {
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var wz = _aktivesWerkzeug;
+        string bezug = "Mitte";
+        var (xRel, yRel) = AbsToRel(bezug, cxMm, cyMm, WorkX, WorkY);
+        var p = new NEckParams(
+            XRel:        Math.Round(xRel, 3),
+            YRel:        Math.Round(yRel, 3),
+            Ecken:       eckenAnzahl,
+            Radius:      Math.Round(radiusMm, 3),
+            RotationGrad:0,
+            ZTiefe:      wz != null ? -(Math.Abs(WorkZ)) : -5,
+            FraeserD:    wz?.Durchmesser ?? 6,
+            Drehzahl:    wz?.Drehzahl    ?? 18000,
+            Vorschub:    wz?.VorschubFxy ?? 3000,
+            VorschubFz:  wz?.VorschubFz  ?? 500,
+            Fraesung:    "Aussen",
+            Laufrichtung:"Gegenlauf",
+            Radiuskorrektur: "Keine",
+            WerkzeugNr:  wz?.Nr ?? 0,
+            Eintauchwinkel:    wz?.Eintauchwinkel ?? 3,
+            MehrfachZustellung: wz != null,
+            ZZustellung:       wz?.ZZustellung ?? 2,
+            Bezugspunkt:       bezug,
+            IsTasche:          false
+        );
+        _suppressNextAutoFit = true;
+        _history.Add(new HistoryEntry($"{eckenAnzahl}-Eck",
+            $"M={p.XRel}/{p.YRel} R={p.Radius} Z={p.ZTiefe}", p));
+        HistoryList.SelectedItem    = _history[^1];
+        TabEigenschaften.IsSelected = true;
+    }
+
+    private void OnNEckTool(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.NEck ? CanvasTool.Select : CanvasTool.NEck);
+
+    private void ApplyNEckEig()
+    {
+        if (_eigSuppressUpdate) return;
+        int idx = HistoryList.SelectedIndex;
+        if (idx < 0 || _history[idx].Params is not NEckParams ne) return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sty = System.Globalization.NumberStyles.Float;
+        string Norm(string s) => s.Replace(',', '.');
+
+        if (!double.TryParse(Norm(NEckEigX.Text),      sty, inv, out var x))  return;
+        if (!double.TryParse(Norm(NEckEigY.Text),      sty, inv, out var y))  return;
+        if (!double.TryParse(Norm(NEckEigRadius.Text), sty, inv, out var rad)) return;
+        if (!double.TryParse(Norm(NEckEigZ.Text),      sty, inv, out var z))  return;
+        if (!int.TryParse(NEckEigEcken.Text,           out var ecken)) ecken = ne.Ecken;
+        if (!double.TryParse(Norm(NEckEigRotation.Text), sty, inv, out var rot)) rot = ne.RotationGrad;
+        bool mehrfach = NEckEigMehrfach.IsChecked == true;
+        double.TryParse(Norm(NEckEigZZust.Text), sty, inv, out var zzust);
+
+        string fraesung = (NEckEigFrAussen.IsChecked == true) ? "Aussen"
+                        : (NEckEigFrInnen.IsChecked  == true) ? "Innen"
+                        : "Mittig";
+        string lauf = (NEckEigGleich.IsChecked == true) ? "Gleichlauf" : "Gegenlauf";
+        string radkorr = (NEckEigRadKorInnen.IsChecked == true) ? "Innen"
+                       : (NEckEigRadKorAussen.IsChecked == true) ? "Aussen"
+                       : "Keine";
+
+        var (oldAbsX, oldAbsY) = GCodeGenerator.ConvertBezugspunkt(ne.Bezugspunkt, ne.XRel, ne.YRel, WorkX, WorkY);
+        var (newRelX, newRelY) = (x, y);
+
+        var np = ne with
+        {
+            XRel = Math.Round(newRelX, 3), YRel = Math.Round(newRelY, 3),
+            Ecken = ecken,
+            RotationGrad = rot,
+            Radius = rad, ZTiefe = z,
+            Fraesung            = fraesung,
+            Laufrichtung        = lauf,
+            Radiuskorrektur     = radkorr,
+            MehrfachZustellung  = mehrfach,
+            ZZustellung         = zzust > 0 ? zzust : ne.ZZustellung,
+        };
+
+        _eigSuppressUpdate = true;
+        _suppressHistoryRegen = true;
+        try { _history[idx] = new HistoryEntry($"{np.Ecken}-Eck",
+            $"M={np.XRel}/{np.YRel} R={np.Radius} Ø={np.RotationGrad}° Z={np.ZTiefe}", np); }
+        finally { _suppressHistoryRegen = false; _eigSuppressUpdate = false; }
+        _suppressNextAutoFit = true;
+        RegenerateGCodeFromHistory();
+        HistoryList.SelectedIndex = idx;
+    }
+
+    private void OnNEckEigChanged(object sender, RoutedEventArgs e)   => ApplyNEckEig();
+    private void OnNEckEigLostFocus(object sender, RoutedEventArgs e) => ApplyNEckEig();
+    private void OnNEckEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyNEckEig(); }
+
     private void AddPfadLinie(double mmX, double mmY)
     {
         double xRel = Math.Round(mmX, 3);
@@ -1314,6 +1412,141 @@ public partial class MainWindow : Window
         _ => (0, 0)
     };
 
+    // Rechteck-Punkte für Vermassungswerkzeug: 4 Eckpunkte in mm
+    // Rückgabewert: Array von (x, y) Positionen: [BL, BR, TL, TR]
+    private (double x, double y)[] GetRektEckpunkte(RechteckParams rp)
+    {
+        var (left, bottom, w, h) = RechteckBoundsInMm(rp);
+        return
+        [
+            (left,       bottom),       // 0: unten-links
+            (left + w,   bottom),       // 1: unten-rechts
+            (left,       bottom + h),   // 2: oben-links
+            (left + w,   bottom + h)    // 3: oben-rechts
+        ];
+    }
+
+    // Rechteck-Seiten für Vermassungswerkzeug
+    // Rückgabewert: Array von Segmenten: [(x1,y1,x2,y2)]
+    // 0=unten, 1=rechts, 2=oben, 3=links
+    private (double x1, double y1, double x2, double y2)[] GetRektSeiten(RechteckParams rp)
+    {
+        var pts = GetRektEckpunkte(rp);
+        return
+        [
+            (pts[0].x, pts[0].y, pts[1].x, pts[1].y),  // 0: unten
+            (pts[1].x, pts[1].y, pts[3].x, pts[3].y),  // 1: rechts
+            (pts[3].x, pts[3].y, pts[2].x, pts[2].y),  // 2: oben
+            (pts[2].x, pts[2].y, pts[0].x, pts[0].y)   // 3: links
+        ];
+    }
+
+    // Hit-Test für Rechteck-Eckpunkte
+    // Gibt: (-1, -1) zurück, wenn kein Treffer
+    //       (rectHistIdx, cornerIdx) wenn Treffer, wobei cornerIdx = 0-3
+    private (int rectIdx, int cornerIdx) HitTestRktPoint(double mmX, double mmY)
+    {
+        double tol = 6.0 / _zoom;
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            if (_history[i].Params is not RechteckParams rp) continue;
+            var pts = GetRektEckpunkte(rp);
+            for (int c = 0; c < pts.Length; c++)
+            {
+                double dx = mmX - pts[c].x, dy = mmY - pts[c].y;
+                if (dx * dx + dy * dy <= tol * tol)
+                    return (i, c);
+            }
+        }
+        return (-1, -1);
+    }
+
+    // Hit-Test für Rechteck-Seiten (Kanten)
+    // Gibt: (-1, -1) zurück, wenn kein Treffer
+    //       (rectHistIdx, sideIdx) wenn Treffer, wobei sideIdx = 0-3
+    private (int rectIdx, int sideIdx) HitTestRktSide(double mmX, double mmY)
+    {
+        double tol = 5.0 / _zoom;
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            if (_history[i].Params is not RechteckParams rp) continue;
+            var sides = GetRektSeiten(rp);
+            for (int s = 0; s < sides.Length; s++)
+            {
+                var (x1, y1, x2, y2) = sides[s];
+                double d = DistPointToSegment(mmX, mmY, x1, y1, x2, y2);
+                if (d <= tol)
+                    return (i, s);
+            }
+        }
+        return (-1, -1);
+    }
+
+    // Encoding-Helper für Rechteck-Punkte und Seiten
+    // Punkt: -(1000000 + historyIdx * 10 + cornerIdx)
+    // Seite: -(2000000 + historyIdx * 10 + sideIdx)
+    private int EncodeRktPoint(int historyIdx, int cornerIdx)
+        => -(1000000 + historyIdx * 10 + cornerIdx);
+
+    private int EncodeRktSide(int historyIdx, int sideIdx)
+        => -(2000000 + historyIdx * 10 + sideIdx);
+
+    private bool IsRktPointEncoded(int idx) => idx < -1000000 && idx >= -2000000;
+    private bool IsRktSideEncoded(int idx) => idx < -2000000;
+
+    private (int historyIdx, int cornerIdx) DecodeRktPoint(int idx)
+    {
+        int encoded = -idx - 1000000;
+        return (encoded / 10, encoded % 10);
+    }
+
+    private (int historyIdx, int sideIdx) DecodeRktSide(int idx)
+    {
+        int encoded = -idx - 2000000;
+        return (encoded / 10, encoded % 10);
+    }
+
+    // Erweiterte Hit-Tests, die auch Rechteck-Punkte und -Seiten berücksichtigen
+    private int HitTestPfadPointOrRktPoint(double mmX, double mmY)
+    {
+        int ptHit = HitTestPfadPoint(mmX, mmY);
+        if (ptHit >= 0) return ptHit;
+
+        var (rktIdx, cornerIdx) = HitTestRktPoint(mmX, mmY);
+        if (rktIdx >= 0) return EncodeRktPoint(rktIdx, cornerIdx);
+
+        return -1;
+    }
+
+    private (int p1, int p2) HitTestPfadSegmentOrRktSide(double mmX, double mmY)
+    {
+        var pfadHit = HitTestPfadLineSegment(mmX, mmY);
+        if (pfadHit.p1 >= 0) return pfadHit;
+
+        var (rktIdx, sideIdx) = HitTestRktSide(mmX, mmY);
+        if (rktIdx >= 0) return (EncodeRktSide(rktIdx, sideIdx), 0);  // p2 wird nicht verwendet für Seiten
+
+        return (-1, -1);
+    }
+
+    // Helper: Absolutposition eines Pfad-Punkts oder Rechteck-Eckpunkts ermitteln
+    private (double x, double y)? GetAbsPosForVerm(int idx)
+    {
+        if (IsRktPointEncoded(idx))
+        {
+            var (historyIdx, cornerIdx) = DecodeRktPoint(idx);
+            if (historyIdx < 0 || historyIdx >= _history.Count) return null;
+            if (_history[historyIdx].Params is not RechteckParams rp) return null;
+            var pts = GetRektEckpunkte(rp);
+            if (cornerIdx < 0 || cornerIdx >= pts.Length) return null;
+            return pts[cornerIdx];
+        }
+        else
+        {
+            return GetPfadAbsAt(idx);
+        }
+    }
+
     private double EdgeDistValue(double px, double py, int edge) => edge switch
     {
         1 => px,
@@ -1341,9 +1574,9 @@ public partial class MainWindow : Window
     // Label-Position einer VermEntry in mm-Koordinaten
     private (double x, double y)? VermLabelPosMm(VermEntry en)
     {
-        var p1 = GetPfadAbsAt(en.P1Idx);
+        var p1 = GetAbsPosForVerm(en.P1Idx);
         if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) return null;
-        var p2 = GetPfadAbsAt(en.P2Idx); if (p2 == null) return null;
+        var p2 = GetAbsPosForVerm(en.P2Idx); if (p2 == null) return null;
         switch (en.Kind)
         {
             case VermKind.Length:
@@ -1356,7 +1589,7 @@ public partial class MainWindow : Window
             }
             case VermKind.ParallelDist:
             {
-                var q1 = GetPfadAbsAt(en.Q1Idx); if (q1 == null) return null;
+                var q1 = GetAbsPosForVerm(en.Q1Idx); if (q1 == null) return null;
                 double dx1 = p2.Value.x - p1.Value.x, dy1 = p2.Value.y - p1.Value.y;
                 double l1 = Math.Sqrt(dx1*dx1 + dy1*dy1); if (l1 < 1e-9) return null;
                 double nx = -dy1/l1, ny = dx1/l1;
@@ -1367,8 +1600,8 @@ public partial class MainWindow : Window
             }
             case VermKind.Angle:
             {
-                var q1 = GetPfadAbsAt(en.Q1Idx); if (q1 == null) return null;
-                var q2 = GetPfadAbsAt(en.Q2Idx); if (q2 == null) return null;
+                var q1 = GetAbsPosForVerm(en.Q1Idx); if (q1 == null) return null;
+                var q2 = GetAbsPosForVerm(en.Q2Idx); if (q2 == null) return null;
                 var inter = LinesIntersection(p1.Value, p2.Value, q1.Value, q2.Value);
                 if (inter == null) return null;
                 double a1 = VermSegArcAngle(inter.Value, p1.Value, p2.Value);
@@ -3723,13 +3956,36 @@ public partial class MainWindow : Window
         // Segment-Hervorhebungsfarbe
         void DrawSegHighlight(int hp1, int hp2, SKColor col)
         {
-            var ha1 = GetPfadAbsAt(hp1); var ha2 = GetPfadAbsAt(hp2);
-            if (ha1 == null || ha2 == null) return;
+            (double x, double y)? p1 = null;
+            (double x, double y)? p2 = null;
+
+            // Wenn hp1 ein kodierter Rechteck-Seiten-Index ist
+            if (IsRktSideEncoded(hp1))
+            {
+                var (rktIdx, sideIdx) = DecodeRktSide(hp1);
+                if (rktIdx >= 0 && rktIdx < _history.Count && _history[rktIdx].Params is RechteckParams rp)
+                {
+                    var sides = GetRektSeiten(rp);
+                    if (sideIdx >= 0 && sideIdx < sides.Length)
+                    {
+                        var side = sides[sideIdx];
+                        p1 = (side.x1, side.y1);
+                        p2 = (side.x2, side.y2);
+                    }
+                }
+            }
+            else
+            {
+                p1 = GetPfadAbsAt(hp1);
+                p2 = GetPfadAbsAt(hp2);
+            }
+
+            if (p1 == null || p2 == null) return;
             float hw = (float)(3.5 / _zoom);
             using var hp = new SKPaint { Color = col, Style = SKPaintStyle.Stroke,
                 StrokeWidth = hw, IsAntialias = true, StrokeCap = SKStrokeCap.Round };
-            var (hx1, hy1) = Px(ha1.Value.x, ha1.Value.y);
-            var (hx2, hy2) = Px(ha2.Value.x, ha2.Value.y);
+            var (hx1, hy1) = Px(p1.Value.x, p1.Value.y);
+            var (hx2, hy2) = Px(p2.Value.x, p2.Value.y);
             canvas.DrawLine(hx1, hy1, hx2, hy2, hp);
         }
 
@@ -3756,7 +4012,7 @@ public partial class MainWindow : Window
             // Hover-Punkt (state 0 oder 1)
             if ((_vermState == 0 || _vermState == 1) && _vermHoverPoint >= 0)
             {
-                var hpa = GetPfadAbsAt(_vermHoverPoint);
+                var hpa = GetAbsPosForVerm(_vermHoverPoint);
                 if (hpa != null) {
                     var (hpx, hpy) = Px(hpa.Value.x, hpa.Value.y);
                     float hr = (float)(5.0 / _zoom);
@@ -3767,7 +4023,7 @@ public partial class MainWindow : Window
             // Aktiver Punkt (state 1, Punkt-Modus)
             if (_vermState == 1 && _vermPtIdx >= 0)
             {
-                var apa = GetPfadAbsAt(_vermPtIdx);
+                var apa = GetAbsPosForVerm(_vermPtIdx);
                 if (apa != null) {
                     var (apx, apy) = Px(apa.Value.x, apa.Value.y);
                     float ar = (float)(5.0 / _zoom);
@@ -5363,6 +5619,40 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             UpdateKrModusVisibility(kr.IsTasche);
             _eigSuppressUpdate = false;
         }
+        else if (entry?.Params is NEckParams ne)
+        {
+            if (!_eigSuppressUpdate)
+            {
+                TbEigKein.Visibility       = Visibility.Collapsed;
+                PnlGravieren.Visibility    = Visibility.Collapsed;
+                PnlPfadStart.Visibility    = Visibility.Collapsed;
+                PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+                PnlRechteck.Visibility     = Visibility.Collapsed;
+                PnlKreis.Visibility        = Visibility.Collapsed;
+                PnlNEck.Visibility         = Visibility.Visible;
+            }
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            _eigSuppressUpdate = true;
+            if (!NEckEigX.IsKeyboardFocused)      NEckEigX.Text       = ne.XRel.ToString(inv);
+            if (!NEckEigY.IsKeyboardFocused)      NEckEigY.Text       = ne.YRel.ToString(inv);
+            if (!NEckEigEcken.IsKeyboardFocused)  NEckEigEcken.Text   = ne.Ecken.ToString(inv);
+            if (!NEckEigRadius.IsKeyboardFocused) NEckEigRadius.Text  = ne.Radius.ToString(inv);
+            if (!NEckEigRotation.IsKeyboardFocused) NEckEigRotation.Text = ne.RotationGrad.ToString(inv);
+            if (!NEckEigZ.IsKeyboardFocused)      NEckEigZ.Text       = ne.ZTiefe.ToString(inv);
+            NEckEigFrAussen.IsChecked  = ne.Fraesung == "Aussen";
+            NEckEigFrInnen.IsChecked   = ne.Fraesung == "Innen";
+            NEckEigFrMittig.IsChecked  = ne.Fraesung == "Mittig";
+            NEckEigGegen.IsChecked     = ne.Laufrichtung == "Gegenlauf";
+            NEckEigGleich.IsChecked    = ne.Laufrichtung == "Gleichlauf";
+            NEckEigRadKorKeine.IsChecked  = ne.Radiuskorrektur == "Keine";
+            NEckEigRadKorInnen.IsChecked  = ne.Radiuskorrektur == "Innen";
+            NEckEigRadKorAussen.IsChecked = ne.Radiuskorrektur == "Aussen";
+            NEckEigMehrfach.IsChecked  = ne.MehrfachZustellung;
+            if (!NEckEigZZust.IsKeyboardFocused) NEckEigZZust.Text = ne.ZZustellung.ToString(inv);
+            NEckModusNut.IsChecked     = !ne.IsTasche;
+            NEckModusTasche.IsChecked  = ne.IsTasche;
+            _eigSuppressUpdate = false;
+        }
         else if (!_eigSuppressUpdate)
         {
             TbEigKein.Visibility       = Visibility.Visible;
@@ -5371,6 +5661,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
             PnlRechteck.Visibility     = Visibility.Collapsed;
             PnlKreis.Visibility        = Visibility.Collapsed;
+            PnlNEck.Visibility         = Visibility.Collapsed;
         }
     }
 
@@ -6158,6 +6449,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     RechteckParams p when p.IsTasche => GCodeGenerator.Tasche(RechteckToTasche(p), workX, workY),
                     RechteckParams p          => GCodeGenerator.Rechteck(p, workX, workY),
                     KreisParams p             => GCodeGenerator.Kreis(p, workX, workY),
+                    NEckParams p              => GCodeGenerator.NEck(p, workX, workY),
                     GraviereParams p when p.IsTasche => GCodeGenerator.TextfeldTasche(p, workX, workY),
                     GraviereParams p when p.IsVCarve => GCodeGenerator.VCarve(p, workX, workY),
                     GraviereParams p                 => GCodeGenerator.Gravieren(p, workX, workY),
@@ -6335,6 +6627,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 { _rktDragging = false; ClearRktRubberBand(); DrawSkia?.InvalidateVisual(); }
                 else if (_activeTool == CanvasTool.Kreis && _kreisDragging)
                 { _kreisDragging = false; CloseKreisDurchmesserBox(); ClearKreisRubberBand(); DrawSkia?.InvalidateVisual(); }
+                else if (_activeTool == CanvasTool.NEck && _neckDragging)
+                { _neckDragging = false; ClearNEckRubberBand(); DrawSkia?.InvalidateVisual(); }
                 else
                     SetActiveTool(CanvasTool.Select);
                 e.Handled = true; break;
@@ -6649,6 +6943,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         BtnToolPfadKurve.Background   = tool == CanvasTool.PfadBogen  ? active : inactive;
         BtnToolRechteck.Background    = tool == CanvasTool.Rechteck  ? active : inactive;
         BtnToolKreis.Background       = tool == CanvasTool.Kreis     ? active : inactive;
+        BtnToolNEck.Background        = tool == CanvasTool.NEck      ? active : inactive;
         CanvasGrid.Cursor = tool switch
         {
             CanvasTool.Hand         => Cursors.Hand,
@@ -6660,6 +6955,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             CanvasTool.PfadBogen    => Cursors.Cross,
             CanvasTool.Rechteck     => Cursors.Cross,
             CanvasTool.Kreis        => Cursors.Cross,
+            CanvasTool.NEck         => Cursors.Cross,
             _                       => Cursors.Arrow,   // Move: context-sensitive (see MouseMove)
         };
         DrawSkia?.InvalidateVisual();
@@ -6900,6 +7196,38 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_kreisInputBox == null) return;
         SimToolCanvas.Children.Remove(_kreisInputBox);
         _kreisInputBox = null;
+    }
+
+    private void UpdateNEckRubberBand(Point center, double radiusPx, int ecken)
+    {
+        if (_neckRubberBand == null)
+        {
+            _neckRubberBand = new System.Windows.Shapes.Polygon
+            {
+                Stroke           = System.Windows.Media.Brushes.LimeGreen,
+                StrokeThickness  = 1.5,
+                StrokeDashArray  = new System.Windows.Media.DoubleCollection { 5, 3 },
+                Fill             = new System.Windows.Media.SolidColorBrush(
+                                       System.Windows.Media.Color.FromArgb(25, 50, 255, 50)),
+                IsHitTestVisible = false,
+            };
+        }
+        var points = new System.Windows.Media.PointCollection();
+        for (int i = 0; i < ecken; i++)
+        {
+            double angle = 2 * Math.PI * i / ecken - Math.PI / 2;
+            double px = center.X + radiusPx * Math.Cos(angle);
+            double py = center.Y + radiusPx * Math.Sin(angle);
+            points.Add(new Point(px, py));
+        }
+        _neckRubberBand.Points = points;
+        if (!SimToolCanvas.Children.Contains(_neckRubberBand))
+            SimToolCanvas.Children.Add(_neckRubberBand);
+    }
+
+    private void ClearNEckRubberBand()
+    {
+        if (_neckRubberBand != null) SimToolCanvas.Children.Remove(_neckRubberBand);
     }
 
     private void KreisInputBox_KeyDown(object sender, KeyEventArgs e)
@@ -8231,6 +8559,33 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 e.Handled = true;
                 return;
             }
+            if (_activeTool == CanvasTool.NEck)
+            {
+                var np = e.GetPosition(CanvasGrid);
+                double ncxMm = SnapX((np.X - _panX) / _zoom);
+                double ncyMm = SnapY(WorkY - (np.Y - _panY) / _zoom);
+                var ncenterPx = new Point(ncxMm * _zoom + _panX, (WorkY - ncyMm) * _zoom + _panY);
+                if (!_neckDragging)
+                {
+                    _neckDragCenter = ncenterPx;
+                    _pfadMouseMm     = (ncxMm, ncyMm);
+                    _pfadMouseValid  = true;
+                    _neckDragging   = true;
+                }
+                else
+                {
+                    _neckDragging = false;
+                    ClearNEckRubberBand();
+                    double ncx2mm = SnapX((_neckDragCenter.X - _panX) / _zoom);
+                    double ncy2mm = SnapY(WorkY - (_neckDragCenter.Y - _panY) / _zoom);
+                    double ndx = ncxMm - ncx2mm, ndy = ncyMm - ncy2mm;
+                    double nradMm = Math.Round(Math.Sqrt(ndx*ndx + ndy*ndy), 3);
+                    if (nradMm > 0.1)
+                        AddNEck(ncx2mm, ncy2mm, nradMm, 6);
+                }
+                e.Handled = true;
+                return;
+            }
         }
 
         // Vermassen-Werkzeug
@@ -8829,6 +9184,24 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             DrawSkia?.InvalidateVisual();
             return;
         }
+        if (_activeTool == CanvasTool.NEck && !_isPanning)
+        {
+            var npos   = e.GetPosition(CanvasGrid);
+            double nmx = SnapX((npos.X - _panX) / _zoom);
+            double nmy = SnapY(WorkY - (npos.Y - _panY) / _zoom);
+            _pfadMouseMm    = (nmx, nmy);
+            _pfadMouseValid = true;
+            if (_neckDragging)
+            {
+                double ncx2 = (_neckDragCenter.X - _panX) / _zoom;
+                double ncy2 = WorkY - (_neckDragCenter.Y - _panY) / _zoom;
+                double ndx = nmx - ncx2, ndy = nmy - ncy2;
+                double nrPx = Math.Sqrt(ndx*ndx + ndy*ndy) * _zoom;
+                UpdateNEckRubberBand(_neckDragCenter, nrPx, 6);
+            }
+            DrawSkia?.InvalidateVisual();
+            return;
+        }
 
         // Vermassen-Werkzeug: Hover (0) + Offset-Vorschau (1) + Drag (3)
         if (_activeTool == CanvasTool.Vermassen && !_isPanning)
@@ -8839,8 +9212,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _vermMouseMm = (vmx, vmy);
             if (_vermState == 0)
             {
-                int ptHit  = HitTestPfadPoint(vmx, vmy);
-                var hit    = ptHit < 0 ? HitTestPfadLineSegment(vmx, vmy) : (-1, -1);
+                int ptHit  = HitTestPfadPointOrRktPoint(vmx, vmy);
+                var hit    = ptHit < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
                 int edgeHit = hit.Item1 < 0 && ptHit < 0 ? HitTestWorkpieceEdge(vmx, vmy) : 0;
                 if (ptHit != _vermHoverPoint || hit.Item1 != _vermHoverP1 ||
                     hit.Item2 != _vermHoverP2 || edgeHit != _vermHoverEdge)
@@ -8855,8 +9228,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 // Im Warte-Modus (state 1, nicht haltend): Hover für 2. Auswahl aktualisieren
                 if (_vermState == 1 && !_vermIsHolding)
                 {
-                    _vermHoverPoint = HitTestPfadPoint(vmx, vmy);
-                    var hit = _vermHoverPoint < 0 ? HitTestPfadLineSegment(vmx, vmy) : (-1, -1);
+                    _vermHoverPoint = HitTestPfadPointOrRktPoint(vmx, vmy);
+                    var hit = _vermHoverPoint < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
                     _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2;
                     if (_vermActiveEdge == 0)
                         _vermHoverEdge = hit.Item1 < 0 && _vermHoverPoint < 0
@@ -12058,6 +12431,24 @@ public record RechteckParams(
     bool MehrfachZustellung = false,
     double ZZustellung = 0,
     double Eintauchwinkel = 3,
+    bool IsTasche = false
+);
+
+public record NEckParams(
+    double XRel, double YRel,
+    int Ecken,
+    double Radius,
+    double RotationGrad,
+    double ZTiefe,
+    double FraeserD, double Drehzahl, double Vorschub, double VorschubFz,
+    string Fraesung,        // "Aussen" | "Innen" | "Mittig"
+    string Laufrichtung,    // "Gegenlauf" | "Gleichlauf"
+    string Radiuskorrektur, // "Keine" | "Innen" | "Aussen"
+    int WerkzeugNr = 0,
+    bool MehrfachZustellung = false,
+    double ZZustellung = 0,
+    double Eintauchwinkel = 3,
+    string Bezugspunkt = "Mitte",
     bool IsTasche = false
 );
 

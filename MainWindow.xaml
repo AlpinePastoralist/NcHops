@@ -728,6 +728,15 @@
                                              Stroke="White" StrokeThickness="1.5" Fill="Transparent"/>
                                 </Viewbox>
                             </Button>
+                            <Button x:Name="BtnToolNEck"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnNEckTool"
+                                    ToolTip="N-Eck (Polygon) aufziehen">
+                                <Viewbox Width="16" Height="16">
+                                    <Polygon Points="8,1 14,4 12,12 4,14 2,6"
+                                             Stroke="White" StrokeThickness="1.5" Fill="Transparent"/>
+                                </Viewbox>
+                            </Button>
                         </StackPanel>
                     </Border>
                     <!-- Vermassen-Toolbar (rechts, schwebend, nur sichtbar wenn Vermassen aktiv) -->
@@ -1563,6 +1572,136 @@
                                     <StackPanel Grid.Column="0">
                                         <TextBlock Text="Z-Zustellung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                         <TextBox x:Name="KrEigZZust" LostFocus="OnKrEigLostFocus" KeyDown="OnKrEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                            </StackPanel>
+
+                            <!-- ── N-Eck ── -->
+                            <StackPanel x:Name="PnlNEck" Visibility="Collapsed">
+
+                                <TextBlock Text="N-Eck" FontWeight="Bold" FontSize="13"
+                                           Margin="0,0,0,8"
+                                           Foreground="{StaticResource TextDarkBrush}"/>
+
+                                <!-- Modus: Kontur / Tasche -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <RadioButton x:Name="NEckModusNut" Content="Kontur"
+                                                 GroupName="NEckModus" IsChecked="True"
+                                                 Margin="0,0,12,0" VerticalAlignment="Center"
+                                                 Checked="OnNEckEigChanged"/>
+                                    <RadioButton x:Name="NEckModusTasche" Content="Tasche"
+                                                 GroupName="NEckModus"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnNEckEigChanged"/>
+                                </StackPanel>
+
+                                <!-- X / Y -->
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="NEckEigX" LostFocus="OnNEckEigLostFocus" KeyDown="OnNEckEigKeyDown"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="NEckEigY" LostFocus="OnNEckEigLostFocus" KeyDown="OnNEckEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Ecken und Rotation -->
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Eckenzahl:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="NEckEigEcken" LostFocus="OnNEckEigLostFocus" KeyDown="OnNEckEigKeyDown"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Rotation (°):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="NEckEigRotation" LostFocus="OnNEckEigLostFocus" KeyDown="OnNEckEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Radius -->
+                                <TextBlock Text="Radius (mm):" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <TextBox x:Name="NEckEigRadius" Margin="0,0,0,10"
+                                         LostFocus="OnNEckEigLostFocus" KeyDown="OnNEckEigKeyDown"/>
+
+                                <!-- Z-Tiefe -->
+                                <TextBlock Text="Z-Tiefe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBox x:Name="NEckEigZ" Margin="0,0,0,10"
+                                         LostFocus="OnNEckEigLostFocus" KeyDown="OnNEckEigKeyDown"/>
+
+                                <!-- Konturlinie (Fräsung) -->
+                                <StackPanel x:Name="PnlNEckFraesung">
+                                    <TextBlock Text="Konturlinie:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <RadioButton x:Name="NEckEigFrAussen" Content="Außen"
+                                                     GroupName="NEckFraesung" IsChecked="True"
+                                                     Margin="0,0,10,0" VerticalAlignment="Center"
+                                                     Checked="OnNEckEigChanged"/>
+                                        <RadioButton x:Name="NEckEigFrInnen"  Content="Innen"
+                                                     GroupName="NEckFraesung"
+                                                     Margin="0,0,10,0" VerticalAlignment="Center"
+                                                     Checked="OnNEckEigChanged"/>
+                                        <RadioButton x:Name="NEckEigFrMittig" Content="Mittig"
+                                                     GroupName="NEckFraesung"
+                                                     VerticalAlignment="Center"
+                                                     Checked="OnNEckEigChanged"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- Radiuskorrektur -->
+                                <TextBlock Text="Radiuskorrektur:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <RadioButton x:Name="NEckEigRadKorKeine" Content="Keine"
+                                                 GroupName="NEckRadKor" IsChecked="True"
+                                                 Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnNEckEigChanged"/>
+                                    <RadioButton x:Name="NEckEigRadKorInnen"  Content="Innen (G41)"
+                                                 GroupName="NEckRadKor"
+                                                 Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnNEckEigChanged"/>
+                                    <RadioButton x:Name="NEckEigRadKorAussen" Content="Außen (G42)"
+                                                 GroupName="NEckRadKor"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnNEckEigChanged"/>
+                                </StackPanel>
+
+                                <!-- Laufrichtung -->
+                                <TextBlock Text="Laufrichtung:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <RadioButton x:Name="NEckEigGegen"  Content="Gegenlauf"
+                                                 GroupName="NEckLauf" IsChecked="True"
+                                                 Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnNEckEigChanged"/>
+                                    <RadioButton x:Name="NEckEigGleich" Content="Gleichlauf"
+                                                 GroupName="NEckLauf"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnNEckEigChanged"/>
+                                </StackPanel>
+
+                                <!-- Z-Zustellung -->
+                                <CheckBox x:Name="NEckEigMehrfach" Content="Mehrfach-Zustellung"
+                                          Margin="0,0,0,4"
+                                          Checked="OnNEckEigChanged" Unchecked="OnNEckEigChanged"/>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Z-Zustellung (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="NEckEigZZust" LostFocus="OnNEckEigLostFocus" KeyDown="OnNEckEigKeyDown"/>
                                     </StackPanel>
                                 </Grid>
 

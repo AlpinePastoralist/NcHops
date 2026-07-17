@@ -1098,6 +1098,80 @@ public static class GCodeGenerator
         return sb.ToString();
     }
 
+    public static string NEck(NEckParams p, double workW, double workH)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"({p.Ecken}-Eck fräsen)");
+        sb.AppendLine($"(R={F(p.Radius)}, Fraesung={p.Fraesung}, {p.Laufrichtung})");
+
+        if (p.Ecken < 3)
+        {
+            sb.AppendLine($"(Fehler: mindestens 3 Ecken erforderlich, {p.Ecken} angegeben)");
+            return sb.ToString();
+        }
+
+        var (cx, cy) = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
+        double off = p.Fraesung switch
+        {
+            "Aussen" =>  p.FraeserD / 2.0,
+            "Innen"  => -p.FraeserD / 2.0,
+            _        =>  0.0
+        };
+        double R = p.Radius + off;
+        if (R < 1e-6) return sb.AppendLine("(NEck: Radius zu klein für Werkzeug)").ToString();
+
+        bool ccw = (p.Fraesung == "Innen") ? p.Laufrichtung == "Gleichlauf"
+                                            : p.Laufrichtung == "Gegenlauf";
+        string arc = ccw ? "G03" : "G02";
+
+        double feed    = p.Vorschub;
+        double feedZ   = p.VorschubFz;
+        double z       = -Math.Abs(p.ZTiefe);
+        double zStep   = Math.Abs(p.ZZustellung);
+
+        // Eckpunkte des Polygons berechnen
+        var points = new List<(double x, double y)>();
+        for (int i = 0; i < p.Ecken; i++)
+        {
+            double angle = 2 * Math.PI * i / p.Ecken + p.RotationGrad * Math.PI / 180.0 - Math.PI / 2;
+            double px = cx + R * Math.Cos(angle);
+            double py = cy + R * Math.Sin(angle);
+            points.Add((px, py));
+        }
+
+        string Sz() => $"G00 Z{F(5)}";
+        sb.AppendLine(Sz());
+
+        var (startX, startY) = points[0];
+        sb.AppendLine($"G00 X{F(startX)} Y{F(startY)}");
+
+        double curZ = 0;
+        while (curZ > z)
+        {
+            double prevZ = curZ;
+            curZ = Math.Max(z, curZ - (p.MehrfachZustellung && zStep > 1e-6 ? zStep : Math.Abs(z)));
+
+            sb.AppendLine($"G00 Z{F(prevZ)}");
+            sb.AppendLine($"G01 Z{F(curZ)} F{(int)feedZ}");
+
+            // Polygon-Segmente fräsen (Linien zwischen den Eckpunkten)
+            for (int i = 0; i < points.Count; i++)
+            {
+                var (nextX, nextY) = points[(i + 1) % points.Count];
+                sb.AppendLine($"G01 X{F(nextX)} Y{F(nextY)} F{(int)feed}");
+            }
+
+            if (curZ > z)
+            {
+                sb.AppendLine(Sz());
+                sb.AppendLine($"G00 X{F(startX)} Y{F(startY)}");
+            }
+        }
+
+        sb.AppendLine(Sz());
+        return sb.ToString();
+    }
+
     // Berechnet versetzte Segmentpunkte und liefert (Startpunkt, Liste von G-Code-Moves).
     // Konvexe Ecken → G02/G03-Bogen; konkave Ecken → Miter-Schnittpunkt.
     private static ((double X, double Y) Start, List<string> Moves) BuildOffsetMoves(
