@@ -26,6 +26,7 @@ public class SkiaTextEditor : SKElement
     private bool _hasFocus = false;
     private System.Windows.Threading.DispatcherTimer? _cursorBlinkTimer;
     private bool _cursorVisible = true;
+    private double _zoom = 1.0;
 
     private const float Padding = 4f;
     private const float LineHeight = 20f;
@@ -53,7 +54,8 @@ public class SkiaTextEditor : SKElement
         var canvas = e.Surface.Canvas;
         canvas.Clear(SKColors.Transparent);
 
-        float x = Padding;
+        float scaledPadding = (float)(Padding * _zoom);
+        float x = scaledPadding;
 
         var textPaint = new SKPaint
         {
@@ -65,7 +67,7 @@ public class SkiaTextEditor : SKElement
 
         int charIndex = 0;
         float cursorX = x;
-        float cursorY = Padding;
+        float cursorY = scaledPadding;
         float y = 0;
         float lineHeight = 0;
 
@@ -80,7 +82,7 @@ public class SkiaTextEditor : SKElement
 
             var metrics = textPaint.FontMetrics;
             lineHeight = metrics.Bottom - metrics.Top;
-            y = Padding + run.FontSize - metrics.Top;
+            y = scaledPadding + run.FontSize - metrics.Top;
 
             for (int i = 0; i < run.Text.Length; i++)
             {
@@ -119,7 +121,7 @@ public class SkiaTextEditor : SKElement
         if (_hasFocus && _cursorVisible && y > 0)
         {
             var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 1f };
-            float cursorBottom = y - lineHeight + Padding;
+            float cursorBottom = y - lineHeight + scaledPadding;
             canvas.DrawLine(cursorX, cursorY, cursorX, cursorBottom, cursorPaint);
             cursorPaint.Dispose();
         }
@@ -389,8 +391,9 @@ public class SkiaTextEditor : SKElement
 
     public string GetText() => string.Concat(_content.Select(r => r.Text));
 
-    public void SetText(string text, string fontFamily = "Segoe UI", float fontSize = 12f)
+    public void SetText(string text, string fontFamily = "Segoe UI", float fontSize = 12f, double zoom = 1.0)
     {
+        _zoom = zoom;
         _content.Clear();
         _content.Add(new TextRun
         {

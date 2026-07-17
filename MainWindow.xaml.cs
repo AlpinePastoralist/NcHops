@@ -7357,7 +7357,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Width                = screenW,
             Height               = screenH,
         };
-        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom));
+        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
@@ -7397,7 +7397,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Width                = screenW,
             Height               = screenH,
         };
-        _inlineTextBox.SetText(gp.Text, gp.FontFamily, (float)(gp.FontSizeMm * _zoom));
+        _inlineTextBox.SetText(gp.Text, gp.FontFamily, (float)(gp.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
@@ -7421,7 +7421,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double sh = hMm * _zoom;
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
-        _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom));
+        _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
     }
