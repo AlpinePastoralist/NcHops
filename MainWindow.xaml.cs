@@ -7346,11 +7346,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[^1];
         TabEigenschaften.IsSelected  = true;
 
-        // Transparente TextBox — nur Cursor sichtbar; Buchstaben erscheinen als Konturlinien
-        double screenLeft = Math.Min(screenA.X, screenB.X);
-        double screenTop  = Math.Min(screenA.Y, screenB.Y);
-        double screenW    = width * _zoom;      // Breite basierend auf mm-Wert
-        double screenH    = height * _zoom;     // Höhe basierend auf mm-Wert (20mm minimum!)
+        // Transparente TextBox — Position und Größe basierend auf mm-Werten (20mm minimum!)
+        double screenLeft = left * _zoom + _panX;
+        double screenTop  = (wy - (bottom + height)) * _zoom + _panY;
+        double screenW    = width * _zoom;
+        double screenH    = height * _zoom;
 
         _inlineTextBox = new SkiaTextEditor
         {
