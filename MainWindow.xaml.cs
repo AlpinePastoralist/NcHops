@@ -7349,8 +7349,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Transparente TextBox — nur Cursor sichtbar; Buchstaben erscheinen als Konturlinien
         double screenLeft = Math.Min(screenA.X, screenB.X);
         double screenTop  = Math.Min(screenA.Y, screenB.Y);
-        double screenW    = Math.Abs(screenB.X - screenA.X);
-        double screenH    = Math.Abs(screenB.Y - screenA.Y);
+        double screenW    = width * _zoom;      // Breite basierend auf mm-Wert
+        double screenH    = height * _zoom;     // Höhe basierend auf mm-Wert (20mm minimum!)
 
         _inlineTextBox = new SkiaTextEditor
         {
