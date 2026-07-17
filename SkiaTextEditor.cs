@@ -67,6 +67,7 @@ public class SkiaTextEditor : SKElement
         float cursorX = x;
         float cursorY = Padding;
         float y = 0;
+        float lineHeight = 0;
 
         // Zeichne Text mit Selection-Highlight
         foreach (var run in _content)
@@ -76,7 +77,10 @@ public class SkiaTextEditor : SKElement
             textPaint.TextSize = run.FontSize;
             textPaint.Typeface = SKTypeface.FromFamilyName(run.FontFamily);
             textPaint.Color = run.Color;
-            y = Padding + run.FontSize;
+
+            var metrics = textPaint.FontMetrics;
+            lineHeight = metrics.Bottom - metrics.Top;
+            y = Padding + run.FontSize - metrics.Top;
 
             for (int i = 0; i < run.Text.Length; i++)
             {
@@ -94,7 +98,7 @@ public class SkiaTextEditor : SKElement
                 {
                     var charWidth = textPaint.MeasureText(charStr);
                     var selectionPaint = new SKPaint { Color = new SKColor(200, 220, 255, 200) };
-                    canvas.DrawRect(new SKRect(x, y - run.FontSize + 2, x + charWidth, y + 2), selectionPaint);
+                    canvas.DrawRect(new SKRect(x, y - run.FontSize, x + charWidth, y - metrics.Bottom), selectionPaint);
                     selectionPaint.Dispose();
                 }
 
@@ -108,14 +112,15 @@ public class SkiaTextEditor : SKElement
         if (charIndex == _cursorPos)
         {
             cursorX = x;
-            cursorY = y - (y > 0 ? _content[^1].FontSize : 0);
+            cursorY = y - (y > 0 ? lineHeight : 0);
         }
 
         // Blinkender Cursor
-        if (_hasFocus && _cursorVisible)
+        if (_hasFocus && _cursorVisible && y > 0)
         {
             var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 1f };
-            canvas.DrawLine(cursorX, cursorY, cursorX, y + 2, cursorPaint);
+            float cursorBottom = y - lineHeight + Padding;
+            canvas.DrawLine(cursorX, cursorY, cursorX, cursorBottom, cursorPaint);
             cursorPaint.Dispose();
         }
 
