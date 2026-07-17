@@ -51,7 +51,7 @@ public partial class MainWindow : Window
     private bool       _isTextDragging = false;
     private Point      _textDragStart;
     private System.Windows.Shapes.Rectangle? _textRubberBand;
-    private TextBox?          _inlineTextBox;
+    private SkiaTextEditor?   _inlineTextBox;
     private GraviereParams?   _inlineParams;
     private int               _inlineExistingIdx = -1; // >=0 = bestehendes Textfeld editieren
     private DispatcherTimer?  _inlineVCarveTimer;      // Debounce: VCarve vorausberechnen während Tippen
@@ -6849,13 +6849,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void FlushInlineEdit()
     {
         if (_inlineTextBox == null) return;
-        var text       = _inlineTextBox.Text;
+        var text       = _inlineTextBox.GetText();
         int existingIdx = _inlineExistingIdx;
         _inlineTextBox.TextChanged    -= InlineTextBox_TextChanged;
-        _inlineTextBox.KeyDown        -= InlineTextBox_KeyDown;
         _inlineTextBox.LostFocus      -= InlineTextBox_LostFocus;
-        _inlineTextBox.PreviewKeyDown -= InlineCtrlDown;
-        _inlineTextBox.PreviewKeyUp   -= InlineCtrlUp;
         SimToolCanvas.Children.Remove(_inlineTextBox);
         _inlineTextBox     = null;
         _inlineExistingIdx = -1;
@@ -7355,30 +7352,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double screenW    = Math.Abs(screenB.X - screenA.X);
         double screenH    = Math.Abs(screenB.Y - screenA.Y);
 
-        _inlineTextBox = new TextBox
+        _inlineTextBox = new SkiaTextEditor
         {
-            AcceptsReturn        = false,
-            Background           = System.Windows.Media.Brushes.Transparent,
-            Foreground           = System.Windows.Media.Brushes.Transparent,
-            CaretBrush           = System.Windows.Media.Brushes.White,
-            BorderBrush          = new SolidColorBrush(Colors.Orange),
-            BorderThickness      = new Thickness(1.5),
             Width                = screenW,
             Height               = screenH,
-            FontFamily           = new System.Windows.Media.FontFamily(lastGrav?.FontFamily ?? "Arial"),
-            FontSize             = fontSizeMm * _zoom,
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Padding              = new Thickness(0),
         };
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
 
         _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
-        _inlineTextBox.KeyDown        += InlineTextBox_KeyDown;
         _inlineTextBox.LostFocus      += InlineTextBox_LostFocus;
-        _inlineTextBox.PreviewKeyDown += InlineCtrlDown;
-        _inlineTextBox.PreviewKeyUp   += InlineCtrlUp;
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
@@ -7407,33 +7391,18 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[historyIdx];
         TabEigenschaften.IsSelected  = true;
 
-        _inlineTextBox = new TextBox
+        _inlineTextBox = new SkiaTextEditor
         {
-            AcceptsReturn            = false,
-            Background               = System.Windows.Media.Brushes.Transparent,
-            Foreground               = System.Windows.Media.Brushes.Transparent,
-            CaretBrush               = System.Windows.Media.Brushes.White,
-            BorderBrush              = new SolidColorBrush(Colors.Orange),
-            BorderThickness          = new Thickness(1.5),
-            Width                    = screenW,
-            Height                   = screenH,
-            FontFamily               = new System.Windows.Media.FontFamily(gp.FontFamily),
-            FontSize                 = gp.FontSizeMm * _zoom,
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Padding                  = new Thickness(0),
-            Cursor                   = Cursors.IBeam,
-            Text                     = gp.Text,
+            Width                = screenW,
+            Height               = screenH,
         };
-        _inlineTextBox.CaretIndex = _inlineTextBox.Text.Length;
+        _inlineTextBox.SetText(gp.Text, gp.FontFamily, (float)(gp.FontSizeMm * _zoom));
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
 
         _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
-        _inlineTextBox.KeyDown        += InlineTextBox_KeyDown;
         _inlineTextBox.LostFocus      += InlineTextBox_LostFocus;
-        _inlineTextBox.PreviewKeyDown += InlineCtrlDown;
-        _inlineTextBox.PreviewKeyUp   += InlineCtrlUp;
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
@@ -7451,7 +7420,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double sh = hMm * _zoom;
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
-        _inlineTextBox.FontSize = _inlineParams.FontSizeMm * _zoom;
+        _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom));
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
     }
@@ -7472,10 +7441,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         System.Windows.Controls.Canvas.SetTop (_vermTextBox, pos.Y - 28);
     }
 
-    private void InlineTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    private void InlineTextBox_TextChanged(object? sender, EventArgs e)
     {
         if (_inlineTextBox == null || _inlineParams == null) return;
-        _inlineParams      = _inlineParams with { Text = _inlineTextBox.Text };
+        _inlineParams      = _inlineParams with { Text = _inlineTextBox.GetText() };
         _previewGravParams = _inlineParams;
 
         // Debounced VCarve-Vorausberechnung + Canvas-Update: 300 ms nach letztem Tastendruck.
@@ -7553,11 +7522,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void CommitInlineText()
     {
         if (_inlineTextBox == null) return;
-        var text        = _inlineTextBox.Text;
+        var text        = _inlineTextBox.GetText();
         int existingIdx = _inlineExistingIdx;
 
         _inlineTextBox.TextChanged -= InlineTextBox_TextChanged;
-        _inlineTextBox.KeyDown     -= InlineTextBox_KeyDown;
         _inlineTextBox.LostFocus   -= InlineTextBox_LostFocus;
         SimToolCanvas.Children.Remove(_inlineTextBox);
         _inlineTextBox     = null;
@@ -7628,10 +7596,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_inlineTextBox == null) return;
         bool isExisting = _inlineExistingIdx >= 0;
         _inlineTextBox.TextChanged    -= InlineTextBox_TextChanged;
-        _inlineTextBox.KeyDown        -= InlineTextBox_KeyDown;
         _inlineTextBox.LostFocus      -= InlineTextBox_LostFocus;
-        _inlineTextBox.PreviewKeyDown -= InlineCtrlDown;
-        _inlineTextBox.PreviewKeyUp   -= InlineCtrlUp;
         SimToolCanvas.Children.Remove(_inlineTextBox);
         _inlineTextBox     = null;
         _inlineExistingIdx = -1;
