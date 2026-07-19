@@ -134,12 +134,20 @@ public class ImprovedSkiaTextEditor : SKElement
                     var bounds = _layoutEngine.GetCharacterBounds(_model, i);
                     if (!bounds.IsEmpty)
                     {
+                        // Bounds sind im Content-Space, wir müssen Padding hinzufügen für Screen-Koordinaten
+                        var screenBounds = new SKRect(
+                            bounds.Left + _scaledPadding,
+                            bounds.Top + _scaledPadding,
+                            bounds.Right + _scaledPadding,
+                            bounds.Bottom + _scaledPadding
+                        );
+
                         using var selectionPaint = new SKPaint
                         {
                             Color = new SKColor(100, 150, 255, 180),
                             Style = SKPaintStyle.Fill
                         };
-                        canvas.DrawRect(bounds, selectionPaint);
+                        canvas.DrawRect(screenBounds, selectionPaint);
                     }
                 }
 
@@ -168,22 +176,29 @@ public class ImprovedSkiaTextEditor : SKElement
 
         var line = _layoutEngine.Lines[lineIdx];
 
-        // Character-Position in der Zeile berechnen
-        float cursorX = _scaledPadding + line.LineX;
+        // Character-Position in der Zeile berechnen (mit korrekter Messung)
+        float cursorX = line.LineX;
         for (int i = line.StartCharIdx; i < line.StartCharIdx + colInLine; i++)
         {
             if (i < _model.CharacterCount)
             {
                 var ch = _model.Characters[i];
-                cursorX += _model.GetRuns().First().Format.FontSizePt; // Vereinfacht
+                using var paint = new SKPaint
+                {
+                    Typeface = SkiaTextModel.GetTypeface(ch.Format.FontFamily, ch.Format.Bold, ch.Format.Italic),
+                    TextSize = ch.Format.FontSizePt
+                };
+                cursorX += paint.MeasureText(ch.Value.ToString());
             }
         }
 
-        float cursorY = _scaledPadding + line.LineY;
-        float cursorBottom = cursorY + line.Ascent + line.Descent;
+        // Screen-Koordinaten (mit Padding)
+        float screenCursorX = _scaledPadding + cursorX;
+        float screenCursorY = _scaledPadding + line.LineY;
+        float screenCursorBottom = _scaledPadding + line.LineY + line.Ascent + line.Descent;
 
         using var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 2f };
-        canvas.DrawLine(cursorX, cursorY, cursorX, cursorBottom, cursorPaint);
+        canvas.DrawLine(screenCursorX, screenCursorY, screenCursorX, screenCursorBottom, cursorPaint);
     }
 
     private bool IsCharInSelection(int charIndex)
@@ -202,7 +217,8 @@ public class ImprovedSkiaTextEditor : SKElement
     {
         Focus();
         var pos = e.GetPosition(this);
-        _cursorPos = _layoutEngine.HitTestCursorPosition(_model, (float)pos.X, (float)pos.Y);
+        var contentPos = TransformScreenToContent((float)pos.X, (float)pos.Y);
+        _cursorPos = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
         _selectionStart = _cursorPos;
         InvalidateVisual();
     }
@@ -213,8 +229,22 @@ public class ImprovedSkiaTextEditor : SKElement
             return;
 
         var pos = e.GetPosition(this);
-        _selectionEnd = _layoutEngine.HitTestCursorPosition(_model, (float)pos.X, (float)pos.Y);
+        var contentPos = TransformScreenToContent((float)pos.X, (float)pos.Y);
+        _selectionEnd = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
         InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Transformiere Screen-Koordinaten (WPF) in Content-Koordinaten (Layout-Engine)
+    /// Screen-Koordinaten sind relativ zum SKElement.
+    /// Content-Koordinaten sind relativ zur Padding-Box (0,0 = top-left of content area).
+    /// </summary>
+    private (float X, float Y) TransformScreenToContent(float screenX, float screenY)
+    {
+        // Einfach: Padding abziehen
+        float contentX = screenX - _scaledPadding;
+        float contentY = screenY - _scaledPadding;
+        return (contentX, contentY);
     }
 
     private void OnMouseUp(object sender, MouseButtonEventArgs e) { }
