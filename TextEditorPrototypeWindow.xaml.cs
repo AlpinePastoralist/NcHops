@@ -55,27 +55,21 @@ public partial class TextEditorPrototypeWindow : Window
             new TextCharacterFormat { FontFamily = "Segoe UI", FontSizePt = 14f, Color = SKColors.White }
         );
 
-        // SKElement erstellen
-        _editorCanvas = new SKElement
+        // SKElement aus XAML finden (bereits dort definiert)
+        _editorCanvas = (SKElement)FindName("EditorCanvas");
+        if (_editorCanvas == null)
         {
-            Focusable = true
-        };
+            throw new Exception("EditorCanvas SKElement nicht gefunden in XAML!");
+        }
 
+        // Events verbinden
         _editorCanvas.PaintSurface += OnPaintSurface;
         _editorCanvas.PreviewMouseLeftButtonDown += OnCanvasMouseDown;
         _editorCanvas.PreviewMouseMove += OnCanvasMouseMove;
         _editorCanvas.PreviewKeyDown += OnCanvasKeyDown;
+        _editorCanvas.Focusable = true;
 
-        // In Border einfügen
-        var border = (Border)FindName("EditorCanvas");
-        if (border == null)
-        {
-            throw new Exception("EditorCanvas Border nicht gefunden in XAML!");
-        }
-
-        border.Child = _editorCanvas;
         _editorCanvas.Focus();
-
         UpdateDebugInfo();
     }
 
