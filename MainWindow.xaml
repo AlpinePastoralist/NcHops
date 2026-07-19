@@ -261,6 +261,12 @@
                     </MenuItem.Icon>
                 </MenuItem>
                 <Separator/>
+                <MenuItem Header="🔬 Textfeld-Prototype Demo" Click="OnShowTextfieldPrototype">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" FontFamily="Segoe MDL2 Assets" Text="&#xE71B;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
                 <MenuItem Header="Beenden" Click="OnBeenden">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}"

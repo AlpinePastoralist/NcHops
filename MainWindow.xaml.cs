@@ -437,6 +437,12 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnShowTextfieldPrototype(object sender, RoutedEventArgs e)
+    {
+        var prototypeWindow = new TextEditorPrototypeWindow();
+        prototypeWindow.ShowDialog();
+    }
+
     private void OnBeenden(object sender, RoutedEventArgs e) => Close();
     private void OnWindowClosing(object sender, System.ComponentModel.CancelEventArgs e)
     {
