@@ -163,6 +163,27 @@ public class ImprovedSkiaTextEditor : SKElement
         // ─── Cursor ─────────────────────────────────────────────────
         if (_hasFocus && _cursorVisible && _layoutEngine.Lines.Count > 0)
             DrawCursor(canvas);
+
+        // ─── Border um das Eingabefeld ──────────────────────────────
+        DrawFieldBorder(canvas, availableWidth, availableHeight);
+    }
+
+    /// <summary>
+    /// Zeichnet einen Rahmen um das Eingabefeld herum
+    /// </summary>
+    private void DrawFieldBorder(SKCanvas canvas, float width, float height)
+    {
+        using var borderPaint = new SKPaint
+        {
+            Color = new SKColor(50, 100, 200, 255),  // Blauer Rahmen (deutlicher sichtbar)
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 2.5f,  // Dickerer Rahmen
+            IsAntialias = true
+        };
+
+        // Rechteck zeichnen: von (0,0) bis (width, height)
+        var borderRect = new SKRect(0, 0, width, height);
+        canvas.DrawRect(borderRect, borderPaint);
     }
 
     /// <summary>
