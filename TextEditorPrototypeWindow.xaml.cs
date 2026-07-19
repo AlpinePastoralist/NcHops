@@ -28,28 +28,42 @@ public partial class TextEditorPrototypeWindow : Window
 
     private void InitializeEditor()
     {
-        // Modell initialisieren
-        _currentModel = new SkiaTextModel();
-        _currentModel.SetText(
-            "Willkommen zum Textfeld-Prototype!\nZeile 2 mit verschiedener Formatierung.",
-            new TextCharacterFormat { FontFamily = "Segoe UI", FontSizePt = 14f, Color = SKColors.White }
-        );
-
-        // SKElement finden und Setup
-        var border = (Border)FindName("EditorCanvas");
-        if (border != null)
+        try
         {
+            // Modell initialisieren
+            _currentModel = new SkiaTextModel();
+            _currentModel.SetText(
+                "Willkommen zum Textfeld-Prototype!\nZeile 2 mit verschiedener Formatierung.",
+                new TextCharacterFormat { FontFamily = "Segoe UI", FontSizePt = 14f, Color = SKColors.White }
+            );
+
+            // SKElement erstellen
             _editorCanvas = new SKElement();
             _editorCanvas.PaintSurface += (s, e) => RenderCanvas(e);
             _editorCanvas.PreviewMouseLeftButtonDown += OnCanvasMouseDown;
             _editorCanvas.PreviewMouseMove += OnCanvasMouseMove;
             _editorCanvas.PreviewKeyDown += OnCanvasKeyDown;
             _editorCanvas.Focusable = true;
-            border.Child = _editorCanvas;
-            _editorCanvas.Focus();
-        }
 
-        UpdateDebugInfo();
+            // In Border einfügen (FindName braucht noch nicht zu funktionieren)
+            // Wir machen es direkt im Loaded-Event
+            this.Loaded += (s, e) =>
+            {
+                var border = (Border)FindName("EditorCanvas");
+                if (border != null)
+                {
+                    border.Child = _editorCanvas;
+                    _editorCanvas.Focus();
+                }
+            };
+
+            UpdateDebugInfo();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Fehler beim Initialisieren: {ex.Message}\n\n{ex.StackTrace}", "Fehler");
+            Close();
+        }
     }
 
     private void RenderCanvas(SKPaintSurfaceEventArgs e)
@@ -224,19 +238,29 @@ public partial class TextEditorPrototypeWindow : Window
     private void OnFormatChanged(object sender, RoutedEventArgs e)
     {
         if (_selectionStart < 0 || _selectionEnd < 0) return;
+        if (_currentModel == null || _editorCanvas == null) return;
 
-        int start = Math.Min(_selectionStart, _selectionEnd);
-        int end = Math.Max(_selectionStart, _selectionEnd);
+        try
+        {
+            int start = Math.Min(_selectionStart, _selectionEnd);
+            int end = Math.Max(_selectionStart, _selectionEnd);
 
-        string font = (CmbFontFamily.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Segoe UI";
-        float size = (float)SldFontSize.Value;
-        bool bold = ChkBold.IsChecked == true;
-        bool italic = ChkItalic.IsChecked == true;
+            var cmbFont = (ComboBox)FindName("CmbFontFamily");
+            var sldSize = (Slider)FindName("SldFontSize");
+            var chkBold = (CheckBox)FindName("ChkBold");
+            var chkItalic = (CheckBox)FindName("ChkItalic");
 
-        var format = new TextCharacterFormat { FontFamily = font, FontSizePt = size, Bold = bold, Italic = italic, Color = SKColors.White };
-        _currentModel.SetFormat(start, end - start, format);
+            string font = (cmbFont?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Segoe UI";
+            float size = (float)(sldSize?.Value ?? 12f);
+            bool bold = chkBold?.IsChecked == true;
+            bool italic = chkItalic?.IsChecked == true;
 
-        _editorCanvas?.InvalidateVisual();
+            var format = new TextCharacterFormat { FontFamily = font, FontSizePt = size, Bold = bold, Italic = italic, Color = SKColors.White };
+            _currentModel.SetFormat(start, end - start, format);
+
+            _editorCanvas.InvalidateVisual();
+        }
+        catch { /* Fehler bei Format-Änderung */ }
     }
 
     private void OnColorClick(object sender, RoutedEventArgs e)
@@ -272,6 +296,12 @@ public partial class TextEditorPrototypeWindow : Window
 
     private void UpdateDebugInfo()
     {
-        TxtInfo.Text = $"Zeichen: {_currentModel.CharacterCount}\nCursor: {_cursorPos}\nSelection: {_selectionStart}-{_selectionEnd}\nAlign: {_currentHAlign}";
+        try
+        {
+            var txtInfo = (TextBox)FindName("TxtInfo");
+            if (txtInfo != null)
+                txtInfo.Text = $"Zeichen: {_currentModel.CharacterCount}\nCursor: {_cursorPos}\nSelection: {_selectionStart}-{_selectionEnd}\nAlign: {_currentHAlign}";
+        }
+        catch { /* Ignorieren wenn nicht gefunden */ }
     }
 }
