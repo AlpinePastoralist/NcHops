@@ -1089,17 +1089,36 @@
                                     </StackPanel>
                                 </Grid>
 
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                    <TextBlock Text="Ausrichtung:" FontWeight="SemiBold"
-                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                    <RadioButton x:Name="EigAusrLinks"  Content="Links"  GroupName="Ausrichtung"
+                                <!-- 9-Punkt Ausrichtung: Horizontal + Vertikal -->
+                                <TextBlock Text="Text-Ausrichtung (9-Punkt):" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+                                <!-- Horizontal Alignment -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                    <TextBlock Text="Horizontal:" FontWeight="Normal"
+                                               VerticalAlignment="Center" Margin="0,0,8,0" Width="70"/>
+                                    <RadioButton x:Name="EigAusrLinks"  Content="Links"  GroupName="HAlignmentGroup"
                                                  IsChecked="True" Margin="0,0,10,0" VerticalAlignment="Center"
                                                  Checked="OnEigAusrichtungChanged"/>
-                                    <RadioButton x:Name="EigAusrMitte"  Content="Mittig" GroupName="Ausrichtung"
+                                    <RadioButton x:Name="EigAusrMitte"  Content="Mitte" GroupName="HAlignmentGroup"
                                                  Margin="0,0,10,0" VerticalAlignment="Center"
                                                  Checked="OnEigAusrichtungChanged"/>
-                                    <RadioButton x:Name="EigAusrRechts" Content="Rechts" GroupName="Ausrichtung"
+                                    <RadioButton x:Name="EigAusrRechts" Content="Rechts" GroupName="HAlignmentGroup"
                                                  VerticalAlignment="Center"
+                                                 Checked="OnEigAusrichtungChanged"/>
+                                </StackPanel>
+
+                                <!-- Vertical Alignment -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <TextBlock Text="Vertikal:" FontWeight="Normal"
+                                               VerticalAlignment="Center" Margin="0,0,8,0" Width="70"/>
+                                    <RadioButton x:Name="EigAusrOben"  Content="Oben"  GroupName="VAlignmentGroup"
+                                                 Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnEigAusrichtungChanged"/>
+                                    <RadioButton x:Name="EigAusrVMitte"  Content="Mitte" GroupName="VAlignmentGroup"
+                                                 Margin="0,0,10,0" VerticalAlignment="Center"
+                                                 Checked="OnEigAusrichtungChanged"/>
+                                    <RadioButton x:Name="EigAusrUnten" Content="Unten" GroupName="VAlignmentGroup"
+                                                 IsChecked="True" VerticalAlignment="Center"
                                                  Checked="OnEigAusrichtungChanged"/>
                                 </StackPanel>
 

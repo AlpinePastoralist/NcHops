@@ -18,9 +18,10 @@ public record GraviereParams(
     double Vorschub,
     double Drehzahl,
     string Bezugspunkt,
-    string Ausrichtung    = "Links",    // "Links" | "Mitte" | "Rechts"
-    bool   IsVCarve        = false,     // true = V-Carve (Medialachse), false = Umriss
-    bool   IsTasche        = false,     // true = Tasche pro Buchstabe
+    string Ausrichtung    = "Links",    // "Links" | "Mitte" | "Rechts" — horizontal alignment
+    string AusrichtungV   = "Unten",    // "Oben" | "Mitte" | "Unten" — vertical alignment (new in Phase 2)
+    bool   IsVCarve       = false,      // true = V-Carve (Medialachse), false = Umriss
+    bool   IsTasche       = false,      // true = Tasche pro Buchstabe
     double VereinfachungMm = 1.0,       // Spitzentoleranz: Umkehrpunkte kollabieren (0 = aus)
     double SampleStepMm    = 0,         // Abtastschrittweite mm (0 = auto: FontSizeMm/300, clamp 0.02–0.1)
     int    WerkzeugNr      = 0,         // Werkzeug-Nr aus Werkzeugliste (0 = keines)

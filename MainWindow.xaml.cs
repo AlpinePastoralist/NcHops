@@ -5445,9 +5445,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Set(EigTextBreite,      p.TextBreite.ToString(inv));
             Set(EigTextHoehe,       (p.TextHoehe > 0 ? p.TextHoehe : p.FontSizeMm).ToString(inv));
             Set(EigFontSize,        p.FontSizeMm.ToString(inv));
+
+            // Horizontal alignment
             EigAusrLinks.IsChecked  = p.Ausrichtung == "Links"  || string.IsNullOrEmpty(p.Ausrichtung);
             EigAusrMitte.IsChecked  = p.Ausrichtung == "Mitte";
             EigAusrRechts.IsChecked = p.Ausrichtung == "Rechts";
+
+            // Vertical alignment
+            EigAusrOben.IsChecked   = p.AusrichtungV == "Oben"  || string.IsNullOrEmpty(p.AusrichtungV);
+            EigAusrVMitte.IsChecked = p.AusrichtungV == "Mitte";
+            EigAusrUnten.IsChecked  = p.AusrichtungV == "Unten" || p.AusrichtungV == "";
             // Fräser-Info (rein informativ, kein Auswahl mehr im Eigenschaften-Panel)
             var eigWzInfo = _werkzeuge.FirstOrDefault(w => w.Nr == p.WerkzeugNr);
             // V-Carve-Felder
@@ -5957,8 +5964,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             double fs = double.TryParse(Norm(EigFontSize.Text),       sty, inv, out var v1) && v1 > 0 ? v1 : gp.FontSizeMm;
             double tw = double.TryParse(Norm(EigTextBreite.Text),     sty, inv, out var v2)           ? v2 : gp.TextBreite;
             double th = double.TryParse(Norm(EigTextHoehe.Text),      sty, inv, out var v3) && v3 > 0 ? v3 : gp.TextHoehe;
+
+            // Horizontal alignment (Left/Center/Right)
             string ausr = EigAusrRechts.IsChecked == true ? "Rechts"
                         : EigAusrMitte.IsChecked  == true ? "Mitte" : "Links";
+
+            // Vertical alignment (Top/Center/Bottom)
+            string ausrV = EigAusrUnten.IsChecked == true ? "Unten"
+                         : EigAusrVMitte.IsChecked == true ? "Mitte" : "Oben";
 
             double previewZt = gp.ZTiefe;
             if (gp.IsVCarve && double.TryParse(Norm(EigMaxTiefe.Text),  sty, inv, out var pvzt) && pvzt > 0) previewZt = pvzt;
@@ -5981,10 +5994,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 TextBreite      = tw,
                 TextHoehe       = th,
                 Ausrichtung     = ausr,
+                AusrichtungV    = ausrV,
                 ZTiefe          = previewZt,
                 SampleStepMm    = previewStep,
                 VereinfachungMm = previewSimp,
             };
+
+            // Update inline text editor's alignment if it's active
+            if (_inlineTextBox != null)
+            {
+                var (hAlign, vAlign) = ParseAlignment(ausr, ausrV);
+                _inlineTextBox.HorizontalAlign = hAlign;
+                _inlineTextBox.VerticalAlign = vAlign;
+            }
         }
         UpdateAll();
     }
@@ -7358,12 +7380,13 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double screenW    = width * _zoom;
         double screenH    = height * _zoom;
 
+        var (hAlign, vAlign) = ParseAlignment(_inlineParams.Ausrichtung, _inlineParams.AusrichtungV);
         _inlineTextBox = new ImprovedSkiaTextEditor
         {
             Width  = screenW,
             Height = screenH,
-            HorizontalAlign = TextHorizontalAlign.Left,
-            VerticalAlign = TextVerticalAlign.Top,
+            HorizontalAlign = hAlign,
+            VerticalAlign = vAlign,
         };
         _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
@@ -7400,12 +7423,13 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[historyIdx];
         TabEigenschaften.IsSelected  = true;
 
+        var (hAlign2, vAlign2) = ParseAlignment(gp.Ausrichtung, gp.AusrichtungV);
         _inlineTextBox = new ImprovedSkiaTextEditor
         {
             Width  = screenW,
             Height = screenH,
-            HorizontalAlign = TextHorizontalAlign.Left,
-            VerticalAlign = TextVerticalAlign.Top,
+            HorizontalAlign = hAlign2,
+            VerticalAlign = vAlign2,
         };
         _inlineTextBox.SetText(gp.Text, gp.FontFamily, (float)(gp.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
@@ -7417,6 +7441,28 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
+    }
+
+    /// <summary>
+    /// Konvertiert Ausrichtungs-Strings in TextHorizontalAlign/TextVerticalAlign Enums
+    /// </summary>
+    private (TextHorizontalAlign hAlign, TextVerticalAlign vAlign) ParseAlignment(string ausrichtung, string ausrichtungV)
+    {
+        var hAlign = ausrichtung switch
+        {
+            "Mitte" => TextHorizontalAlign.Center,
+            "Rechts" => TextHorizontalAlign.Right,
+            _ => TextHorizontalAlign.Left
+        };
+
+        var vAlign = ausrichtungV switch
+        {
+            "Mitte" => TextVerticalAlign.Center,
+            "Oben" => TextVerticalAlign.Top,
+            _ => TextVerticalAlign.Bottom
+        };
+
+        return (hAlign, vAlign);
     }
 
     private void RepositionInlineTextBox()
