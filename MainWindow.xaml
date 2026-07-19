@@ -1066,7 +1066,19 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="Zeilenhöhe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBlock Text="Feldhöhe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigTextHoehe" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Schriftgröße (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                         <TextBox x:Name="EigFontSize" TextChanged="OnEigSizeChanged"/>
                                     </StackPanel>
                                 </Grid>
