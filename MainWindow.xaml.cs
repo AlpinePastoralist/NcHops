@@ -7339,10 +7339,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double bx = SnapX((screenB.X - _panX) / _zoom);
         double by = SnapY(wy - (screenB.Y - _panY) / _zoom);
 
+        // Grenzen runden (damit Raster beachtet wird)
         double left   = Math.Round(Math.Max(0, Math.Min(ax, bx)), 2);
         double bottom = Math.Round(Math.Max(0, Math.Min(ay, by)), 2);
-        double width  = Math.Round(Math.Abs(bx - ax), 2);
-        double height = Math.Round(Math.Abs(by - ay), 2);  // Verwende die tatsächlich aufgezogene Höhe
+        double right  = Math.Round(Math.Max(0, Math.Max(ax, bx)), 2);
+        double top    = Math.Round(Math.Max(0, Math.Max(ay, by)), 2);
+
+        // Größe aus gerundeten Grenzen berechnen (nicht die Größe runden!)
+        double width  = right - left;
+        double height = top - bottom;
+
         if (width < 0.5 || height < 0.5) return;
 
         var lastGrav  = _history.Select(h => h.Params).OfType<GraviereParams>().LastOrDefault();
@@ -8476,10 +8482,13 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             else
             {
-                // Zweiter Klick: Textfeld erstellen
+                // Zweiter Klick: Textfeld erstellen — Ende auch runden!
                 _isTextDragging = false;
                 ClearTextRubberBand();
-                StartInlineTextEdit(_textDragStart, pos);
+                double mmX2 = SnapX((pos.X - _panX) / _zoom);
+                double mmY2 = SnapY(WorkY - (pos.Y - _panY) / _zoom);
+                var snappedEnd = new Point(mmX2 * _zoom + _panX, (WorkY - mmY2) * _zoom + _panY);
+                StartInlineTextEdit(_textDragStart, snappedEnd);
             }
             e.Handled = true;
             return;
