@@ -86,13 +86,16 @@ public class ImprovedSkiaTextEditor : SKElement
         var canvas = e.Surface.Canvas;
         canvas.Clear(SKColors.Transparent);
 
+        // ─── Border um das Eingabefeld IMMER zeichnen ──────────────────
+        float availableWidth = (float)(Width > 0 ? Width : 400);
+        float availableHeight = (float)(Height > 0 ? Height : 100);
+        DrawFieldBorder(canvas, availableWidth, availableHeight);
+
+        // ─── Früh rückgängig wenn kein Text vorhanden ──────────────────
         if (_model.CharacterCount == 0)
             return;
 
         // ─── Layout berechnen ───────────────────────────────────────
-        float availableWidth = (float)(Width > 0 ? Width : 400);
-        float availableHeight = (float)(Height > 0 ? Height : 100);
-
         _layoutEngine.Layout(
             _model,
             availableWidth - _scaledPadding * 2,
@@ -163,26 +166,27 @@ public class ImprovedSkiaTextEditor : SKElement
         // ─── Cursor ─────────────────────────────────────────────────
         if (_hasFocus && _cursorVisible && _layoutEngine.Lines.Count > 0)
             DrawCursor(canvas);
-
-        // ─── Border um das Eingabefeld ──────────────────────────────
-        DrawFieldBorder(canvas, availableWidth, availableHeight);
     }
 
     /// <summary>
-    /// Zeichnet einen Rahmen um das Eingabefeld herum
+    /// Zeichnet einen Rahmen um das Eingabefeld herum (innen, damit es nicht überlädt)
     /// </summary>
     private void DrawFieldBorder(SKCanvas canvas, float width, float height)
     {
+        float borderWidth = 2.0f;
+        float halfStroke = borderWidth / 2.0f;
+
         using var borderPaint = new SKPaint
         {
-            Color = new SKColor(50, 100, 200, 255),  // Blauer Rahmen (deutlicher sichtbar)
+            Color = new SKColor(50, 100, 200, 255),  // Blauer Rahmen
             Style = SKPaintStyle.Stroke,
-            StrokeWidth = 2.5f,  // Dickerer Rahmen
+            StrokeWidth = borderWidth,
             IsAntialias = true
         };
 
-        // Rechteck zeichnen: von (0,0) bis (width, height)
-        var borderRect = new SKRect(0, 0, width, height);
+        // Rechteck zeichnen: mit Offset nach innen, damit es nicht überlädt
+        // StrokeWidth/2 nach innen verschieben
+        var borderRect = new SKRect(halfStroke, halfStroke, width - halfStroke, height - halfStroke);
         canvas.DrawRect(borderRect, borderPaint);
     }
 

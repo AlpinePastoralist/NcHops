@@ -7342,8 +7342,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double left   = Math.Round(Math.Max(0, Math.Min(ax, bx)), 2);
         double bottom = Math.Round(Math.Max(0, Math.Min(ay, by)), 2);
         double width  = Math.Round(Math.Abs(bx - ax), 2);
-        double height = 20.0; // Standard: 20mm Zeilenhöhe
-        if (width < 0.5) return;
+        double height = Math.Round(Math.Abs(by - ay), 2);  // Verwende die tatsächlich aufgezogene Höhe
+        if (width < 0.5 || height < 0.5) return;
 
         var lastGrav  = _history.Select(h => h.Params).OfType<GraviereParams>().LastOrDefault();
         double fontSizeMm = Math.Round(height * 0.7, 1);
