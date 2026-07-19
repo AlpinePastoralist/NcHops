@@ -51,9 +51,9 @@ public partial class MainWindow : Window
     private bool       _isTextDragging = false;
     private Point      _textDragStart;
     private System.Windows.Shapes.Rectangle? _textRubberBand;
-    private SkiaTextEditor?   _inlineTextBox;
-    private GraviereParams?   _inlineParams;
-    private int               _inlineExistingIdx = -1; // >=0 = bestehendes Textfeld editieren
+    private ImprovedSkiaTextEditor?   _inlineTextBox;
+    private GraviereParams?           _inlineParams;
+    private int                       _inlineExistingIdx = -1; // >=0 = bestehendes Textfeld editieren
     private DispatcherTimer?  _inlineVCarveTimer;      // Debounce: VCarve vorausberechnen während Tippen
     private System.Threading.CancellationTokenSource? _inlineVCarveCts; // laufende Hintergrundberechnung abbrechen
     private int               _moveHistoryIdx   = -1;
@@ -7358,14 +7358,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double screenW    = width * _zoom;
         double screenH    = height * _zoom;
 
-        _inlineTextBox = new SkiaTextEditor
+        _inlineTextBox = new ImprovedSkiaTextEditor
         {
-            Width                = screenW,
-            Height               = screenH,
+            Width  = screenW,
+            Height = screenH,
+            HorizontalAlign = TextHorizontalAlign.Left,
+            VerticalAlign = TextVerticalAlign.Top,
         };
         _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
-        System.Windows.Controls.Canvas.SetTop (_inlineTextBox, screenTop);
+        System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
 
         _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
@@ -7398,14 +7400,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[historyIdx];
         TabEigenschaften.IsSelected  = true;
 
-        _inlineTextBox = new SkiaTextEditor
+        _inlineTextBox = new ImprovedSkiaTextEditor
         {
-            Width                = screenW,
-            Height               = screenH,
+            Width  = screenW,
+            Height = screenH,
+            HorizontalAlign = TextHorizontalAlign.Left,
+            VerticalAlign = TextVerticalAlign.Top,
         };
         _inlineTextBox.SetText(gp.Text, gp.FontFamily, (float)(gp.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
-        System.Windows.Controls.Canvas.SetTop (_inlineTextBox, screenTop);
+        System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
 
         _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
