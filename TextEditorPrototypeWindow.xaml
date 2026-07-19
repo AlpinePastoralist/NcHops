@@ -5,7 +5,8 @@
         xmlns:skia="clr-namespace:SkiaSharp.Views.WPF;assembly=SkiaSharp.Views.WPF"
         Title="Textfeld-Prototype: Character-basiertes Modell + Layout-Engine"
         Width="1000" Height="700"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        Loaded="Window_Loaded">
 
     <Grid Background="#2d2d30">
         <Grid.RowDefinitions>
