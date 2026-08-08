@@ -150,7 +150,7 @@
                 Padding="12,8">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="BtnWaehlen" Content="Auswählen" Width="100" Margin="0,0,8,0"
-                        Visibility="Collapsed"
+                        Visibility="Collapsed" IsDefault="True"
                         Click="OnWaehlen"/>
                 <Button Content="Schließen" Width="90"
                         Click="OnSchliessen" IsCancel="True"/>
