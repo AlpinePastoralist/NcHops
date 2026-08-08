@@ -5,7 +5,8 @@
         Title="Werkzeugliste" Width="860" Height="460"
         MinWidth="650" MinHeight="360"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
-        Background="#d8e0ea">
+        Background="#d8e0ea"
+        Loaded="OnWindowLoaded">
     <Window.Resources>
         <local:UnitValueConverter x:Key="UC"/>
 

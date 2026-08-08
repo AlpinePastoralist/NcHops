@@ -310,6 +310,12 @@ public partial class WerkzeugeDialog : Window
         catch { /* Bilddatei defekt/unlesbar */ }
     }
 
+    private void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        // Fokus auf die Werkzeugliste setzen, damit Pfeiltasten direkt funktionieren
+        LstWerkzeuge.Focus();
+    }
+
     private void OnSchliessen(object sender, RoutedEventArgs e)
     {
         WerkzeugGridFraeser.CommitEdit(DataGridEditingUnit.Cell, exitEditingMode: true);
