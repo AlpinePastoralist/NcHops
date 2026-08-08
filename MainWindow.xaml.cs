@@ -10160,7 +10160,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wx <= 0 || wy <= 0) return;
 
         double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
-        _canvasScale = scale; // Speichere für später (Textfeld-Größenberechnung)
+
+        // Echte Skalierung: WPF-Pixel pro Millimeter (für Textfeld-Größenberechnung)
+        double canvasW = DrawSkia.ActualWidth;
+        double canvasH = DrawSkia.ActualHeight;
+        _canvasScale = canvasW > 0 && canvasH > 0 ? Math.Min(canvasW / wx, canvasH / wy) : 1.0;
         (float px, float py) MmToPx(double x, double y) => (
             (float)(_topRect.Left + x * scale),
             (float)(_topRect.Bottom - y * scale));
