@@ -5,7 +5,7 @@
     "Name": "Planfr\u00E4ser 35mm",
     "DisplayName": "1. Planfr\u00E4ser 35mm",
     "ListLabel": "1. Planfr\u00E4ser 35mm (Fr\u00E4ser)",
-    "BildPfad": null,
+    "BildPfad": "02fe5a4d04be4bd195d52c9e0110aeec.png",
     "Durchmesser": 35,
     "Schneidenwinkel": 180,
     "ZZustellung": 4,
@@ -14,7 +14,7 @@
     "VorschubFz": 3000,
     "Drehzahl": 8000,
     "RaeumzustellungXY": 90,
-    "Geaendert": "2026-07-17T19:19:25.6052076+02:00"
+    "Geaendert": "2026-08-08T13:54:56.865957+02:00"
   },
   {
     "Nr": 2,
@@ -22,7 +22,7 @@
     "Name": "Nutfr\u00E4ser HW-WP D16 / NL29.5 / S12 / Z2",
     "DisplayName": "2. Nutfr\u00E4ser HW-WP D16 / NL29.5 / S12 / Z2",
     "ListLabel": "2. Nutfr\u00E4ser HW-WP D16 / NL29.5 / S12 / Z2 (Fr\u00E4ser)",
-    "BildPfad": null,
+    "BildPfad": "0e89dc063f0248a1a25f9eec3e57b23b.jpg",
     "Durchmesser": 16,
     "Schneidenwinkel": 180,
     "ZZustellung": 4,
@@ -31,7 +31,7 @@
     "VorschubFz": 2000,
     "Drehzahl": 18000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-07-17T19:58:07.3478715+02:00"
+    "Geaendert": "2026-08-08T13:55:09.3437512+02:00"
   },
   {
     "Nr": 3,
@@ -39,7 +39,7 @@
     "Name": "Spiralnutfr\u00E4ser VHW D10 / NL32 / S8 / Z2 / RL / POS",
     "DisplayName": "3. Spiralnutfr\u00E4ser VHW D10 / NL32 / S8 / Z2 / RL / POS",
     "ListLabel": "3. Spiralnutfr\u00E4ser VHW D10 / NL32 / S8 / Z2 / RL / POS (Fr\u00E4ser)",
-    "BildPfad": null,
+    "BildPfad": "4abef804851d43b7afbb1bd3471da02c.jpg",
     "Durchmesser": 10,
     "Schneidenwinkel": 180,
     "ZZustellung": 4,
@@ -48,7 +48,7 @@
     "VorschubFz": 2000,
     "Drehzahl": 18000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-07-16T21:19:39.679271+02:00"
+    "Geaendert": "2026-08-08T13:55:18.7327931+02:00"
   },
   {
     "Nr": 4,
@@ -56,7 +56,7 @@
     "Name": "Gravierstichel (Festool)",
     "DisplayName": "4. Gravierstichel (Festool)",
     "ListLabel": "4. Gravierstichel (Festool) (Fr\u00E4ser)",
-    "BildPfad": null,
+    "BildPfad": "6d7467294e724dfb92518e7840dfebee.jpg",
     "Durchmesser": 10,
     "Schneidenwinkel": 60,
     "ZZustellung": 9.5,
@@ -65,7 +65,7 @@
     "VorschubFz": 2000,
     "Drehzahl": 18000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-07-17T21:27:01.0693474+02:00"
+    "Geaendert": "2026-08-08T13:55:32.8409682+02:00"
   },
   {
     "Nr": 5,
@@ -73,7 +73,7 @@
     "Name": "T-Nut",
     "DisplayName": "5. T-Nut",
     "ListLabel": "5. T-Nut (Fr\u00E4ser)",
-    "BildPfad": null,
+    "BildPfad": "84a5c7d79c444ca9bcaa9429d39f49e9.jpg",
     "Durchmesser": 10,
     "Schneidenwinkel": 180,
     "ZZustellung": 10,
@@ -82,7 +82,7 @@
     "VorschubFz": 3000,
     "Drehzahl": 18000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-07-17T19:18:58.1874606+02:00"
+    "Geaendert": "2026-08-08T13:55:45.9133283+02:00"
   },
   {
     "Nr": 6,
@@ -90,7 +90,7 @@
     "Name": "Bohrer 8mm",
     "DisplayName": "6. Bohrer 8mm",
     "ListLabel": "6. Bohrer 8mm (Bohrer)",
-    "BildPfad": null,
+    "BildPfad": "aa499facab4e42368c751b78b12ead94.jpg",
     "Durchmesser": 8,
     "Schneidenwinkel": 180,
     "ZZustellung": 16,
@@ -99,6 +99,6 @@
     "VorschubFz": 1000,
     "Drehzahl": 8000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-07-16T21:19:59.2753595+02:00"
+    "Geaendert": "2026-08-08T13:56:03.4408075+02:00"
   }
 ]
