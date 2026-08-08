@@ -26,12 +26,12 @@
     "Durchmesser": 16,
     "Schneidenwinkel": 180,
     "ZZustellung": 4,
-    "Eintauchwinkel": 20,
+    "Eintauchwinkel": 90,
     "VorschubFxy": 3000,
     "VorschubFz": 2000,
     "Drehzahl": 18000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-08-08T14:25:06.4757881+02:00"
+    "Geaendert": "2026-08-08T13:55:09.3437512+02:00"
   },
   {
     "Nr": 3,
@@ -43,12 +43,12 @@
     "Durchmesser": 10,
     "Schneidenwinkel": 180,
     "ZZustellung": 4,
-    "Eintauchwinkel": 20,
+    "Eintauchwinkel": 30,
     "VorschubFxy": 3000,
     "VorschubFz": 2000,
     "Drehzahl": 18000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-08-08T14:25:24.8949866+02:00"
+    "Geaendert": "2026-08-08T13:55:18.7327931+02:00"
   },
   {
     "Nr": 4,

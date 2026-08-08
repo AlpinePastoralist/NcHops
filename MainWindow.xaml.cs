@@ -7379,15 +7379,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[^1];
         TabEigenschaften.IsSelected  = true;
 
-        // Gleiche Skalierung wie in OnDrawSkia für korrekte Größenberechnung der Kontur
-        if (_topRect.IsEmpty) return;
-        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
-
         // Transparente TextBox — Position und Größe basierend auf mm-Werten (20mm minimum!)
-        double screenLeft = left * scale + _panX;
-        double screenTop  = (wy - (bottom + height)) * scale + _panY;
-        double screenW    = width * scale;
-        double screenH    = height * scale;
+        double screenLeft = left * _zoom + _panX;
+        double screenTop  = (wy - (bottom + height)) * _zoom + _panY;
+        double screenW    = width * _zoom;
+        double screenH    = height * _zoom;
 
         var (hAlign, vAlign) = ParseAlignment(_inlineParams.Ausrichtung, _inlineParams.AusrichtungV);
         _inlineTextBox = new ImprovedSkiaTextEditor
@@ -7418,18 +7414,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double fh = gp.TextHoehe > 0 ? gp.TextHoehe : gp.FontSizeMm;
         if (fh <= 0 || gp.TextBreite <= 0) return;
 
-        double wx = WorkX, wy = WorkY;
-        if (wx <= 0 || wy <= 0 || _topRect.IsEmpty) return;
-
-        // Gleiche Skalierung wie in OnDrawSkia für korrekte Größenberechnung der Kontur
-        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
-
         // mm-Grenzen → Screen-Koordinaten (selbe Formel wie MmToPx im Skia-Canvas)
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(gp);
-        double screenLeft = leftMm * scale + _panX;
-        double screenTop  = (wy - (bottomMm + hMm)) * scale + _panY;
-        double screenW    = wMm * scale;
-        double screenH    = hMm * scale;
+        double screenLeft = leftMm   * _zoom + _panX;
+        double screenTop  = (WorkY - (bottomMm + hMm)) * _zoom + _panY;
+        double screenW    = wMm * _zoom;
+        double screenH    = hMm * _zoom;
         if (screenW < 4 || screenH < 4) return;
 
         _inlineExistingIdx           = historyIdx;
@@ -7484,17 +7474,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     {
         if (_inlineTextBox == null || _inlineParams == null) return;
         double wy = WorkY;
-        double wx = WorkX;
-        if (wy <= 0 || wx <= 0 || _topRect.IsEmpty) return;
-
-        // Gleiche Skalierung wie in OnDrawSkia für korrekte Ausrichtung der Kontur
-        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
-
+        if (wy <= 0) return;
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(_inlineParams);
-        double sl = leftMm * scale + _panX;
-        double st = (wy - (bottomMm + hMm)) * scale + _panY;
-        double sw = wMm * scale;
-        double sh = hMm * scale;
+        double sl = leftMm * _zoom + _panX;
+        double st = (wy - (bottomMm + hMm)) * _zoom + _panY;
+        double sw = wMm * _zoom;
+        double sh = hMm * _zoom;
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
         _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
