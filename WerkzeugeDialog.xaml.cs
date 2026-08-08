@@ -321,9 +321,10 @@ public partial class WerkzeugeDialog : Window
 
     private Werkzeug? AktuelleAuswahl() => TabWerkzeuge.SelectedIndex switch
     {
-        0 => WerkzeugGridFraeser.SelectedItem as Werkzeug,
-        1 => WerkzeugGridBohrer.SelectedItem as Werkzeug,
-        _ => LstWerkzeuge.SelectedItem as Werkzeug,
+        0 => LstWerkzeuge.SelectedItem as Werkzeug,
+        1 => WerkzeugGridFraeser.SelectedItem as Werkzeug,
+        2 => WerkzeugGridBohrer.SelectedItem as Werkzeug,
+        _ => null,
     };
 
     private void WaehleUndSchliesse(Werkzeug w)

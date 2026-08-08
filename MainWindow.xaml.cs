@@ -7339,15 +7339,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double bx = SnapX((screenB.X - _panX) / _zoom);
         double by = SnapY(wy - (screenB.Y - _panY) / _zoom);
 
-        // Grenzen runden (damit Raster beachtet wird)
-        double left   = Math.Round(Math.Max(0, Math.Min(ax, bx)), 2);
-        double bottom = Math.Round(Math.Max(0, Math.Min(ay, by)), 2);
-        double right  = Math.Round(Math.Max(0, Math.Max(ax, bx)), 2);
-        double top    = Math.Round(Math.Max(0, Math.Max(ay, by)), 2);
+        // Position auf Raster ausrichten, ABER Größe NICHT runden!
+        // (Damit Feldgröße exakt der aufgezogenen Größe entspricht)
+        double left   = Math.Max(0, Math.Min(ax, bx));      // Gesnappte Position
+        double bottom = Math.Max(0, Math.Min(ay, by));      // Gesnappte Position
 
-        // Größe aus gerundeten Grenzen berechnen (nicht die Größe runden!)
-        double width  = right - left;
-        double height = top - bottom;
+        // Größe aus UNGESNAPPTEN Werten (damit sie nicht durch Raster verändert wird)
+        double width  = Math.Round(Math.Abs(bx - ax), 2);   // Rohe Größe (nicht gerundet)
+        double height = Math.Round(Math.Abs(by - ay), 2);   // Rohe Größe (nicht gerundet)
 
         if (width < 0.5 || height < 0.5) return;
 
