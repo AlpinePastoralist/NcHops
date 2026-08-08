@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private double _panX      = 0.0;
     private double _panY      = 0.0;
     private double _dpiScale  = 1.0;  // physische Pixel / logische Pixel (wird in OnDrawSkia aktualisiert)
+    private double _canvasScale = 1.0; // Skalierung des Werkstücks auf die Canvas (wird in DrawGCodeTopViewSk aktualisiert)
     private bool   _isPanning = false;
     private Point  _panStart;   // Startpunkt im Parent-Koordinatensystem
     private Point  _panOrigin;  // _panX/_panY beim Drag-Start
@@ -7379,11 +7380,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[^1];
         TabEigenschaften.IsSelected  = true;
 
-        // Transparente TextBox — Position und Größe basierend auf mm-Werten (20mm minimum!)
-        double screenLeft = left * _zoom + _panX;
-        double screenTop  = (wy - (bottom + height)) * _zoom + _panY;
-        double screenW    = width * _zoom;
-        double screenH    = height * _zoom;
+        // Transparente TextBox — Position und Größe mit _canvasScale für korrekte Kontur-Übereinstimmung
+        double screenLeft = (left * _canvasScale) * _zoom + _panX;
+        double screenTop  = ((wy - (bottom + height)) * _canvasScale) * _zoom + _panY;
+        double screenW    = width * _canvasScale * _zoom;
+        double screenH    = height * _canvasScale * _zoom;
 
         var (hAlign, vAlign) = ParseAlignment(_inlineParams.Ausrichtung, _inlineParams.AusrichtungV);
         _inlineTextBox = new ImprovedSkiaTextEditor
@@ -7414,12 +7415,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double fh = gp.TextHoehe > 0 ? gp.TextHoehe : gp.FontSizeMm;
         if (fh <= 0 || gp.TextBreite <= 0) return;
 
-        // mm-Grenzen → Screen-Koordinaten (selbe Formel wie MmToPx im Skia-Canvas)
+        // mm-Grenzen → Screen-Koordinaten mit _canvasScale für korrekte Kontur-Übereinstimmung
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(gp);
-        double screenLeft = leftMm   * _zoom + _panX;
-        double screenTop  = (WorkY - (bottomMm + hMm)) * _zoom + _panY;
-        double screenW    = wMm * _zoom;
-        double screenH    = hMm * _zoom;
+        double screenLeft = (leftMm * _canvasScale) * _zoom + _panX;
+        double screenTop  = ((WorkY - (bottomMm + hMm)) * _canvasScale) * _zoom + _panY;
+        double screenW    = wMm * _canvasScale * _zoom;
+        double screenH    = hMm * _canvasScale * _zoom;
         if (screenW < 4 || screenH < 4) return;
 
         _inlineExistingIdx           = historyIdx;
@@ -7476,10 +7477,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double wy = WorkY;
         if (wy <= 0) return;
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(_inlineParams);
-        double sl = leftMm * _zoom + _panX;
-        double st = (wy - (bottomMm + hMm)) * _zoom + _panY;
-        double sw = wMm * _zoom;
-        double sh = hMm * _zoom;
+
+        // Größe mit _canvasScale für korrekte Kontur-Übereinstimmung, Position mit _zoom für Zoom/Pan
+        double sl = (leftMm * _canvasScale) * _zoom + _panX;
+        double st = ((wy - (bottomMm + hMm)) * _canvasScale) * _zoom + _panY;
+        double sw = wMm * _canvasScale * _zoom;
+        double sh = hMm * _canvasScale * _zoom;
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
         _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
@@ -10157,6 +10160,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wx <= 0 || wy <= 0) return;
 
         double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+        _canvasScale = scale; // Speichere für später (Textfeld-Größenberechnung)
         (float px, float py) MmToPx(double x, double y) => (
             (float)(_topRect.Left + x * scale),
             (float)(_topRect.Bottom - y * scale));
