@@ -7380,11 +7380,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[^1];
         TabEigenschaften.IsSelected  = true;
 
-        // Transparente TextBox — Position und Größe mit _canvasScale für korrekte Kontur-Übereinstimmung
-        double screenLeft = (left * _canvasScale) * _zoom + _panX;
-        double screenTop  = ((wy - (bottom + height)) * _canvasScale) * _zoom + _panY;
-        double screenW    = width * _canvasScale * _zoom;
-        double screenH    = height * _canvasScale * _zoom;
+        // Transparente TextBox — Position und Größe mit _zoom
+        double screenLeft = left * _zoom + _panX;
+        double screenTop  = (wy - (bottom + height)) * _zoom + _panY;
+        double screenW    = width * _zoom;
+        double screenH    = height * _zoom;
 
         var (hAlign, vAlign) = ParseAlignment(_inlineParams.Ausrichtung, _inlineParams.AusrichtungV);
         _inlineTextBox = new ImprovedSkiaTextEditor
@@ -7415,12 +7415,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double fh = gp.TextHoehe > 0 ? gp.TextHoehe : gp.FontSizeMm;
         if (fh <= 0 || gp.TextBreite <= 0) return;
 
-        // mm-Grenzen → Screen-Koordinaten mit _canvasScale für korrekte Kontur-Übereinstimmung
+        // mm-Grenzen → Screen-Koordinaten mit _zoom
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(gp);
-        double screenLeft = (leftMm * _canvasScale) * _zoom + _panX;
-        double screenTop  = ((WorkY - (bottomMm + hMm)) * _canvasScale) * _zoom + _panY;
-        double screenW    = wMm * _canvasScale * _zoom;
-        double screenH    = hMm * _canvasScale * _zoom;
+        double screenLeft = leftMm * _zoom + _panX;
+        double screenTop  = (WorkY - (bottomMm + hMm)) * _zoom + _panY;
+        double screenW    = wMm * _zoom;
+        double screenH    = hMm * _zoom;
         if (screenW < 4 || screenH < 4) return;
 
         _inlineExistingIdx           = historyIdx;
@@ -7478,11 +7478,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wy <= 0) return;
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(_inlineParams);
 
-        // Größe mit _canvasScale für korrekte Kontur-Übereinstimmung, Position mit _zoom für Zoom/Pan
-        double sl = (leftMm * _canvasScale) * _zoom + _panX;
-        double st = ((wy - (bottomMm + hMm)) * _canvasScale) * _zoom + _panY;
-        double sw = wMm * _canvasScale * _zoom;
-        double sh = hMm * _canvasScale * _zoom;
+        // Größe: mm * _zoom (weil Kontur auch mit _zoom skaliert wird)
+        double sl = leftMm * _zoom + _panX;
+        double st = (wy - (bottomMm + hMm)) * _zoom + _panY;
+        double sw = wMm * _zoom;
+        double sh = hMm * _zoom;
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
         _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
@@ -10159,15 +10159,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double wx = WorkX, wy = WorkY;
         if (wx <= 0 || wy <= 0) return;
 
-        // Echte Skalierung: WPF-Pixel pro Millimeter
+        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+
+        // Echte Skalierung: WPF-Pixel pro Millimeter (für Textfeld-Größenberechnung)
         double canvasW = DrawSkia.ActualWidth;
         double canvasH = DrawSkia.ActualHeight;
         _canvasScale = canvasW > 0 && canvasH > 0 ? Math.Min(canvasW / wx, canvasH / wy) : 1.0;
-        double scale = _canvasScale; // Verwende echte Skalierung überall
-
         (float px, float py) MmToPx(double x, double y) => (
-            (float)(x * scale),
-            (float)(canvasH - y * scale));
+            (float)(_topRect.Left + x * scale),
+            (float)(_topRect.Bottom - y * scale));
 
         void AddArc(SKPath p, float endX, float endY, float r, bool lg, bool cw) =>
             p.ArcTo(r, r, 0, lg ? SKPathArcSize.Large : SKPathArcSize.Small,
