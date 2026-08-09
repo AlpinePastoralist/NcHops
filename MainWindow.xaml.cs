@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private double _panX      = 0.0;
     private double _panY      = 0.0;
     private double _dpiScale  = 1.0;  // physische Pixel / logische Pixel (wird in OnDrawSkia aktualisiert)
+    private double _lastDpiScale = 1.0;  // Speichert letzten _dpiScale um Änderungen zu erkennen
     private double _canvasScale = 1.0; // Skalierung des Werkstücks auf die Canvas (wird in DrawGCodeTopViewSk aktualisiert)
     private bool   _isPanning = false;
     private Point  _panStart;   // Startpunkt im Parent-Koordinatensystem
@@ -9445,14 +9446,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     }
 
     /// <summary>
-    /// Aktualisiert Textfeld-Schriftgröße wenn _dpiScale sich ändert
+    /// Aktualisiert Textfeld-Schriftgröße wenn _dpiScale sich geändert hat
     /// </summary>
     private void UpdateTextFieldFontSizeIfNeeded()
     {
+        // Nur aktualisieren wenn sich _dpiScale seit letztem Update geändert hat
+        if (Math.Abs(_dpiScale - _lastDpiScale) < 0.001)
+            return;  // Keine Änderung
+
+        _lastDpiScale = _dpiScale;
+
         if (_inlineTextBox != null && _inlineParams != null && _dpiScale > 1.0)
         {
+            var currentText = _inlineTextBox.GetText();
             _inlineTextBox.SetText(
-                _inlineTextBox.GetText(),
+                currentText,
                 _inlineParams.FontFamily,
                 (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale),
                 _zoom);
