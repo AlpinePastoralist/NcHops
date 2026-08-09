@@ -89,7 +89,13 @@ public class ImprovedSkiaTextEditor : SKElement
         // ─── Border um das Eingabefeld IMMER zeichnen ──────────────────
         float availableWidth = (float)(Width > 0 ? Width : 400);
         float availableHeight = (float)(Height > 0 ? Height : 100);
-        DrawFieldBorder(canvas, availableWidth, availableHeight);
+
+        // DPI-Skalierung berechnen: physische Pixel / logische Pixel
+        float dpiScale = (Width > 0 && Height > 0)
+            ? Math.Min((float)e.Info.Width / (float)Width, (float)e.Info.Height / (float)Height)
+            : 1.0f;
+
+        DrawFieldBorder(canvas, availableWidth, availableHeight, dpiScale);
 
         // ─── Früh rückgängig wenn kein Text vorhanden ──────────────────
         if (_model.CharacterCount == 0)
@@ -169,12 +175,11 @@ public class ImprovedSkiaTextEditor : SKElement
     }
 
     /// <summary>
-    /// Zeichnet einen Rahmen um das Eingabefeld herum (innen, damit es nicht überlädt)
+    /// Zeichnet einen Rahmen um das Eingabefeld herum (äußere Kante mit DPI-Skalierung)
     /// </summary>
-    private void DrawFieldBorder(SKCanvas canvas, float width, float height)
+    private void DrawFieldBorder(SKCanvas canvas, float width, float height, float dpiScale = 1.0f)
     {
-        float borderWidth = 2.0f;
-        float halfStroke = borderWidth / 2.0f;
+        float borderWidth = 1.0f;
 
         using var borderPaint = new SKPaint
         {
@@ -184,9 +189,10 @@ public class ImprovedSkiaTextEditor : SKElement
             IsAntialias = true
         };
 
-        // Rechteck zeichnen: mit Offset nach innen, damit es nicht überlädt
-        // StrokeWidth/2 nach innen verschieben
-        var borderRect = new SKRect(halfStroke, halfStroke, width - halfStroke, height - halfStroke);
+        // Rechteck zeichnen: äußere Kante (0, 0) bis (width*dpiScale, height*dpiScale)
+        // Multipliziere mit dpiScale, um die unterschiedliche Auflösung zu berücksichtigen
+        // (physische Pixel vs. logische WPF-Pixel)
+        var borderRect = new SKRect(0, 0, width * dpiScale, height * dpiScale);
         canvas.DrawRect(borderRect, borderPaint);
     }
 
