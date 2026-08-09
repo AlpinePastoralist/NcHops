@@ -7336,10 +7336,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wx <= 0 || wy <= 0) return;
         _inlineExistingIdx = -1;   // new entry
 
-        // Stelle sicher, dass _dpiScale berechnet ist, bevor das Textfeld erstellt wird
-        if (_dpiScale <= 1.0)
-            DrawSkia?.InvalidateVisual();
-
         double ax = SnapX((screenA.X - _panX) / _zoom);
         double ay = SnapY(wy - (screenA.Y - _panY) / _zoom);
         double bx = SnapX((screenB.X - _panX) / _zoom);
@@ -9447,9 +9443,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     /// <summary>
     /// Aktualisiert Textfeld-Schriftgröße wenn _dpiScale sich geändert hat
+    /// (nur wenn Textfeld nicht den Fokus hat, um Cursor nicht zu resetzen)
     /// </summary>
     private void UpdateTextFieldFontSizeIfNeeded()
     {
+        // Nicht aufrufen wenn Benutzer gerade tippt (Textfeld hat Fokus)
+        if (_inlineTextBox?.IsFocused == true)
+            return;
+
         // Nur aktualisieren wenn sich _dpiScale seit letztem Update geändert hat
         if (Math.Abs(_dpiScale - _lastDpiScale) < 0.001)
             return;  // Keine Änderung
