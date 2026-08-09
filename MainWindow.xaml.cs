@@ -7394,7 +7394,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             HorizontalAlign = hAlign,
             VerticalAlign = vAlign,
         };
-        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
+        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
