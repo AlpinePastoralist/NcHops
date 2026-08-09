@@ -7380,11 +7380,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         HistoryList.SelectedItem     = _history[^1];
         TabEigenschaften.IsSelected  = true;
 
-        // Transparente TextBox — Position und Größe mit _zoom
-        double screenLeft = left * _zoom + _panX;
-        double screenTop  = (wy - (bottom + height)) * _zoom + _panY;
-        double screenW    = width * _zoom;
-        double screenH    = height * _zoom;
+        // Transparente TextBox — Position und Größe mit _zoom * _dpiScale
+        double screenLeft = left * _zoom * _dpiScale + _panX;
+        double screenTop  = (wy - (bottom + height)) * _zoom * _dpiScale + _panY;
+        double screenW    = width * _zoom * _dpiScale;
+        double screenH    = height * _zoom * _dpiScale;
 
         var (hAlign, vAlign) = ParseAlignment(_inlineParams.Ausrichtung, _inlineParams.AusrichtungV);
         _inlineTextBox = new ImprovedSkiaTextEditor
@@ -7415,12 +7415,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double fh = gp.TextHoehe > 0 ? gp.TextHoehe : gp.FontSizeMm;
         if (fh <= 0 || gp.TextBreite <= 0) return;
 
-        // mm-Grenzen → Screen-Koordinaten mit _zoom
+        // mm-Grenzen → Screen-Koordinaten mit _zoom * _dpiScale
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(gp);
-        double screenLeft = leftMm * _zoom + _panX;
-        double screenTop  = (WorkY - (bottomMm + hMm)) * _zoom + _panY;
-        double screenW    = wMm * _zoom;
-        double screenH    = hMm * _zoom;
+        double screenLeft = leftMm * _zoom * _dpiScale + _panX;
+        double screenTop  = (WorkY - (bottomMm + hMm)) * _zoom * _dpiScale + _panY;
+        double screenW    = wMm * _zoom * _dpiScale;
+        double screenH    = hMm * _zoom * _dpiScale;
         if (screenW < 4 || screenH < 4) return;
 
         _inlineExistingIdx           = historyIdx;
@@ -7478,11 +7478,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wy <= 0) return;
         var (leftMm, bottomMm, wMm, hMm) = TextFieldBoundsInMm(_inlineParams);
 
-        // Größe: mm * _zoom (weil Kontur auch mit _zoom skaliert wird)
-        double sl = leftMm * _zoom + _panX;
-        double st = (wy - (bottomMm + hMm)) * _zoom + _panY;
-        double sw = wMm * _zoom;
-        double sh = hMm * _zoom;
+        // Größe und Position: mm * _zoom * _dpiScale
+        // (Kontur wird auch mit _zoom * _dpiScale durch Zoom/Pan-Matrix transformiert)
+        double sl = leftMm * _zoom * _dpiScale + _panX;
+        double st = (wy - (bottomMm + hMm)) * _zoom * _dpiScale + _panY;
+        double sw = wMm * _zoom * _dpiScale;
+        double sh = hMm * _zoom * _dpiScale;
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
         _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale), _zoom);
