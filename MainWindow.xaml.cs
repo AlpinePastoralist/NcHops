@@ -7394,7 +7394,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             HorizontalAlign = hAlign,
             VerticalAlign = vAlign,
         };
-        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale), _zoom);
+        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom * GetDpiScale()), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
@@ -9430,6 +9430,28 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void OnAktualisieren(object sender, RoutedEventArgs e) => UpdateAll();
 
     private void OnCanvasSizeChanged(object sender, SizeChangedEventArgs e) => UpdateAll();
+
+    /// <summary>
+    /// Gibt _dpiScale zurück, berechnet sie aber falls noch nicht initialisiert
+    /// </summary>
+    private double GetDpiScale()
+    {
+        if (_dpiScale > 1.0) return _dpiScale;  // Schon berechnet
+
+        // Fallback: Berechne basierend auf Systemeinstellungen
+        try
+        {
+            var source = PresentationSource.FromVisual(this);
+            if (source?.CompositionTarget != null)
+            {
+                double dpiX = 96.0 * source.CompositionTarget.TransformToDevice.M11;
+                return dpiX / 96.0;
+            }
+        }
+        catch { }
+
+        return 1.0;  // Default fallback
+    }
 
     private bool _gcodeBoxDirty = false;
 
