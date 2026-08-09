@@ -7335,6 +7335,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wx <= 0 || wy <= 0) return;
         _inlineExistingIdx = -1;   // new entry
 
+        // Stelle sicher, dass _dpiScale berechnet ist, bevor das Textfeld erstellt wird
+        if (_dpiScale <= 1.0)
+            DrawSkia?.InvalidateVisual();
+
         double ax = SnapX((screenA.X - _panX) / _zoom);
         double ay = SnapY(wy - (screenA.Y - _panY) / _zoom);
         double bx = SnapX((screenB.X - _panX) / _zoom);
@@ -9432,25 +9436,27 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void OnCanvasSizeChanged(object sender, SizeChangedEventArgs e) => UpdateAll();
 
     /// <summary>
-    /// Gibt _dpiScale zurück, berechnet sie aber falls noch nicht initialisiert
+    /// Gibt _dpiScale zurück und aktualisiert Textfeld-Schriftgröße wenn sich DPI ändert
     /// </summary>
     private double GetDpiScale()
     {
-        if (_dpiScale > 1.0) return _dpiScale;  // Schon berechnet
+        // Wenn _dpiScale noch nicht berechnet wurde, verwende 1.0 (wird später aktualisiert)
+        return _dpiScale > 0 ? _dpiScale : 1.0;
+    }
 
-        // Fallback: Berechne basierend auf Systemeinstellungen
-        try
+    /// <summary>
+    /// Aktualisiert Textfeld-Schriftgröße wenn _dpiScale sich ändert
+    /// </summary>
+    private void UpdateTextFieldFontSizeIfNeeded()
+    {
+        if (_inlineTextBox != null && _inlineParams != null && _dpiScale > 1.0)
         {
-            var source = PresentationSource.FromVisual(this);
-            if (source?.CompositionTarget != null)
-            {
-                double dpiX = 96.0 * source.CompositionTarget.TransformToDevice.M11;
-                return dpiX / 96.0;
-            }
+            _inlineTextBox.SetText(
+                _inlineTextBox.GetText(),
+                _inlineParams.FontFamily,
+                (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale),
+                _zoom);
         }
-        catch { }
-
-        return 1.0;  // Default fallback
     }
 
     private bool _gcodeBoxDirty = false;
@@ -9870,6 +9876,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _dpiScale = e.Info.Width > 0 && DrawSkia.ActualWidth > 0
             ? e.Info.Width / DrawSkia.ActualWidth : 1.0;
         double dpiScale = _dpiScale;
+
+        // Aktualisiere Textfeld-Schriftgröße wenn _dpiScale sich geändert hat
+        UpdateTextFieldFontSizeIfNeeded();
 
         // Alle Zoom/Pan-Berechnungen in logischen Pixeln (cw/ch = WPF-DIPs).
         double cw = DrawSkia.ActualWidth;
