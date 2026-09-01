@@ -41,6 +41,7 @@ public class ImprovedSkiaTextEditor : SKElement
     private double _zoom = 1.0;
     private float _scaledPadding = 4f;
     private const float Padding = 4f;
+    private TextCharacterFormat _defaultFormat = new();  // Standard-Format für neue Zeichen
 
     // ─── Layout Settings ────────────────────────────────────────────
     public TextHorizontalAlign HorizontalAlign { get; set; } = TextHorizontalAlign.Left;
@@ -52,6 +53,14 @@ public class ImprovedSkiaTextEditor : SKElement
     public ImprovedSkiaTextEditor()
     {
         Focusable = true;
+
+        // Initialisiere _defaultFormat mit Standard-Werten
+        _defaultFormat = new TextCharacterFormat
+        {
+            FontFamily = "Segoe UI",
+            FontSizePt = 12f,
+            Color = SKColors.White
+        };
 
         PreviewMouseLeftButtonDown += OnMouseDown;
         PreviewMouseMove += OnMouseMove;
@@ -87,25 +96,26 @@ public class ImprovedSkiaTextEditor : SKElement
         canvas.Clear(SKColors.Transparent);
 
         // ─── Border um das Eingabefeld IMMER zeichnen ──────────────────
-        float availableWidth = (float)(Width > 0 ? Width : 400);
-        float availableHeight = (float)(Height > 0 ? Height : 100);
+        // Die physische Canvas-Größe (e.Info.Width/Height) ist IMMER die Wahrheit
+        // Der Rahmen sollte die volle Canvas-Größe in physischen Pixeln ausfüllen
+        float dpiScale = 1.0f;  // Canvas coordinates are already in physical pixels
 
-        // DPI-Skalierung berechnen: physische Pixel / logische Pixel
-        float dpiScale = (Width > 0 && Height > 0)
-            ? Math.Min((float)e.Info.Width / (float)Width, (float)e.Info.Height / (float)Height)
-            : 1.0f;
-
-        DrawFieldBorder(canvas, availableWidth, availableHeight, dpiScale);
+        DrawFieldBorder(canvas, e.Info.Width, e.Info.Height, dpiScale);
 
         // ─── Früh rückgängig wenn kein Text vorhanden ──────────────────
         if (_model.CharacterCount == 0)
             return;
 
         // ─── Layout berechnen ───────────────────────────────────────
+        // Arbeite direkt mit physischen Pixeln (e.Info.Width/Height sind physische Pixel)
+        // Der Text sollte sich von padding bis (width - padding) in physischen Pixeln ausdehnen
+        float layoutWidth = e.Info.Width - _scaledPadding * 2;
+        float layoutHeight = e.Info.Height - _scaledPadding * 2;
+
         _layoutEngine.Layout(
             _model,
-            availableWidth - _scaledPadding * 2,
-            availableHeight - _scaledPadding * 2,
+            Math.Max(layoutWidth, 1),  // Ensure minimum width
+            Math.Max(layoutHeight, 1),
             HorizontalAlign,
             VerticalAlign
         );
@@ -247,11 +257,37 @@ public class ImprovedSkiaTextEditor : SKElement
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
         Focus();
+
+        // Berechne DPI-Skalierung (Logical zu Physical Pixels)
+        var src = PresentationSource.FromVisual(this);
+        double dpiScale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+        // Berechne Layout mit physischen Pixel-Abmessungen
+        float layoutWidth = (float)(Width * dpiScale) - _scaledPadding * 2;
+        float layoutHeight = (float)(Height * dpiScale) - _scaledPadding * 2;
+        _layoutEngine.Layout(
+            _model,
+            Math.Max(layoutWidth, 1),
+            Math.Max(layoutHeight, 1),
+            HorizontalAlign,
+            VerticalAlign
+        );
+
+        // Konvertiere Mouse-Koordinaten von WPF Logical zu Physical Pixels
         var pos = e.GetPosition(this);
-        var contentPos = TransformScreenToContent((float)pos.X, (float)pos.Y);
+        float physicalX = (float)(pos.X * dpiScale);
+        float physicalY = (float)(pos.Y * dpiScale);
+        var contentPos = TransformScreenToContent(physicalX, physicalY);
         _cursorPos = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
+
+        // Initialisiere Selection für Drag: Start und End auf aktuelle Position
+        // Während OnMouseMove wird _selectionEnd aktualisiert
         _selectionStart = _cursorPos;
+        _selectionEnd = _cursorPos;
         InvalidateVisual();
+
+        // Event als behandelt markieren, damit OnCanvasMouseDown nicht aufgerufen wird
+        e.Handled = true;
     }
 
     private void OnMouseMove(object sender, MouseEventArgs e)
@@ -259,10 +295,31 @@ public class ImprovedSkiaTextEditor : SKElement
         if (e.LeftButton != MouseButtonState.Pressed)
             return;
 
+        // Berechne DPI-Skalierung (Logical zu Physical Pixels)
+        var src = PresentationSource.FromVisual(this);
+        double dpiScale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+        // Berechne Layout mit physischen Pixel-Abmessungen
+        float layoutWidth = (float)(Width * dpiScale) - _scaledPadding * 2;
+        float layoutHeight = (float)(Height * dpiScale) - _scaledPadding * 2;
+        _layoutEngine.Layout(
+            _model,
+            Math.Max(layoutWidth, 1),
+            Math.Max(layoutHeight, 1),
+            HorizontalAlign,
+            VerticalAlign
+        );
+
+        // Konvertiere Mouse-Koordinaten von WPF Logical zu Physical Pixels
         var pos = e.GetPosition(this);
-        var contentPos = TransformScreenToContent((float)pos.X, (float)pos.Y);
+        float physicalX = (float)(pos.X * dpiScale);
+        float physicalY = (float)(pos.Y * dpiScale);
+        var contentPos = TransformScreenToContent(physicalX, physicalY);
         _selectionEnd = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
         InvalidateVisual();
+
+        // Event als behandelt markieren
+        e.Handled = true;
     }
 
     /// <summary>
@@ -278,35 +335,101 @@ public class ImprovedSkiaTextEditor : SKElement
         return (contentX, contentY);
     }
 
-    private void OnMouseUp(object sender, MouseButtonEventArgs e) { }
+    private void OnMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        // Event als behandelt markieren
+        e.Handled = true;
+    }
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
         if (!_hasFocus)
             return;
 
+        bool isShiftPressed = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+
         if (e.Key == Key.Left)
         {
-            _cursorPos = Math.Max(0, _cursorPos - 1);
-            _selectionStart = _selectionEnd = -1;
+            if (isShiftPressed)
+            {
+                // Shift+Left: Selection erweitern/verkleinern
+                if (_selectionStart < 0) _selectionStart = _cursorPos;
+                _cursorPos = Math.Max(0, _cursorPos - 1);
+                _selectionEnd = _cursorPos;
+                // Wenn Selection leer ist, deselektieren
+                if (_selectionStart == _selectionEnd) _selectionStart = _selectionEnd = -1;
+            }
+            else
+            {
+                // Normal Left: Cursor bewegen, Selection löschen
+                _cursorPos = Math.Max(0, _cursorPos - 1);
+                _selectionStart = _selectionEnd = -1;
+            }
             e.Handled = true;
         }
         else if (e.Key == Key.Right)
         {
-            _cursorPos = Math.Min(_model.CharacterCount, _cursorPos + 1);
-            _selectionStart = _selectionEnd = -1;
+            if (isShiftPressed)
+            {
+                // Shift+Right: Selection erweitern/verkleinern
+                if (_selectionStart < 0) _selectionStart = _cursorPos;
+                _cursorPos = Math.Min(_model.CharacterCount, _cursorPos + 1);
+                _selectionEnd = _cursorPos;
+                // Wenn Selection leer ist, deselektieren
+                if (_selectionStart == _selectionEnd) _selectionStart = _selectionEnd = -1;
+            }
+            else
+            {
+                // Normal Right: Cursor bewegen, Selection löschen
+                _cursorPos = Math.Min(_model.CharacterCount, _cursorPos + 1);
+                _selectionStart = _selectionEnd = -1;
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Up)
+        {
+            MoveCursorUp();
+            if (!isShiftPressed) _selectionStart = _selectionEnd = -1;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down)
+        {
+            MoveCursorDown();
+            if (!isShiftPressed) _selectionStart = _selectionEnd = -1;
             e.Handled = true;
         }
         else if (e.Key == Key.Home)
         {
-            _cursorPos = 0;
-            _selectionStart = _selectionEnd = -1;
+            if (isShiftPressed)
+            {
+                // Shift+Home: Selection bis Anfang der Zeile
+                if (_selectionStart < 0) _selectionStart = _cursorPos;
+                _cursorPos = 0;
+                _selectionEnd = _cursorPos;
+                if (_selectionStart == _selectionEnd) _selectionStart = _selectionEnd = -1;
+            }
+            else
+            {
+                _cursorPos = 0;
+                _selectionStart = _selectionEnd = -1;
+            }
             e.Handled = true;
         }
         else if (e.Key == Key.End)
         {
-            _cursorPos = _model.CharacterCount;
-            _selectionStart = _selectionEnd = -1;
+            if (isShiftPressed)
+            {
+                // Shift+End: Selection bis Textende
+                if (_selectionStart < 0) _selectionStart = _cursorPos;
+                _cursorPos = _model.CharacterCount;
+                _selectionEnd = _cursorPos;
+                if (_selectionStart == _selectionEnd) _selectionStart = _selectionEnd = -1;
+            }
+            else
+            {
+                _cursorPos = _model.CharacterCount;
+                _selectionStart = _selectionEnd = -1;
+            }
             e.Handled = true;
         }
         else if (e.Key == Key.Delete)
@@ -322,6 +445,15 @@ public class ImprovedSkiaTextEditor : SKElement
                 _model.DeleteCharAt(_cursorPos);
                 TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
             }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Return)
+        {
+            // Enter als Zeilenumbruch
+            DeleteSelection();
+            _model.InsertChar(_cursorPos, '\n', _defaultFormat.Clone());
+            _cursorPos++;
+            TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
             e.Handled = true;
         }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.A)
@@ -348,7 +480,8 @@ public class ImprovedSkiaTextEditor : SKElement
 
         foreach (char c in e.Text)
         {
-            _model.InsertChar(_cursorPos, c);
+            // Verwende _defaultFormat für neue Zeichen, damit sie die richtige Schriftgröße haben
+            _model.InsertChar(_cursorPos, c, _defaultFormat.Clone());
             _cursorPos++;
         }
 
@@ -371,6 +504,50 @@ public class ImprovedSkiaTextEditor : SKElement
         _cursorPos = start;
         _selectionStart = _selectionEnd = -1;
         TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
+    }
+
+    /// <summary>
+    /// Cursor eine Zeile nach oben bewegen (oder am Anfang bleiben)
+    /// </summary>
+    private void MoveCursorUp()
+    {
+        var (lineIdx, colInLine) = _layoutEngine.GetCursorLineColumn(_cursorPos);
+
+        if (lineIdx <= 0)
+        {
+            // Bereits in der ersten Zeile → zum Anfang
+            _cursorPos = 0;
+            return;
+        }
+
+        // Zur vorherigen Zeile wechseln
+        var prevLine = _layoutEngine.Lines[lineIdx - 1];
+
+        // Versuche, die gleiche Spalte in der vorherigen Zeile zu erreichen
+        int targetCol = Math.Min(colInLine, prevLine.EndCharIdx - prevLine.StartCharIdx);
+        _cursorPos = prevLine.StartCharIdx + targetCol;
+    }
+
+    /// <summary>
+    /// Cursor eine Zeile nach unten bewegen (oder am Ende bleiben)
+    /// </summary>
+    private void MoveCursorDown()
+    {
+        var (lineIdx, colInLine) = _layoutEngine.GetCursorLineColumn(_cursorPos);
+
+        if (lineIdx >= _layoutEngine.Lines.Count - 1)
+        {
+            // Bereits in der letzten Zeile → zum Ende
+            _cursorPos = _model.CharacterCount;
+            return;
+        }
+
+        // Zur nächsten Zeile wechseln
+        var nextLine = _layoutEngine.Lines[lineIdx + 1];
+
+        // Versuche, die gleiche Spalte in der nächsten Zeile zu erreichen
+        int targetCol = Math.Min(colInLine, nextLine.EndCharIdx - nextLine.StartCharIdx);
+        _cursorPos = nextLine.StartCharIdx + targetCol;
     }
 
     private void StartCursorBlink()
@@ -418,6 +595,9 @@ public class ImprovedSkiaTextEditor : SKElement
             Color = SKColors.White
         };
 
+        // Speichere das Format als Standard für neue Zeichen
+        _defaultFormat = format.Clone();
+
         _model.SetText(text, format);
         _cursorPos = 0;
         _selectionStart = _selectionEnd = -1;
@@ -455,6 +635,62 @@ public class ImprovedSkiaTextEditor : SKElement
         _scaledPadding = (float)(Padding * _zoom);
         _cursorPos = 0;
         _selectionStart = _selectionEnd = -1;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Aktualisiert die Schriftgröße für alle Zeichen, OHNE den Cursor zu resetzen.
+    /// Dies wird verwendet, wenn _dpiScale berechnet wurde und wir die Schriftgröße korrigieren müssen.
+    /// </summary>
+    public void UpdateFontSize(float newFontSize)
+    {
+        _model.UpdateFontSizeAll(newFontSize);
+
+        // Aktualisiere auch _defaultFormat, damit neue Zeichen die neue Größe bekommen
+        _defaultFormat.FontSizePt = newFontSize;
+
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Setzt die Cursor-Position basierend auf Screen-Koordinaten (WPF-Pixel im Element)
+    /// </summary>
+    public void SetCursorAtPosition(double screenX, double screenY)
+    {
+        // screenX/Y sind in WPF Logical Pixels von GetPosition()
+        // Konvertiere zu Physical Pixels für das Layout
+        var src = PresentationSource.FromVisual(this);
+        double dpiScale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+        float physicalX = (float)(screenX * dpiScale);
+        float physicalY = (float)(screenY * dpiScale);
+        var contentPos = TransformScreenToContent(physicalX, physicalY);
+        _cursorPos = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
+        _selectionStart = _selectionEnd = -1;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Aktualisiert die Formatierung aller Zeichen, OHNE den Cursor-Zustand zu verändern
+    /// Dies ist für die Live-Aktualisierung von Schriftart/Größe gedacht
+    /// </summary>
+    public void UpdateCharacterFormat(TextCharacterFormat format)
+    {
+        if (_model == null || _model.CharacterCount == 0) return;
+
+        for (int i = 0; i < _model.CharacterCount; i++)
+        {
+            var ch = _model.Characters[i];
+            ch.Format.FontFamily = format.FontFamily;
+            ch.Format.FontSizePt = format.FontSizePt;
+            ch.Format.Tracking = format.Tracking;
+            ch.Format.LineHeight = format.LineHeight;
+            // Weitere Eigenschaften können hier auch aktualisiert werden, falls nötig
+        }
+
+        // Aktualisiere auch das Standard-Format für neue Zeichen
+        _defaultFormat = format.Clone();
+
         InvalidateVisual();
     }
 }

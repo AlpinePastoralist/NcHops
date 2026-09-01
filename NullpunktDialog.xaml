@@ -1,0 +1,247 @@
+<Window x:Class="NCHops.NullpunktDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Nullpunkt auswählen"
+        SizeToContent="Manual"
+        Width="420"
+        Height="380"
+        WindowStartupLocation="CenterOwner"
+        Background="#d8e0ea"
+        Icon="icon.ico"
+        Topmost="True"
+        Padding="0">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="AccentBrush"       Color="#DDD0B0"/>
+        <SolidColorBrush x:Key="AccentHoverBrush"  Color="#E6DBBF"/>
+        <SolidColorBrush x:Key="AccentPressBrush"  Color="#CEC09E"/>
+        <SolidColorBrush x:Key="TextOnAccentBrush" Color="#3A2C10"/>
+        <SolidColorBrush x:Key="TextDarkBrush"     Color="#6A5430"/>
+        <SolidColorBrush x:Key="BgLightBrush"      Color="#eaecf2"/>
+        <SolidColorBrush x:Key="BorderBrush"       Color="#a8b4c0"/>
+
+        <!-- Button Style -->
+        <Style TargetType="Button">
+            <Setter Property="Background"      Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Foreground"      Value="{StaticResource TextOnAccentBrush}"/>
+            <Setter Property="BorderBrush"     Value="{StaticResource AccentPressBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding"         Value="12,5"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background"
+                                        Value="{StaticResource AccentHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background"
+                                        Value="{StaticResource AccentPressBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- RadioButton Style - größer und anklickbar -->
+        <Style TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="8"/>
+        </Style>
+
+        <!-- Null punkt Cell Button Style -->
+        <Style x:Key="NullpunktCellStyle" TargetType="Button">
+            <Setter Property="Width" Value="80"/>
+            <Setter Property="Height" Value="80"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="Background" Value="{StaticResource BgLightBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#E0E8F0"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#D0DDEA"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Titel -->
+        <TextBlock Grid.Row="0"
+                   Text="Wählen Sie die Nullpunkt-Position auf dem Werkstück:"
+                   FontSize="14"
+                   FontWeight="SemiBold"
+                   Foreground="{StaticResource TextOnAccentBrush}"
+                   Margin="20,20,20,20"/>
+
+        <!-- 3x3 Grid mit Buttons -->
+        <UniformGrid Grid.Row="1"
+                     Rows="3"
+                     Columns="3"
+                     Margin="20,0,20,20"
+                     HorizontalAlignment="Center">
+
+            <!-- Oben Links -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="0"
+                    ToolTip="Oben Links">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Top">
+                    <RadioButton x:Name="RbObenLinks"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"/>
+                </Grid>
+            </Button>
+
+            <!-- Oben Mitte -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="1"
+                    ToolTip="Oben Mitte">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Top">
+                    <RadioButton x:Name="RbObenMitte"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+
+            <!-- Oben Rechts -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="2"
+                    ToolTip="Oben Rechts">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Top">
+                    <RadioButton x:Name="RbObenRechts"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+
+            <!-- Mitte Links -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="3"
+                    ToolTip="Mitte Links">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <RadioButton x:Name="RbMitteLinks"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+
+            <!-- Mitte Mitte (Center) -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="4"
+                    ToolTip="Mitte">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <RadioButton x:Name="RbMitte"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+
+            <!-- Mitte Rechts -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="5"
+                    ToolTip="Mitte Rechts">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <RadioButton x:Name="RbMitteRechts"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+
+            <!-- Unten Links -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="6"
+                    ToolTip="Unten Links">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Bottom">
+                    <RadioButton x:Name="RbUntenLinks"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="True"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+
+            <!-- Unten Mitte -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="7"
+                    ToolTip="Unten Mitte">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Bottom">
+                    <RadioButton x:Name="RbUntenMitte"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+
+            <!-- Unten Rechts -->
+            <Button Style="{StaticResource NullpunktCellStyle}"
+                    Click="OnPositionClicked"
+                    Tag="8"
+                    ToolTip="Unten Rechts">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Bottom">
+                    <RadioButton x:Name="RbUntenRechts"
+                                 GroupName="Nullpunkt"
+                                 IsChecked="False"
+                                 IsHitTestVisible="False"/>
+                </Grid>
+            </Button>
+        </UniformGrid>
+
+    </Grid>
+</Window>

@@ -260,6 +260,23 @@
                                    FontFamily="Segoe MDL2 Assets" Text="&#xE768;"/>
                     </MenuItem.Icon>
                 </MenuItem>
+                <MenuItem Header="SVG exportieren..." Click="OnExportSvg">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE8B1;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="Werkstück">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="▭" FontSize="12"/>
+                    </MenuItem.Icon>
+                    <MenuItem Header="Nullpunkt X, Y" Click="OnWerkstueckNullpunkt">
+                        <MenuItem.Icon>
+                            <TextBlock Style="{StaticResource MI}" Text="⊙" FontSize="13"/>
+                        </MenuItem.Icon>
+                    </MenuItem>
+                </MenuItem>
                 <Separator/>
                 <MenuItem Header="🔬 Textfeld-Prototype Demo" Click="OnShowTextfieldPrototype">
                     <MenuItem.Icon>
@@ -643,20 +660,11 @@
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>
-                            <Button x:Name="BtnToolVCarveText"
-                                    Style="{StaticResource ToolPalBtn}"
-                                    Click="OnToolVCarveText"
-                                    ToolTip="V-Carve Textfeld aufziehen (WPF)">
-                                <TextBlock Text="T" FontSize="15" Foreground="White"
-                                           FontWeight="Bold"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"/>
-                            </Button>
                             <Button x:Name="BtnToolVCarveTextSk"
                                     Style="{StaticResource ToolPalBtn}"
                                     Click="OnToolVCarveTextSk"
                                     ToolTip="V-Carve Textfeld aufziehen (Skia – schneller)">
-                                <TextBlock Text="T₂" FontSize="13" Foreground="White"
+                                <TextBlock Text="T" FontSize="13" Foreground="White"
                                            FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
@@ -1017,11 +1025,6 @@
                                         Margin="0,0,0,10"
                                         Click="OnGCodeBerechnen"/>
 
-                                <TextBlock Text="Schriftart:" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                <ComboBox x:Name="EigFont" IsEditable="True"
-                                          Margin="0,0,0,10"
-                                          SelectionChanged="OnEigFontChanged"
-                                          KeyUp="OnEigFontKeyUp"/>
 
                                 <TextBlock Text="Bezugspunkt:" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                 <ComboBox x:Name="EigBezugspunkt" Margin="0,0,0,6"
@@ -1063,15 +1066,7 @@
                                         <TextBlock Text="Feldbreite (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                         <TextBox x:Name="EigTextBreite" TextChanged="OnEigSizeChanged"/>
                                     </StackPanel>
-                                </Grid>
-
-                                <Grid Margin="0,0,0,6">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="8"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
+                                    <StackPanel Grid.Column="2">
                                         <TextBlock Text="Feldhöhe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
                                         <TextBox x:Name="EigTextHoehe" TextChanged="OnEigSizeChanged"/>
                                     </StackPanel>
@@ -1084,8 +1079,30 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Schriftart:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="EigFont" IsEditable="True"
+                                                  SelectionChanged="OnEigFontChanged"
+                                                  KeyUp="OnEigFontKeyUp"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
                                         <TextBlock Text="Schriftgröße (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigFontSize" TextChanged="OnEigSizeChanged"/>
+                                        <TextBox x:Name="EigFontSize" TextChanged="OnEigSizeChanged" PreviewKeyDown="OnEigFontSizeKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Zeichenabstand (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigTracking" TextChanged="OnEigSizeChanged"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Zeilenabstand (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="EigLineHeight" TextChanged="OnEigSizeChanged"/>
                                     </StackPanel>
                                 </Grid>
 

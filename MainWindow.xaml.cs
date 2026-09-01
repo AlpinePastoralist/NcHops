@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -44,8 +44,11 @@ public partial class MainWindow : Window
     private Point  _panStart;   // Startpunkt im Parent-Koordinatensystem
     private Point  _panOrigin;  // _panX/_panY beim Drag-Start
 
+    // ── Nullpunkt Position ───────────────────────────────────────
+    private int _nullpunktPosition = 6; // 0-8: Oben-Links bis Unten-Rechts (Standard: Unten-Links)
+
     // ── Aktives Werkzeug ─────────────────────────────────────────
-    private enum CanvasTool { Select, Hand, Zoom, VCarveText, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, Rechteck, Kreis, NEck }
+    private enum CanvasTool { Select, Hand, Zoom, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, Rechteck, Kreis, NEck }
     private CanvasTool _activeTool    = CanvasTool.Select;
     private bool       _isZoomDragging = false;
     private Point      _zoomDragStart;
@@ -369,6 +372,341 @@ public partial class MainWindow : Window
     private double WorkZ => double.TryParse(TxtZ.Text, System.Globalization.NumberStyles.Float,
         System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 19;
 
+    /// <summary>
+    /// Berechnet die Nullpunkt-Koordinaten (X, Y) basierend auf der Nullpunkt-Position.
+    /// Position 0-8: 0=ObenLinks, 1=ObenMitte, 2=ObenRechts,
+    ///              3=MitteLinks, 4=Mitte, 5=MitteRechts,
+    ///              6=UntenLinks, 7=UntenMitte, 8=UntenRechts
+    /// </summary>
+    private (double nullpunkX, double nullpunkY) GetNullpunktCoordinates()
+    {
+        double x = _nullpunktPosition switch
+        {
+            0 or 3 or 6 => 0,           // Links
+            1 or 4 or 7 => WorkX / 2,   // Mitte
+            2 or 5 or 8 => WorkX,       // Rechts
+            _ => 0
+        };
+
+        double y = _nullpunktPosition switch
+        {
+            0 or 1 or 2 => WorkY,       // Oben
+            3 or 4 or 5 => WorkY / 2,   // Mitte
+            6 or 7 or 8 => 0,           // Unten
+            _ => 0
+        };
+
+        return (x, y);
+    }
+
+    /// <summary>
+    /// Berechnet die Offset für alle Koordinaten basierend auf Nullpunkt.
+    /// Das Standard-System hat Nullpunkt oben-links (0,0).
+    /// Diese Methode berechnet, wie viel jede Koordinate verschoben werden muss.
+    /// </summary>
+    private (double offsetX, double offsetY) GetNullpunktOffset()
+    {
+        var (nullX, nullY) = GetNullpunktCoordinates();
+        // Offset ist die negative des Nullpunkts (wir wollen von dort aus rechnen)
+        return (-nullX, -nullY);
+    }
+
+    /// <summary>
+    /// Konvertiert Koordinaten vom Standard-System (oben-links) zum Nullpunkt-System.
+    /// Wird verwendet für die Speicherung von Bearbeitungen.
+    /// </summary>
+    private (double x, double y) ConvertToNullpunktCoordinates(double standardX, double standardY)
+    {
+        // Wenn Nullpunkt = Unten-Links (Standard), keine Konvertierung nötig
+        if (_nullpunktPosition == 6)
+            return (standardX, standardY);
+
+        // Berechne die Verschiebung vom Werkstück-Ursprung zum Nullpunkt
+        var (nullX, nullY) = GetNullpunktCoordinates();
+
+        // Konvertiere: Koordinate relativ zu Nullpunkt
+        double newX = standardX - nullX;
+        double newY = standardY - nullY;
+
+        return (newX, newY);
+    }
+
+    /// <summary>
+    /// Konvertiert Koordinaten vom Nullpunkt-System zurück zum Standard-System (oben-links).
+    /// Wird verwendet für die Visualisierung von Fräsbahnen.
+    /// </summary>
+    private (double x, double y) ConvertFromNullpunktCoordinates(double nullpunktX, double nullpunktY)
+    {
+        // Wenn Nullpunkt = Unten-Links (Standard), keine Konvertierung nötig
+        if (_nullpunktPosition == 6)
+            return (nullpunktX, nullpunktY);
+
+        // Berechne die Verschiebung vom Werkstück-Ursprung zum Nullpunkt
+        var (nullX, nullY) = GetNullpunktCoordinates();
+
+        // Konvertiere zurück: von Nullpunkt-Koordinate zu Standard-Koordinate
+        double newX = nullpunktX + nullX;
+        double newY = nullpunktY + nullY;
+
+        return (newX, newY);
+    }
+
+    /// <summary>
+    /// Konvertiert Koordinaten mit Bezugspunkt-Logik und Nullpunkt-Anpassung.
+    /// Wird für die Zeichnung von Fräsbahnen verwendet.
+    /// </summary>
+    private (double x, double y) GetAbsoluteCoordinates(string bezugspunkt, double xRel, double yRel, double workW, double workH)
+    {
+        // Zuerst: Konvertiere von Nullpunkt-System zu Oben-Links-System
+        var (standardX, standardY) = ConvertFromNullpunktCoordinates(xRel, yRel);
+
+        // Dann: Wende Bezugspunkt-Logik an
+        return GCodeGenerator.ConvertBezugspunkt(bezugspunkt, standardX, standardY, workW, workH);
+    }
+
+    /// <summary>
+    /// Passt die Bearbeitungs-Parameter an den aktuellen Nullpunkt an.
+    /// Konvertiert alle Koordinaten vom Standard-System zum Nullpunkt-System.
+    /// </summary>
+    private object AdjustParamsToNullpunkt(object param)
+    {
+        // Wenn Nullpunkt = Unten-Links (Standard), keine Konvertierung nötig
+        if (_nullpunktPosition == 6)
+            return param;
+
+        try
+        {
+            return param switch
+            {
+                BohrungParams p =>
+                    AdjustBohrung(p),
+
+                UmfahrenParams p =>
+                    AdjustUmfahren(p),
+
+                TascheFräsenParams p =>
+                    AdjustTasche(p),
+
+                KreistascheParams p =>
+                    AdjustKreistasche(p),
+
+                RechteckParams p =>
+                    AdjustRechteck(p),
+
+                KreisParams p =>
+                    AdjustKreis(p),
+
+                NEckParams p =>
+                    AdjustNEck(p),
+
+                GraviereParams p =>
+                    AdjustGravieren(p),
+
+                PfadPunktParams p =>
+                    AdjustPfadPunkt(p),
+
+                _ => param
+            };
+        }
+        catch
+        {
+            return param; // Bei Fehler unverändert zurückgeben
+        }
+    }
+
+    private BohrungParams AdjustBohrung(BohrungParams p)
+    {
+        var (newX, newY) = ConvertToNullpunktCoordinates(p.XRel, p.YRel);
+        return p with { XRel = Math.Round(newX, 3), YRel = Math.Round(newY, 3) };
+    }
+
+    private UmfahrenParams AdjustUmfahren(UmfahrenParams p)
+    {
+        // Umfahren hat keine XRel/YRel Eigenschaften, daher keine Anpassung
+        return p;
+    }
+
+    private TascheFräsenParams AdjustTasche(TascheFräsenParams p)
+    {
+        var (newX, newY) = ConvertToNullpunktCoordinates(p.XRel, p.YRel);
+        return p with { XRel = Math.Round(newX, 3), YRel = Math.Round(newY, 3) };
+    }
+
+    private KreistascheParams AdjustKreistasche(KreistascheParams p)
+    {
+        var (newX, newY) = ConvertToNullpunktCoordinates(p.XRel, p.YRel);
+        return p with { XRel = Math.Round(newX, 3), YRel = Math.Round(newY, 3) };
+    }
+
+    private RechteckParams AdjustRechteck(RechteckParams p)
+    {
+        var (newX, newY) = ConvertToNullpunktCoordinates(p.XRel, p.YRel);
+        return p with { XRel = Math.Round(newX, 3), YRel = Math.Round(newY, 3) };
+    }
+
+    private KreisParams AdjustKreis(KreisParams p)
+    {
+        var (newX, newY) = ConvertToNullpunktCoordinates(p.XRel, p.YRel);
+        return p with { XRel = Math.Round(newX, 3), YRel = Math.Round(newY, 3) };
+    }
+
+    private NEckParams AdjustNEck(NEckParams p)
+    {
+        var (newX, newY) = ConvertToNullpunktCoordinates(p.XRel, p.YRel);
+        return p with { XRel = Math.Round(newX, 3), YRel = Math.Round(newY, 3) };
+    }
+
+    private GraviereParams AdjustGravieren(GraviereParams p)
+    {
+        // Gravieren hat verschiedene Eigenschaften, keine direkte X/Y Anpassung möglich
+        return p;
+    }
+
+    private PfadPunktParams AdjustPfadPunkt(PfadPunktParams p)
+    {
+        var (newX, newY) = ConvertToNullpunktCoordinates(p.XRel, p.YRel);
+        var (newXMid, newYMid) = ConvertToNullpunktCoordinates(p.XMid, p.YMid);
+        return p with
+        {
+            XRel = Math.Round(newX, 3),
+            YRel = Math.Round(newY, 3),
+            XMid = Math.Round(newXMid, 3),
+            YMid = Math.Round(newYMid, 3)
+        };
+    }
+
+    /// <summary>
+    /// Formatiert die Display-Details für einen History-Eintrag, berücksichtigt Nullpunkt.
+    /// Ersetzt X/Y Koordinaten in den Details mit Nullpunkt-relativen Werten.
+    /// </summary>
+    private string FormatHistoryDetails(HistoryEntry entry)
+    {
+        try
+        {
+            // Nur Koordinaten anpassen, wenn Nullpunkt nicht Unten-Links ist
+            if (_nullpunktPosition == 6)
+                return entry.Details; // Unverändert
+
+            var details = entry.Details;
+
+            // Ersetze X/Y Koordinaten in den Details
+            var (nullX, nullY) = GetNullpunktCoordinates();
+
+            // Finde alle "X=<zahl>" Muster und ersetze sie
+            details = System.Text.RegularExpressions.Regex.Replace(details, @"X=([-+]?\d+\.?\d*)", match =>
+            {
+                if (double.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var x))
+                {
+                    double newX = x - nullX;
+                    return $"X={newX:F0}";
+                }
+                return match.Value;
+            });
+
+            // Finde alle "Y=<zahl>" Muster und ersetze sie
+            details = System.Text.RegularExpressions.Regex.Replace(details, @"Y=([-+]?\d+\.?\d*)", match =>
+            {
+                if (double.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var y))
+                {
+                    double newY = y - nullY;
+                    return $"Y={newY:F0}";
+                }
+                return match.Value;
+            });
+
+            return details;
+        }
+        catch
+        {
+            return entry.Details; // Bei Fehler Original-Details
+        }
+    }
+
+    /// <summary>
+    /// Passt den generierten GCode an, um Nullpunkt-Verschiebung zu berücksichtigen.
+    /// Verschiebt alle X und Y Koordinaten um den Nullpunkt-Offset.
+    /// </summary>
+    private string ApplyNullpunktOffsetToGCode(string gcode)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(gcode))
+                return gcode;
+
+            var (offsetX, offsetY) = GetNullpunktOffset();
+            if (Math.Abs(offsetX) < 0.001 && Math.Abs(offsetY) < 0.001)
+                return gcode; // Kein Offset nötig
+
+            var lines = gcode.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+            var adjustedLines = new List<string>();
+
+            foreach (var line in lines)
+            {
+                string adjustedLine = line;
+
+                // G0/G1/G2/G3 Befehle mit X/Y Koordinaten anpassen
+                if (!string.IsNullOrEmpty(line) &&
+                    (line.Contains("G0") || line.Contains("G1") || line.Contains("G2") || line.Contains("G3")))
+                {
+                    adjustedLine = AdjustCoordinateLine(line, offsetX, offsetY);
+                }
+
+                adjustedLines.Add(adjustedLine);
+            }
+
+            return string.Join(Environment.NewLine, adjustedLines);
+        }
+        catch
+        {
+            // Bei Fehler den GCode unverändert zurückgeben
+            return gcode;
+        }
+    }
+
+    private string AdjustCoordinateLine(string line, double offsetX, double offsetY)
+    {
+        try
+        {
+            var result = line;
+
+            // X Koordinate anpassen
+            var xMatch = System.Text.RegularExpressions.Regex.Match(line, @"X([-+]?\d+\.?\d*)");
+            if (xMatch.Success)
+            {
+                string xStr = xMatch.Groups[1].Value;
+                if (double.TryParse(xStr, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var x))
+                {
+                    double newX = x + offsetX;
+                    // Ersetze nur das erste Vorkommen, um Probleme zu vermeiden
+                    result = result.Replace($"X{xStr}", $"X{newX:F4}", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+
+            // Y Koordinate anpassen (auf dem bereits angepassten String)
+            var yMatch = System.Text.RegularExpressions.Regex.Match(result, @"Y([-+]?\d+\.?\d*)");
+            if (yMatch.Success)
+            {
+                string yStr = yMatch.Groups[1].Value;
+                if (double.TryParse(yStr, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var y))
+                {
+                    double newY = y + offsetY;
+                    result = result.Replace($"Y{yStr}", $"Y{newY:F4}", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+
+            return result;
+        }
+        catch
+        {
+            // Bei Fehler die Zeile unverändert zurückgeben
+            return line;
+        }
+    }
+
     // ── Menü ─────────────────────────────────────────────────────
 
     private void OnSpeichern(object sender, RoutedEventArgs e)
@@ -445,6 +783,196 @@ public partial class MainWindow : Window
         prototypeWindow.ShowDialog();
     }
 
+    private void OnWerkstueckNullpunkt(object sender, RoutedEventArgs e)
+    {
+        var dlg = new NullpunktDialog { Owner = this };
+        if (dlg.ShowDialog() == true)
+        {
+            _nullpunktPosition = dlg.SelectedPosition;
+
+            // History-Details aktualisieren mit neuen Nullpunkt-Koordinaten
+            UpdateHistoryDetailsForNullpunkt();
+
+            // Zeichnung aktualisieren
+            DrawSkia.InvalidateVisual();
+        }
+    }
+
+    private void UpdateHistoryDetailsForNullpunkt()
+    {
+        for (int i = 0; i < _history.Count; i++)
+        {
+            var entry = _history[i];
+            string newDetails = FormatHistoryDetails(entry);
+
+            // Wenn Details sich geändert haben, aktualisiere den Eintrag
+            if (newDetails != entry.Details)
+            {
+                _history[i] = new HistoryEntry(entry.Label, newDetails, entry.Params, entry.Level);
+            }
+        }
+
+        // History-Anzeige aktualisieren
+        _historyView?.Refresh();
+    }
+
+    /// <summary>
+    /// Hilfsmethode zum Erstellen und Speichern einer neuen Bearbeitung mit Nullpunkt-Anpassung.
+    /// </summary>
+    private void AddHistoryEntry(string label, string details, object param)
+    {
+        // Parameter an Nullpunkt anpassen
+        var adjustedParam = AdjustParamsToNullpunkt(param);
+
+        // Details neu formatieren (für aktuelle Anzeige)
+        var formattedDetails = FormatHistoryDetails(
+            new HistoryEntry(label, details, adjustedParam, 0));
+
+        _history.Add(new HistoryEntry(label, formattedDetails, adjustedParam));
+    }
+
+    /// <summary>
+    /// SVG Export: Exportiert G-Code + Text-Konturlinien als SVG
+    /// </summary>
+    private void OnExportSvg(object sender, RoutedEventArgs e)
+    {
+        // Überprüfe ob G-Code vorhanden ist
+        if (string.IsNullOrWhiteSpace(_gcodeContent))
+        {
+            MessageBox.Show(this,
+                "Kein G-Code vorhanden.\n\nBitte generieren Sie zuerst G-Code durch:\n" +
+                "1. Ein Werkzeug aus der \"Fräsen\" Liste auswählen\n" +
+                "2. Parameter eingeben\n" +
+                "3. G-Code generieren",
+                "SVG Export - Fehler",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        // Versuche die letzten GraviereParams zu finden
+        var lastGraviereParams = _history
+            .Select(h => h.Params)
+            .OfType<GraviereParams>()
+            .LastOrDefault();
+
+        if (lastGraviereParams == null)
+        {
+            MessageBox.Show(this,
+                "Keine Text-Parameter gefunden.\n\n" +
+                "Dies ist nur für Gravieren/V-Carve relevant.",
+                "SVG Export - Info",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            // Trotzdem G-Code exportieren (ohne Text)
+            ExportGCodeOnlyToSvg();
+            return;
+        }
+
+        // SaveFileDialog öffnen
+        var saveDialog = new SaveFileDialog
+        {
+            Filter = "SVG Files (*.svg)|*.svg|All Files (*.*)|*.*",
+            DefaultExt = ".svg",
+            FileName = $"export-{lastGraviereParams.Text}-{DateTime.Now:yyyy-MM-dd-HHmmss}.svg",
+            InitialDirectory = System.Environment.GetFolderPath(
+                System.Environment.SpecialFolder.MyDocuments)
+        };
+
+        if (saveDialog.ShowDialog(this) != true)
+            return;
+
+        try
+        {
+            // Exportiere kombinierte SVG (Text + G-Code)
+            SvgExporter.ExportCombined(
+                saveDialog.FileName,
+                _gcodeContent,
+                lastGraviereParams,
+                workWidth: 200.0,  // Standard Werkstückgröße
+                workHeight: 100.0
+            );
+
+            MessageBox.Show(this,
+                $"SVG erfolgreich exportiert:\n\n{saveDialog.FileName}",
+                "SVG Export - Erfolg",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            // Optional: Im Explorer öffnen
+            var openExplorer = MessageBox.Show(this,
+                "Möchten Sie die Datei im Explorer öffnen?",
+                "SVG Export",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (openExplorer == MessageBoxResult.Yes)
+            {
+                var folder = System.IO.Path.GetDirectoryName(saveDialog.FileName);
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"/select,\"{saveDialog.FileName}\"",
+                        UseShellExecute = true
+                    });
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"Fehler beim SVG-Export:\n\n{ex.Message}",
+                "SVG Export - Fehler",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// Exportiert nur G-Code Werkzeugbahn als SVG (ohne Text)
+    /// </summary>
+    private void ExportGCodeOnlyToSvg()
+    {
+        var saveDialog = new SaveFileDialog
+        {
+            Filter = "SVG Files (*.svg)|*.svg|All Files (*.*)|*.*",
+            DefaultExt = ".svg",
+            FileName = $"gcode-{DateTime.Now:yyyy-MM-dd-HHmmss}.svg",
+            InitialDirectory = System.Environment.GetFolderPath(
+                System.Environment.SpecialFolder.MyDocuments)
+        };
+
+        if (saveDialog.ShowDialog(this) != true)
+            return;
+
+        try
+        {
+            // Exportiere nur G-Code Pfade
+            SvgExporter.ExportGCodePaths(
+                saveDialog.FileName,
+                _gcodeContent,
+                workWidth: 200.0,
+                workHeight: 100.0,
+                title: "G-Code Werkzeugbahn"
+            );
+
+            MessageBox.Show(this,
+                $"G-Code SVG erfolgreich exportiert:\n\n{saveDialog.FileName}",
+                "SVG Export - Erfolg",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"Fehler beim SVG-Export:\n\n{ex.Message}",
+                "SVG Export - Fehler",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
     private void OnBeenden(object sender, RoutedEventArgs e) => Close();
     private void OnWindowClosing(object sender, System.ComponentModel.CancelEventArgs e)
     {
@@ -457,6 +985,7 @@ public partial class MainWindow : Window
         var dlg = new PlanfräsenDialog(WorkX, WorkY, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
+        p = (PlanfräsenParams)AdjustParamsToNullpunkt(p);
         _history.Add(new HistoryEntry("Planfräsen",
             $"{(p.Horizontal ? "Horizontal" : "Vertikal")}, Z={p.Z}, Ø{p.FraeserD}", p));
     }
@@ -467,6 +996,7 @@ public partial class MainWindow : Window
         var dlg = new BohrungDialog(WorkZ + 3, werkzeuge: [_aktivesWerkzeug!]) { Owner = this };
         if (dlg.ShowDialog() != true) return;
         var p = dlg.Result!;
+        p = (BohrungParams)AdjustParamsToNullpunkt(p);
         _history.Add(new HistoryEntry("Bohrung",
             $"X={p.XRel} Y={p.YRel}, Ø{p.Durchmesser}, Z={p.Bohrtiefe}, {p.Bezugspunkt}", p));
     }
@@ -659,6 +1189,7 @@ public partial class MainWindow : Window
             Eintauchwinkel: wz?.Eintauchwinkel ?? 90
         );
         _suppressNextAutoFit = true;
+        p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
         _history.Add(new HistoryEntry("Pfad Start",
             $"X={p.XRel} Y={p.YRel}, Z={p.ZTiefe}", p));
         UpdatePfadMenuState();
@@ -1028,6 +1559,7 @@ public partial class MainWindow : Window
             Bezugspunkt: "Unten links",
             Typ: PfadPunktTyp.Linie
         );
+        p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
         _history.Add(new HistoryEntry($"Pfad Linie #{PfadPunktNummer(_history.Count)}",
             $"X={p.XRel} Y={p.YRel}", p, level: 1));
         AutoDetectGeomConstraints(_history.Count - 1);
@@ -1119,6 +1651,7 @@ public partial class MainWindow : Window
             XMid: pfeilhoehe, YMid: 0,
             BogenModus: "Pfeilhöhe"
         );
+        p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
         _history.Add(new HistoryEntry($"Pfad Bogen #{PfadPunktNummer(_history.Count)}",
             $"X={p.XRel} Y={p.YRel}, Pfeilhöhe={p.XMid}", p, level: 1));
         HistoryList.SelectedItem    = _history[^1];
@@ -3769,7 +4302,11 @@ public partial class MainWindow : Window
         using var bgPaint   = new SKPaint { Color = new SKColor(255, 255, 255, 200), Style = SKPaintStyle.Fill };
 
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        (float sx, float sy) Px(double x, double y) => ((float)x, (float)(WorkY - y));
+        (float sx, float sy) Px(double x, double y)
+        {
+            var (nullpunktX, nullpunktY) = ConvertFromNullpunktCoordinates(x, y);
+            return ((float)nullpunktX, (float)(WorkY - nullpunktY));
+        }
         float gap = (float)(2.0 / _zoom);
         float as_ = (float)(5.0 / _zoom);
 
@@ -3869,7 +4406,7 @@ public partial class MainWindow : Window
             // Always draw arc in the interior sector (between the two lines, not outside the corner).
             // The label uses VermArcSpanDeg which returns the acute value (0°=parallel, 90°=perp).
             // Arc in SKCanvas: angles are clockwise (Y flipped), convert
-            float ix = (float)inter.Value.x, iy = (float)(WorkY - inter.Value.y);
+            var (ix, iy) = Px(inter.Value.x, inter.Value.y);
             float r  = (float)radius;
             // SKCanvas Arc: start/sweepAngle in degrees, clockwise
             float startDeg = (float)(-a1 * 180.0 / Math.PI); // negate for Y-flip
@@ -5447,6 +5984,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Set(EigTextBreite,      p.TextBreite.ToString(inv));
             Set(EigTextHoehe,       (p.TextHoehe > 0 ? p.TextHoehe : p.FontSizeMm).ToString(inv));
             Set(EigFontSize,        p.FontSizeMm.ToString(inv));
+            Set(EigTracking,        "0");  // Standard-Wert
+            Set(EigLineHeight,      "0");  // Standard-Wert (0 = automatisch)
 
             // Horizontal alignment
             EigAusrLinks.IsChecked  = p.Ausrichtung == "Links"  || string.IsNullOrEmpty(p.Ausrichtung);
@@ -6002,12 +6541,33 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 VereinfachungMm = previewSimp,
             };
 
-            // Update inline text editor's alignment if it's active
-            if (_inlineTextBox != null)
+            // Update inline text editor if it's active (alignment, font size, position/size)
+            if (_inlineTextBox != null && _inlineParams != null)
             {
                 var (hAlign, vAlign) = ParseAlignment(ausr, ausrV);
                 _inlineTextBox.HorizontalAlign = hAlign;
                 _inlineTextBox.VerticalAlign = vAlign;
+
+                // Update font size in real-time during editing
+                // Formula: FontSizeMm * _zoom * _dpiScale
+                float newFontSize = (float)(fs * _zoom * _dpiScale);
+                _inlineTextBox.UpdateFontSize(newFontSize);
+
+                // Update _inlineParams with only the fields that changed from properties
+                // This preserves the edited Text and other important values
+                _inlineParams = _inlineParams with
+                {
+                    FontSizeMm = fs,
+                    Ausrichtung = ausr,
+                    AusrichtungV = ausrV,
+                    TextBreite = tw,
+                    TextHoehe = th,
+                    XRel = xr,
+                    YRel = yr,
+                };
+
+                // Reposition and resize the text box based on updated parameters
+                RepositionInlineTextBox();
             }
         }
         UpdateAll();
@@ -6030,8 +6590,89 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     // Numerische Felder → Debounce → Preview (kein G-Code)
     private void OnEigSizeChanged(object sender, TextChangedEventArgs e)          => RestartEigTimer();
     // Auswahl-Events → sofort Preview (kein G-Code)
-    private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)     => UpdatePreviewFromFields();
+    private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdatePreviewFromFields();
+        UpdateEditorFontFamily();
+
+        // Fokus verzögert zurück auf Editor, damit das Textwerkzeug aktiv bleibt
+        // (Verzögerung verhindert, dass Events die Schriftart zurücksetzen)
+        if (_inlineTextBox != null && _inlineTextBox.IsVisible)
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+            {
+                _inlineTextBox?.Focus();
+            });
+        }
+    }
     private void OnEigFontKeyUp(object sender, KeyEventArgs e)                    => RestartEigTimer();
+
+    /// <summary>
+    /// Aktualisiere die Schriftart des ImprovedSkiaTextEditors (wenn vorhanden)
+    /// Behält den Cursor-Blinkzustand bei!
+    /// </summary>
+    private void UpdateEditorFontFamily()
+    {
+        if (_inlineTextBox == null) return;
+
+        string fontFamily = (EigFont.SelectedItem as string) ?? EigFont.Text.Trim();
+        if (string.IsNullOrWhiteSpace(fontFamily)) return;
+
+        // Hole aktuelle Werte aus den Eigenschaften-Feldern
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sty = System.Globalization.NumberStyles.Float;
+        float fontSize = 12f;
+        float tracking = 0f;
+        float lineHeight = 0f;
+
+        if (double.TryParse(EigFontSize.Text?.Replace(",", "."), sty, inv, out var fs))
+            fontSize = (float)fs;
+
+        if (double.TryParse(EigTracking.Text?.Replace(",", "."), sty, inv, out var t))
+            tracking = (float)t;
+
+        if (double.TryParse(EigLineHeight.Text?.Replace(",", "."), sty, inv, out var lh))
+            lineHeight = (float)lh;
+
+        // Erstelle Format-Objekt
+        var format = new TextCharacterFormat
+        {
+            FontFamily = fontFamily,
+            FontSizePt = fontSize,
+            Tracking = tracking,
+            LineHeight = lineHeight,
+            Color = SKColors.White
+        };
+
+        // Aktualisiere Format ohne Cursor-Zustand zu verändern!
+        _inlineTextBox.UpdateCharacterFormat(format);
+    }
+
+    // Schriftgröße mit Pfeiltasten ändern
+    private void OnEigFontSizeKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Up && e.Key != Key.Down)
+            return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sty = System.Globalization.NumberStyles.Float;
+
+        if (!double.TryParse(EigFontSize.Text?.Replace(",", "."), sty, inv, out var currentSize))
+            return;
+
+        double step = 0.5;  // 0.5 mm pro Taste
+        double newSize = e.Key == Key.Up ? currentSize + step : currentSize - step;
+        newSize = Math.Max(0.1, newSize);  // Minimum 0.1 mm
+
+        _eigSuppressUpdate = true;
+        EigFontSize.Text = newSize.ToString("F1", inv);
+        _eigSuppressUpdate = false;
+
+        RestartEigTimer();
+        UpdateEditorFontFamily();  // Auch Editor aktualisieren
+        e.Handled = true;
+    }
+
     private void RestartEigTimer()
     {
         if (_eigSuppressUpdate) return;    // Programmatische Textzuweisung → kein Timer
@@ -6487,6 +7128,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     _                                => string.Empty
                 };
 
+                // Hinweis: Nullpunkt-Verschiebung erfolgt bereits bei der Parameter-Anpassung (AdjustParamsToNullpunkt),
+                // daher keine zusätzliche Verschiebung des GCode nötig
+
                 // Werkzeugwechsel startet die Spindel (M03) neu – läuft bereits eine
                 // Spindel vom vorherigen Werkzeug, muss sie davor gestoppt werden (M05).
                 if (entry.Params is WerkzeugWechselParams && spindleOn && !string.IsNullOrEmpty(code))
@@ -6601,8 +7245,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 #endif // OnWindowKeyDown aus #if false herausgenommen
     private void OnWindowKeyDown(object sender, KeyEventArgs e)
     {
+        // Ignore tool shortcuts if typing in any text input
         if (e.OriginalSource is System.Windows.Controls.TextBox
             || e.OriginalSource is ICSharpCode.AvalonEdit.Editing.TextArea) return;
+
+        // Ignore tool shortcuts if inline text editor has focus
+        if (Keyboard.FocusedElement == _inlineTextBox) return;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         switch (e.Key)
         {
@@ -6651,7 +7299,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 }
                 else if (_activeTool == CanvasTool.PfadBogen && _pfadBogenWaiting)
                 { _pfadBogenWaiting = false; DrawSkia?.InvalidateVisual(); }
-                else if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _isTextDragging)
+                else if ((_activeTool == CanvasTool.VCarveTextSk) && _isTextDragging)
                 { _isTextDragging = false; ClearTextRubberBand(); }
                 else if (_activeTool == CanvasTool.Rechteck && _rktDragging)
                 { _rktDragging = false; ClearRktRubberBand(); DrawSkia?.InvalidateVisual(); }
@@ -6934,8 +7582,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void SetActiveTool(CanvasTool tool)
     {
-        // Inline-Texteditor schließen wenn Werkzeug wechselt
-        if (tool is not (CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _inlineTextBox != null)
+        // Inline-Texteditor schließen wenn Werkzeug wechselt (aber nur wenn es nicht VCarveTextSk bleibt)
+        if (tool is not CanvasTool.VCarveTextSk && _inlineTextBox != null)
             FlushInlineEdit();
 
         // Pfad-Vorschau und Bogen-Warte-Zustand abbrechen wenn Werkzeug wechselt
@@ -6949,7 +7597,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         var inactive = System.Windows.Media.Brushes.Transparent;
         BtnToolHand.Background        = tool == CanvasTool.Hand       ? active : inactive;
         BtnToolZoom.Background        = tool == CanvasTool.Zoom       ? active : inactive;
-        BtnToolVCarveText.Background    = tool == CanvasTool.VCarveText   ? active : inactive;
         BtnToolVCarveTextSk.Background  = tool == CanvasTool.VCarveTextSk ? active : inactive;
         BtnToolMove.Background        = tool == CanvasTool.Move       ? active : inactive;
         BtnToolPfeil.Background       = tool == CanvasTool.Pfeil      ? active : inactive;
@@ -6975,7 +7622,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             CanvasTool.Hand         => Cursors.Hand,
             CanvasTool.Zoom         => Cursors.Cross,
-            CanvasTool.VCarveText   => Cursors.Cross,
             CanvasTool.VCarveTextSk => Cursors.Cross,
             CanvasTool.PfadStart    => Cursors.Cross,
             CanvasTool.PfadLinie    => Cursors.Cross,
@@ -7026,9 +7672,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_aktivesWerkzeug != null) return true;
         return WerkzeugWechselDialog();
     }
-
-    private void OnToolVCarveText(object sender, RoutedEventArgs e)
-        => SetActiveTool(_activeTool == CanvasTool.VCarveText ? CanvasTool.Select : CanvasTool.VCarveText);
 
     private void OnToolVCarveTextSk(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.VCarveTextSk ? CanvasTool.Select : CanvasTool.VCarveTextSk);
@@ -7395,7 +8038,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             HorizontalAlign = hAlign,
             VerticalAlign = vAlign,
         };
-        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom * GetDpiScale()), _zoom);
+        // Schriftgröße OHNE GetDpiScale() setzen — wird später von UpdateFontSize() korrigiert
+        _inlineTextBox.SetText("", _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
@@ -7405,7 +8049,20 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
-        UpdateAll();
+
+        // Flag setzen: Schriftgröße muss nach DPI-Berechnung korrigiert werden
+        _needsInitialFontSizeUpdate = true;
+        _lastDpiScale = 0;  // Erzwinge Update bei nächstem OnDrawSkia
+
+        // Sofort OnDrawSkia erzwingen
+        DrawSkia?.InvalidateVisual();
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_inlineTextBox != null && _inlineParams != null)
+            {
+                DrawSkia?.InvalidateVisual();
+            }
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     // ── Bestehendes Textfeld editieren ───────────────────────────────────
@@ -7438,7 +8095,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             HorizontalAlign = hAlign2,
             VerticalAlign = vAlign2,
         };
-        _inlineTextBox.SetText(gp.Text, gp.FontFamily, (float)(gp.FontSizeMm * _zoom * _dpiScale), _zoom);
+        // Schriftgröße OHNE GetDpiScale() setzen — wird später von UpdateFontSize() korrigiert
+        _inlineTextBox.SetText(gp.Text, gp.FontFamily, (float)(gp.FontSizeMm * _zoom), _zoom);
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, screenLeft);
         System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
@@ -7448,6 +8106,20 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
+
+        // Flag setzen: Schriftgröße muss nach DPI-Berechnung korrigiert werden
+        _needsInitialFontSizeUpdate = true;
+        _lastDpiScale = 0;  // Erzwinge Update bei nächstem OnDrawSkia
+
+        // Sofort OnDrawSkia erzwingen
+        DrawSkia?.InvalidateVisual();
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_inlineTextBox != null && _inlineParams != null)
+            {
+                DrawSkia?.InvalidateVisual();
+            }
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     /// <summary>
@@ -7487,9 +8159,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double sh = hMm * _zoom;
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
-        _inlineTextBox.SetText(_inlineTextBox.GetText(), _inlineParams.FontFamily, (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale), _zoom);
+
+        // Nur die Schriftgröße aktualisieren, NICHT SetText() aufrufen (würde Cursor resetten)
+        float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
+        _inlineTextBox.UpdateFontSize(newFontSize);
+
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
+
+        // Erzwinge Neuzeichnung mit neuen Dimensionen
+        // Damit wird OnPaintSurface() aufgerufen und der Text wird mit der neuen Breite neu umgebrochen
+        _inlineTextBox.InvalidateVisual();
     }
 
     private void RepositionVermTextBox()
@@ -7619,7 +8299,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             else { _previewGravParams = null; }
             _inlineParams = null;
-            SetActiveTool(CanvasTool.Select);
+            // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
             UpdateAll();
             return;
         }
@@ -7632,7 +8312,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             finally { _suppressHistoryRegen = false; }
             _previewGravParams = null;
             _inlineParams      = null;
-            SetActiveTool(CanvasTool.Select);
+            // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
             UpdateAll();
             return;
         }
@@ -7654,7 +8334,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         TabEigenschaften.IsSelected  = true;
         BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
         BtnGCodeBerechnen.Content    = "● G-Code berechnen";
-        SetActiveTool(CanvasTool.Select);
+        // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
         UpdateAll();
     }
 
@@ -7685,14 +8365,37 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void InlineTextBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Return) { CommitInlineText(); e.Handled = true; }
-        if (e.Key == Key.Escape) { CancelInlineText(); SetActiveTool(CanvasTool.Select); e.Handled = true; }
+        // Enter wird im ImprovedSkiaTextEditor als Zeilenumbruch behandelt
+        // Escape speichert und schließt das Textfeld (LostFocus wird auch CommitInlineText aufrufen)
+        if (e.Key == Key.Escape) { CommitInlineText(); e.Handled = true; }
     }
 
     private void InlineTextBox_LostFocus(object sender, RoutedEventArgs e)
     {
         if (_ctrlResizeReopen >= 0) return;   // LostFocus während Ctrl-Resize ignorieren
+
+        // Don't close editor if focus goes to Properties panel (allows live editing)
+        var focused = Keyboard.FocusedElement as DependencyObject;
+        if (IsDescendantOf(focused, EigPanel))
+        {
+            return;  // Keep editor open while adjusting properties
+        }
+
         CommitInlineText();
+    }
+
+    /// <summary>
+    /// Check if a visual element is a descendant of a parent element
+    /// </summary>
+    private bool IsDescendantOf(DependencyObject? child, DependencyObject parent)
+    {
+        while (child != null)
+        {
+            if (child == parent)
+                return true;
+            child = LogicalTreeHelper.GetParent(child);
+        }
+        return false;
     }
 
     // Ctrl gedrückt/losgelassen während Inline-Edit → Resize-Handles ein-/ausblenden
@@ -8239,6 +8942,22 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void OnCanvasMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // Klick auf inline text editor: überspringen und das Element den Event selbst behandeln lassen
+        if (_inlineTextBox != null && e.OriginalSource is System.Windows.DependencyObject dep)
+        {
+            // Überprüfe, ob OriginalSource das Textfeld oder ein Kind davon ist
+            var parent = dep;
+            while (parent != null)
+            {
+                if (parent == _inlineTextBox)
+                {
+                    // Klick ist auf dem Textfeld → nicht behandeln
+                    return;
+                }
+                parent = System.Windows.Media.VisualTreeHelper.GetParent(parent) as System.Windows.DependencyObject;
+            }
+        }
+
         // Zoom-Werkzeug
         if (_activeTool == CanvasTool.Zoom)
         {
@@ -8267,10 +8986,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
-        // Klick auf Textfeld (VCarveText/Sk) → inline editieren
-        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+        // Klick auf Textfeld (VCarveText/Sk) → inline editieren oder Focus zurückgeben
+        if ((_activeTool == CanvasTool.VCarveTextSk)
             && e.ChangedButton == MouseButton.Left
-            && e.ClickCount == 1 && _inlineTextBox == null)
+            && e.ClickCount == 1)
         {
             var pos2 = e.GetPosition(CanvasGrid);
             double ex = (pos2.X - _panX) / _zoom;
@@ -8278,9 +8997,33 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             int tidx = HitTestTextField(ex, ey);
             if (tidx >= 0)
             {
-                StartEditExistingTextField(tidx);
-                e.Handled = true;
-                return;
+                if (_inlineTextBox == null)
+                {
+                    // Start editing a new textfield
+                    StartEditExistingTextField(tidx);
+                    e.Handled = true;
+                    return;
+                }
+                else if (_inlineExistingIdx == tidx && _inlineTextBox != null)
+                {
+                    // Click inside the currently active textfield
+                    // Position cursor at click location and restore focus
+                    var posInElement = e.GetPosition(_inlineTextBox);
+                    _inlineTextBox.SetCursorAtPosition(posInElement.X, posInElement.Y);
+                    _inlineTextBox.Focus();
+                    Keyboard.Focus(_inlineTextBox);
+                    CanvasGrid.Cursor = Cursors.IBeam;
+                    e.Handled = true;
+                    return;
+                }
+                else
+                {
+                    // Switching to a different textfield
+                    CommitInlineText();
+                    StartEditExistingTextField(tidx);
+                    e.Handled = true;
+                    return;
+                }
             }
         }
 
@@ -8433,7 +9176,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
 
         // VCarveText/Sk + Ctrl: Resize-Handle anklicken
-        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _ctrlResizeMode
+        if ((_activeTool == CanvasTool.VCarveTextSk) && _ctrlResizeMode
             && _inlineTextBox != null && _inlineExistingIdx >= 0
             && e.ChangedButton == MouseButton.Left)
         {
@@ -8460,7 +9203,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
 
         // VCarveText/Sk-Werkzeug: Abbrechen mit Rechtsklick
-        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+        if ((_activeTool == CanvasTool.VCarveTextSk)
             && e.ChangedButton == MouseButton.Right && _isTextDragging)
         {
             _isTextDragging = false;
@@ -8470,7 +9213,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
 
         // VCarveText/Sk-Werkzeug: 2-Klick-Modus
-        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+        if ((_activeTool == CanvasTool.VCarveTextSk)
             && e.ChangedButton == MouseButton.Left && _inlineTextBox == null)
         {
             var pos = e.GetPosition(CanvasGrid);
@@ -8873,7 +9616,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (e.ChangedButton == MouseButton.Left)
         {
             // VCarveText/Sk + Ctrl-Resize: Drag beendet → Resize committen, Editor wieder öffnen
-            if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+            if ((_activeTool == CanvasTool.VCarveTextSk)
                 && _ctrlResizeReopen >= 0 && CanvasGrid.IsMouseCaptured)
             {
                 CanvasGrid.ReleaseMouseCapture();
@@ -8978,7 +9721,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
 
             // VCarveText/Sk-Werkzeug: Mouse-Capture freigeben (z.B. nach Ctrl-Resize)
-            if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && CanvasGrid.IsMouseCaptured)
+            if ((_activeTool == CanvasTool.VCarveTextSk) && CanvasGrid.IsMouseCaptured)
             {
                 CanvasGrid.ReleaseMouseCapture();
                 e.Handled = true;
@@ -9033,7 +9776,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             CanvasTool.Hand         => Cursors.Hand,
             CanvasTool.Zoom         => Cursors.Cross,
-            CanvasTool.VCarveText   => Cursors.Cross,
             CanvasTool.VCarveTextSk => Cursors.Cross,
             _                       => Cursors.Arrow,
         };
@@ -9148,7 +9890,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
 
         // VCarveText/Sk + Ctrl-Resize: Drag läuft
-        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk)
+        if ((_activeTool == CanvasTool.VCarveTextSk)
             && _ctrlResizeReopen >= 0
             && _moveHistoryIdx >= 0 && CanvasGrid.IsMouseCaptured && !_isPanning)
         {
@@ -9160,7 +9902,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
 
         // VCarveText/Sk-Werkzeug: Gummiband nach erstem Klick — Fadenkreuz + eingerastetes Gummiband
-        if ((_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk) && _isTextDragging && !_isPanning)
+        if ((_activeTool == CanvasTool.VCarveTextSk) && _isTextDragging && !_isPanning)
         {
             var pos2   = e.GetPosition(CanvasGrid);
             double mx2 = SnapX((pos2.X - _panX) / _zoom);
@@ -9283,7 +10025,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         // Hover-Cursor im VCarveText/Sk-Modus: IBeam über Textfeldern, Corner-Cursor bei Ctrl
         if (!_isPanning && !CanvasGrid.IsMouseCaptured
-            && (_activeTool is CanvasTool.VCarveText or CanvasTool.VCarveTextSk))
+            && (_activeTool == CanvasTool.VCarveTextSk))
         {
             var hPos  = e.GetPosition(CanvasGrid);
             double hx = (hPos.X - _panX) / _zoom;
@@ -9343,7 +10085,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             CanvasTool.Hand         => Cursors.Hand,
             CanvasTool.Zoom         => Cursors.Cross,
-            CanvasTool.VCarveText   => Cursors.Cross,
             CanvasTool.VCarveTextSk => Cursors.Cross,
             _                       => Cursors.Arrow,
         };
@@ -9437,36 +10178,26 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     /// </summary>
     private double GetDpiScale()
     {
-        // Wenn _dpiScale noch nicht berechnet wurde, verwende 1.0 (wird später aktualisiert)
-        return _dpiScale > 0 ? _dpiScale : 1.0;
-    }
+        // Wenn _dpiScale bereits berechnet, verwende es
+        if (_dpiScale > 0)
+            return _dpiScale;
 
-    /// <summary>
-    /// Aktualisiert Textfeld-Schriftgröße wenn _dpiScale sich geändert hat
-    /// (nur wenn Textfeld nicht den Fokus hat, um Cursor nicht zu resetzen)
-    /// </summary>
-    private void UpdateTextFieldFontSizeIfNeeded()
-    {
-        // Nicht aufrufen wenn Benutzer gerade tippt (Textfeld hat Fokus)
-        if (_inlineTextBox?.IsFocused == true)
-            return;
-
-        // Nur aktualisieren wenn sich _dpiScale seit letztem Update geändert hat
-        if (Math.Abs(_dpiScale - _lastDpiScale) < 0.001)
-            return;  // Keine Änderung
-
-        _lastDpiScale = _dpiScale;
-
-        if (_inlineTextBox != null && _inlineParams != null && _dpiScale > 1.0)
+        // Versuche die Screen-DPI zu lesen als Fallback
+        try
         {
-            var currentText = _inlineTextBox.GetText();
-            _inlineTextBox.SetText(
-                currentText,
-                _inlineParams.FontFamily,
-                (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale),
-                _zoom);
+            var screen = System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position);
+            var graphics = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
+            double dpiX = graphics.DpiX / 96.0;  // 96 DPI = Standard
+            graphics.Dispose();
+            return dpiX > 1.0 ? dpiX : 1.0;
+        }
+        catch
+        {
+            return 1.0;  // Fallback bei Fehler
         }
     }
+
+    private bool _needsInitialFontSizeUpdate = false;  // Flag: Textfeld braucht Schriftgröße-Korrektur nach DPI-Berechnung
 
     private bool _gcodeBoxDirty = false;
 
@@ -9886,8 +10617,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             ? e.Info.Width / DrawSkia.ActualWidth : 1.0;
         double dpiScale = _dpiScale;
 
-        // Aktualisiere Textfeld-Schriftgröße wenn _dpiScale sich geändert hat
-        UpdateTextFieldFontSizeIfNeeded();
+        // Wenn Textfeld gerade erstellt wurde, korrigiere Schriftgröße sofort
+        if (_needsInitialFontSizeUpdate && _inlineTextBox != null && _inlineParams != null)
+        {
+            _needsInitialFontSizeUpdate = false;
+            _lastDpiScale = _dpiScale;
+            float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
+            _inlineTextBox.UpdateFontSize(newFontSize);
+        }
+        // Wenn sich _dpiScale während Bearbeitung geändert hat (Zoom), aktualisiere Schriftgröße
+        else if (_inlineTextBox != null && _inlineParams != null && Math.Abs(_dpiScale - _lastDpiScale) > 0.001)
+        {
+            _lastDpiScale = _dpiScale;
+            float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
+            _inlineTextBox.UpdateFontSize(newFontSize);
+        }
 
         // Alle Zoom/Pan-Berechnungen in logischen Pixeln (cw/ch = WPF-DIPs).
         double cw = DrawSkia.ActualWidth;
@@ -9909,10 +10653,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             (float)(_zoom * dpiScale), (float)(_zoom * dpiScale),
             (float)(_panX * dpiScale), (float)(_panY * dpiScale)));
 
-        // Werkstücke + G-Code + Raster zeichnen
+        // Werkstücke + G-Code + Nullpunkt + Raster zeichnen
         DrawWorkpiecesSk(canvas);
         DrawGCodeTopViewSk(canvas);
         DrawGCodeSideViewSk(canvas);
+        DrawNullpunktCrosshairSk(canvas);
         if (_rasterEnabled) DrawRasterSk(canvas, cw, ch);
 
         // Selektions-Locator: zoom-invariant, in Screen-Koordinaten
@@ -9930,7 +10675,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Pfad- und Textfeld-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
             && (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen
-                or CanvasTool.VCarveText or CanvasTool.VCarveTextSk or CanvasTool.Rechteck
+                or CanvasTool.VCarveTextSk or CanvasTool.VCarveTextSk or CanvasTool.Rechteck
                 || _activeTool == CanvasTool.Kreis))
         {
             double sc2 = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
@@ -10206,9 +10951,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double canvasW = DrawSkia.ActualWidth;
         double canvasH = DrawSkia.ActualHeight;
         _canvasScale = canvasW > 0 && canvasH > 0 ? Math.Min(canvasW / wx, canvasH / wy) : 1.0;
-        (float px, float py) MmToPx(double x, double y) => (
-            (float)(_topRect.Left + x * scale),
-            (float)(_topRect.Bottom - y * scale));
+        (float px, float py) MmToPx(double x, double y)
+        {
+            // Konvertiere Nullpunkt-Koordinaten zurück zu Oben-Links-Koordinaten
+            var (standardX, standardY) = ConvertFromNullpunktCoordinates(x, y);
+            return (
+                (float)(_topRect.Left + standardX * scale),
+                (float)(_topRect.Bottom - standardY * scale)
+            );
+        }
 
         void AddArc(SKPath p, float endX, float endY, float r, bool lg, bool cw) =>
             p.ArcTo(r, r, 0, lg ? SKPathArcSize.Large : SKPathArcSize.Small,
@@ -10949,9 +11700,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (wx <= 0 || wz <= 0) return;
 
         double scale = Math.Min(_bottomRect.Width / wx, _bottomRect.Height / wz);
-        (float px, float py) MmToPx(double x, double z) => (
-            (float)(_bottomRect.Left + x * scale),
-            (float)(_bottomRect.Top  + (-z) * scale));
+        (float px, float py) MmToPx(double x, double z)
+        {
+            // Konvertiere X-Koordinate vom Nullpunkt-System zurück zu Oben-Links-System
+            var (standardX, _) = ConvertFromNullpunktCoordinates(x, 0); // Y wird nicht benötigt in Seitenansicht
+            return (
+                (float)(_bottomRect.Left + standardX * scale),
+                (float)(_bottomRect.Top  + (-z) * scale)
+            );
+        }
 
         float thick = (float)(1.5 / _zoom);
         int activeLine = _mouseHoverLine >= 1 ? _mouseHoverLine : _highlightGCodeLine;
@@ -11279,6 +12036,88 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _rasterEnabled = false;
         }
         UpdateAll();
+    }
+
+    // ── Nullpunkt-Fadenkreuz zeichnen ────────────────────────────
+    private void DrawNullpunktCrosshairSk(SKCanvas canvas)
+    {
+        try
+        {
+            if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
+
+            var (nullX, nullY) = GetNullpunktCoordinates();
+
+            // Top-Ansicht (XY-Ebene)
+            DrawCrosshairInRect(canvas, _topRect, nullX, nullY, WorkX, WorkY);
+
+            // Seiten-Ansicht (XZ-Ebene) - Nullpunkt auch hier anzeigen (nur X-Achse)
+            if (!_bottomRect.IsEmpty && WorkZ > 0 && _bottomRect.Width > 0 && _bottomRect.Height > 0)
+            {
+                // In der Seitenansicht ist Y die vertikale Achse, X die horizontale
+                double scaleX = _bottomRect.Width / WorkX;
+                double scaleZ = _bottomRect.Height / WorkZ;
+                double scale = Math.Min(scaleX, scaleZ);
+
+                float px = (float)(_bottomRect.Left + nullX * scale);
+                float centerY = (float)(_bottomRect.Top + _bottomRect.Height / 2); // Vertikal zentriert
+
+                using var paint = new SKPaint
+                {
+                    Color = new SKColor(255, 100, 0), // Orange
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = 2,
+                    IsAntialias = true
+                };
+
+                // Vertikale Linie (für X-Position)
+                canvas.DrawLine(px, (float)_bottomRect.Top, px, (float)(_bottomRect.Top + _bottomRect.Height), paint);
+            }
+        }
+        catch
+        {
+            // Fehler bei Zeichnung ignorieren
+        }
+    }
+
+    private void DrawCrosshairInRect(SKCanvas canvas, Rect rect, double x, double y, double maxX, double maxY)
+    {
+        try
+        {
+            if (rect.IsEmpty || maxX <= 0 || maxY <= 0 || rect.Width <= 0 || rect.Height <= 0) return;
+
+            // Berechne Pixel-Koordinaten
+            double scale = Math.Min(rect.Width / maxX, rect.Height / maxY);
+            float px = (float)(rect.Left + x * scale);
+            float py = (float)(rect.Top + (maxY - y) * scale); // Y invertieren (Bildschirm vs. Werkstück)
+
+            using var paint = new SKPaint
+            {
+                Color = new SKColor(255, 100, 0), // Orange
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 2,
+                IsAntialias = true
+            };
+
+            float crossSize = 15; // Größe des Fadenkreuzes in Pixeln
+
+            // Horizontale Linie
+            canvas.DrawLine(px - crossSize, py, px + crossSize, py, paint);
+            // Vertikale Linie
+            canvas.DrawLine(px, py - crossSize, px, py + crossSize, paint);
+
+            // Mittelpunkt (kleiner Kreis)
+            using var circlePaint = new SKPaint
+            {
+                Color = new SKColor(255, 100, 0),
+                Style = SKPaintStyle.Fill,
+                IsAntialias = true
+            };
+            canvas.DrawCircle(px, py, 3, circlePaint);
+        }
+        catch
+        {
+            // Fehler bei Zeichnung ignorieren
+        }
     }
 
     private void DrawRasterSk(SKCanvas canvas, double cw, double ch)

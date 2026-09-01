@@ -18,6 +18,7 @@ public class TextCharacterFormat : IEquatable<TextCharacterFormat>
     public bool Italic { get; set; }
     public float BaselineShift { get; set; } = 0f;  // % der FontSize
     public float Tracking { get; set; } = 0f;       // mm Zeichen-Abstand
+    public float LineHeight { get; set; } = 0f;     // mm Zeilenabstand (0 = automatisch)
 
     public override bool Equals(object? obj) => Equals(obj as TextCharacterFormat);
 
@@ -30,7 +31,8 @@ public class TextCharacterFormat : IEquatable<TextCharacterFormat>
             && Bold == other.Bold
             && Italic == other.Italic
             && Math.Abs(BaselineShift - other.BaselineShift) < 0.01f
-            && Math.Abs(Tracking - other.Tracking) < 0.001f;
+            && Math.Abs(Tracking - other.Tracking) < 0.001f
+            && Math.Abs(LineHeight - other.LineHeight) < 0.001f;
     }
 
     public override int GetHashCode()
@@ -44,7 +46,8 @@ public class TextCharacterFormat : IEquatable<TextCharacterFormat>
         Bold = Bold,
         Italic = Italic,
         BaselineShift = BaselineShift,
-        Tracking = Tracking
+        Tracking = Tracking,
+        LineHeight = LineHeight
     };
 }
 
@@ -208,6 +211,18 @@ public class SkiaTextModel
     public void SetFormatAll(TextCharacterFormat format)
     {
         SetFormat(0, _characters.Count, format);
+    }
+
+    /// <summary>
+    /// Nur die Schriftgröße für alle Zeichen ändern (andere Formatierung erhalten)
+    /// </summary>
+    public void UpdateFontSizeAll(float newFontSizePt)
+    {
+        foreach (var ch in _characters)
+        {
+            ch.Format.FontSizePt = newFontSizePt;
+        }
+        _runsNeedUpdate = true;
     }
 
     /// <summary>

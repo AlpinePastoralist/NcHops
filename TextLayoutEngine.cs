@@ -98,6 +98,7 @@ public class TextLayoutEngine
         _valign = valign;
 
         _lines.Clear();
+        _metricsCache.Clear();  // ← WICHTIG: Cache löschen bei jedem Layout!
         TotalWidth = 0;
         TotalHeight = 0;
 
