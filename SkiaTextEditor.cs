@@ -26,6 +26,7 @@ public class SkiaTextEditor : SKElement
     private bool _hasFocus = false;
     private System.Windows.Threading.DispatcherTimer? _cursorBlinkTimer;
     private bool _cursorVisible = true;
+    private System.Windows.Threading.DispatcherTimer? _dragTimer;  // Drag-to-Select Timer
     private double _zoom = 1.0;
 
     private const float Padding = 4f;
@@ -37,14 +38,26 @@ public class SkiaTextEditor : SKElement
     {
         Focusable = true;
 
-        PreviewMouseLeftButtonDown += OnMouseDown;
-        PreviewMouseMove += OnMouseMove;
-        PreviewMouseLeftButtonUp += OnMouseUp;
+        // Registriere Mouse-Events mit AddHandler (robuster als +=)
+        this.AddHandler(MouseLeftButtonDownEvent, new MouseButtonEventHandler(OnMouseDown), handledEventsToo: true);
+        this.AddHandler(MouseMoveEvent, new MouseEventHandler(OnMouseMove), handledEventsToo: true);
+        this.AddHandler(MouseLeftButtonUpEvent, new MouseButtonEventHandler(OnMouseUp), handledEventsToo: true);
         PreviewKeyDown += OnKeyDown;
         GotFocus += (s, e) => { _hasFocus = true; StartCursorBlink(); InvalidateVisual(); };
         LostFocus += (s, e) => { _hasFocus = false; StopCursorBlink(); InvalidateVisual(); };
 
         PaintSurface += OnPaintSurface;
+    }
+
+    private void OnMouseMove(object sender, MouseEventArgs e)
+    {
+        System.Diagnostics.Debug.WriteLine($"OnMouseMove called: e.LeftButton={e.LeftButton} Mouse.LeftButton={Mouse.LeftButton}");
+        if (e.LeftButton != MouseButtonState.Pressed && Mouse.LeftButton != MouseButtonState.Pressed) return;
+        var pos = e.GetPosition(this);
+        _selectionEnd = HitTestCursorPosition((float)pos.X, (float)pos.Y);
+        System.Diagnostics.Debug.WriteLine($"  → Updated selection: pos=({pos.X},{pos.Y}) _selectionStart={_selectionStart} _selectionEnd={_selectionEnd}");
+        InvalidateVisual();
+        e.Handled = true;
     }
 
     private void OnPaintSurface(object? sender, SKPaintSurfaceEventArgs e)
@@ -95,11 +108,11 @@ public class SkiaTextEditor : SKElement
                     cursorY = y - run.FontSize;
                 }
 
-                // Selection-Highlight
+                // Selection-Highlight (Orange)
                 if (IsCharInSelection(charIndex))
                 {
                     var charWidth = textPaint.MeasureText(charStr);
-                    var selectionPaint = new SKPaint { Color = new SKColor(200, 220, 255, 200) };
+                    var selectionPaint = new SKPaint { Color = new SKColor(255, 165, 0, 200) };  // Orange!
                     canvas.DrawRect(new SKRect(x, y - run.FontSize, x + charWidth, y - metrics.Bottom), selectionPaint);
                     selectionPaint.Dispose();
                 }
@@ -126,6 +139,12 @@ public class SkiaTextEditor : SKElement
             cursorPaint.Dispose();
         }
 
+        // DEBUG: Zeige Selection-Werte oben links
+        using (var debugPaint = new SKPaint { Color = SKColors.Red, TextSize = 10f })
+        {
+            canvas.DrawText($"Sel: {_selectionStart}..{_selectionEnd} Cur: {_cursorPos}", 5, 15, debugPaint);
+        }
+
         textPaint.Dispose();
     }
 
@@ -139,26 +158,32 @@ public class SkiaTextEditor : SKElement
 
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // DEBUG: Zeige dass OnMouseDown aufgerufen wurde
+        _selectionStart = 999;  // Setze auf auffällige Zahl zur Kontrolle
+
         Focus();
         var pos = e.GetPosition(this);
         _cursorPos = HitTestCursorPosition((float)pos.X, (float)pos.Y);
         _selectionStart = _cursorPos;
+        _selectionEnd = _cursorPos;  // Initialisiere auch _selectionEnd für Drag-to-Select
+
+        // Starte Drag-Timer
+        StartDragTimer();
+
+        System.Diagnostics.Debug.WriteLine($"OnMouseDown: pos=({pos.X},{pos.Y}) _cursorPos={_cursorPos} _selectionStart={_selectionStart}");
         InvalidateVisual();
+        e.Handled = true;
     }
 
-    private void OnMouseMove(object sender, MouseEventArgs e)
+    private void OnMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (e.LeftButton != MouseButtonState.Pressed) return;
-        var pos = e.GetPosition(this);
-        _selectionEnd = HitTestCursorPosition((float)pos.X, (float)pos.Y);
-        InvalidateVisual();
+        e.Handled = true;
     }
-
-    private void OnMouseUp(object sender, MouseButtonEventArgs e) { }
 
     private int HitTestCursorPosition(float clickX, float clickY)
     {
-        float x = Padding;
+        float scaledPadding = (float)(Padding * _zoom);
+        float x = scaledPadding;
         var textPaint = new SKPaint { TextSize = 12f, IsAntialias = true };
 
         int charIndex = 0;
@@ -387,6 +412,70 @@ public class SkiaTextEditor : SKElement
         _cursorBlinkTimer.Stop();
         _cursorBlinkTimer = null;
         _cursorVisible = false;
+    }
+
+    /// <summary>
+    /// Handle Mouse Down - öffentliche Methode für externe Event-Handler
+    /// </summary>
+    public void HandleMouseDown(double screenX, double screenY)
+    {
+        // Setze Focus auf dieses Element
+        Focus();
+        _cursorPos = HitTestCursorPosition((float)screenX, (float)screenY);
+        _selectionStart = _cursorPos;
+        _selectionEnd = _cursorPos;
+
+        // Starte Drag-Timer
+        StartDragTimer();
+
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Starte den Drag-to-Select Timer
+    /// </summary>
+    private void StartDragTimer()
+    {
+        if (_dragTimer != null) return;
+
+        _dragTimer = new System.Windows.Threading.DispatcherTimer();
+        _dragTimer.Interval = TimeSpan.FromMilliseconds(10);
+        _dragTimer.Tick += (s, e) =>
+        {
+            if (Mouse.LeftButton == MouseButtonState.Pressed && _hasFocus)
+            {
+                var mousePos = Mouse.GetPosition(this);
+                HandleMouseMove(mousePos.X, mousePos.Y);
+            }
+            else
+            {
+                // Stoppe Timer wenn Maus nicht mehr gedrückt
+                StopDragTimer();
+            }
+        };
+        _dragTimer.Start();
+    }
+
+    /// <summary>
+    /// Stoppe den Drag-to-Select Timer
+    /// </summary>
+    private void StopDragTimer()
+    {
+        if (_dragTimer != null)
+        {
+            _dragTimer.Stop();
+            _dragTimer = null;
+        }
+    }
+
+    /// <summary>
+    /// Handle Mouse Move - öffentliche Methode für externe Event-Handler
+    /// </summary>
+    public void HandleMouseMove(double screenX, double screenY)
+    {
+        if (Mouse.LeftButton != MouseButtonState.Pressed) return;
+        _selectionEnd = HitTestCursorPosition((float)screenX, (float)screenY);
+        InvalidateVisual();
     }
 
     public string GetText() => string.Concat(_content.Select(r => r.Text));

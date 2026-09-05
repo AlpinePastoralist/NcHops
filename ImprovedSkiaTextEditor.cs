@@ -36,6 +36,7 @@ public class ImprovedSkiaTextEditor : SKElement
     private bool _hasFocus = false;
     private System.Windows.Threading.DispatcherTimer? _cursorBlinkTimer;
     private bool _cursorVisible = true;
+    private System.Windows.Threading.DispatcherTimer? _dragTimer;  // Drag-to-Select Timer
 
     // ─── Rendering ──────────────────────────────────────────────────
     private double _zoom = 1.0;
@@ -62,9 +63,10 @@ public class ImprovedSkiaTextEditor : SKElement
             Color = SKColors.White
         };
 
-        PreviewMouseLeftButtonDown += OnMouseDown;
-        PreviewMouseMove += OnMouseMove;
-        PreviewMouseLeftButtonUp += OnMouseUp;
+        // Registriere Mouse-Events mit AddHandler (robuster als +=)
+        this.AddHandler(MouseLeftButtonDownEvent, new MouseButtonEventHandler(OnMouseDown), handledEventsToo: true);
+        this.AddHandler(MouseMoveEvent, new MouseEventHandler(OnMouseMove), handledEventsToo: true);
+        this.AddHandler(MouseLeftButtonUpEvent, new MouseButtonEventHandler(OnMouseUp), handledEventsToo: true);
         PreviewKeyDown += OnKeyDown;
 
         GotFocus += (s, e) =>
@@ -147,7 +149,7 @@ public class ImprovedSkiaTextEditor : SKElement
                 textPaint.TextSize = ch.Format.FontSizePt;
                 textPaint.Color = ch.Format.Color;
 
-                // Selection-Highlight
+                // Selection-Highlight (sehr auffällige Rot-Farbe zum Testen!)
                 if (IsCharInSelection(i))
                 {
                     var bounds = _layoutEngine.GetCharacterBounds(_model, i);
@@ -163,7 +165,7 @@ public class ImprovedSkiaTextEditor : SKElement
 
                         using var selectionPaint = new SKPaint
                         {
-                            Color = new SKColor(100, 150, 255, 180),
+                            Color = new SKColor(255, 165, 0, 200),  // Orange!
                             Style = SKPaintStyle.Fill
                         };
                         canvas.DrawRect(screenBounds, selectionPaint);
@@ -284,6 +286,10 @@ public class ImprovedSkiaTextEditor : SKElement
         // Während OnMouseMove wird _selectionEnd aktualisiert
         _selectionStart = _cursorPos;
         _selectionEnd = _cursorPos;
+
+        // Starte Drag-Timer
+        StartDragTimer();
+
         InvalidateVisual();
 
         // Event als behandelt markieren, damit OnCanvasMouseDown nicht aufgerufen wird
@@ -292,7 +298,8 @@ public class ImprovedSkiaTextEditor : SKElement
 
     private void OnMouseMove(object sender, MouseEventArgs e)
     {
-        if (e.LeftButton != MouseButtonState.Pressed)
+
+        if (e.LeftButton != MouseButtonState.Pressed && Mouse.LeftButton != MouseButtonState.Pressed)
             return;
 
         // Berechne DPI-Skalierung (Logical zu Physical Pixels)
@@ -626,6 +633,21 @@ public class ImprovedSkiaTextEditor : SKElement
     public SkiaTextModel GetModel() => _model.Clone();
 
     /// <summary>
+    /// Gibt die aktuelle Selection zurück (selectionStart, selectionEnd)
+    /// </summary>
+    public (int start, int end) GetSelection() => (_selectionStart, _selectionEnd);
+
+    /// <summary>
+    /// Setzt die Selection (zum Wiederherstellen gespeicherter Selections)
+    /// </summary>
+    public void SetSelection(int start, int end)
+    {
+        _selectionStart = start;
+        _selectionEnd = end;
+        InvalidateVisual();
+    }
+
+    /// <summary>
     /// Datenmodell setzen (z.B. beim Laden)
     /// </summary>
     public void SetModel(SkiaTextModel model, double zoom = 1.0)
@@ -649,6 +671,108 @@ public class ImprovedSkiaTextEditor : SKElement
         // Aktualisiere auch _defaultFormat, damit neue Zeichen die neue Größe bekommen
         _defaultFormat.FontSizePt = newFontSize;
 
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Handle Mouse Down - öffentliche Methode für externe Event-Handler
+    /// </summary>
+    public void HandleMouseDown(double screenX, double screenY)
+    {
+        // Setze Focus auf dieses Element
+        Focus();
+
+        var src = PresentationSource.FromVisual(this);
+        double dpiScale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+        float layoutWidth = (float)(Width * dpiScale) - _scaledPadding * 2;
+        float layoutHeight = (float)(Height * dpiScale) - _scaledPadding * 2;
+        _layoutEngine.Layout(
+            _model,
+            Math.Max(layoutWidth, 1),
+            Math.Max(layoutHeight, 1),
+            HorizontalAlign,
+            VerticalAlign
+        );
+
+        float physicalX = (float)(screenX * dpiScale);
+        float physicalY = (float)(screenY * dpiScale);
+        var contentPos = TransformScreenToContent(physicalX, physicalY);
+        _cursorPos = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
+        _selectionStart = _cursorPos;
+        _selectionEnd = _cursorPos;
+
+        // Starte Drag-Timer
+        StartDragTimer();
+
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Starte den Drag-to-Select Timer
+    /// </summary>
+    private void StartDragTimer()
+    {
+        if (_dragTimer != null) return;
+
+        _dragTimer = new System.Windows.Threading.DispatcherTimer();
+        _dragTimer.Interval = TimeSpan.FromMilliseconds(10);
+        _dragTimer.Tick += (s, e) =>
+        {
+            if (Mouse.LeftButton == MouseButtonState.Pressed && _hasFocus)
+            {
+                var mousePos = Mouse.GetPosition(this);
+                HandleMouseMove(mousePos.X, mousePos.Y);
+            }
+            else
+            {
+                // Stoppe Timer wenn Maus nicht mehr gedrückt
+                StopDragTimer();
+            }
+        };
+        _dragTimer.Start();
+    }
+
+    /// <summary>
+    /// Stoppe den Drag-to-Select Timer
+    /// </summary>
+    private void StopDragTimer()
+    {
+        if (_dragTimer != null)
+        {
+            _dragTimer.Stop();
+            _dragTimer = null;
+        }
+    }
+
+    /// <summary>
+    /// Handle Mouse Move - öffentliche Methode für externe Event-Handler
+    /// </summary>
+    public void HandleMouseMove(double screenX, double screenY)
+    {
+        // DEBUG
+        System.Diagnostics.Debug.WriteLine($"HandleMouseMove called: Mouse.LeftButton={Mouse.LeftButton}");
+
+        if (Mouse.LeftButton != MouseButtonState.Pressed)
+            return;
+
+        var src = PresentationSource.FromVisual(this);
+        double dpiScale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+        float layoutWidth = (float)(Width * dpiScale) - _scaledPadding * 2;
+        float layoutHeight = (float)(Height * dpiScale) - _scaledPadding * 2;
+        _layoutEngine.Layout(
+            _model,
+            Math.Max(layoutWidth, 1),
+            Math.Max(layoutHeight, 1),
+            HorizontalAlign,
+            VerticalAlign
+        );
+
+        float physicalX = (float)(screenX * dpiScale);
+        float physicalY = (float)(screenY * dpiScale);
+        var contentPos = TransformScreenToContent(physicalX, physicalY);
+        _selectionEnd = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
         InvalidateVisual();
     }
 

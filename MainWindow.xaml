@@ -624,7 +624,7 @@
                             SizeChanged="OnCanvasSizeChanged"
                             Panel.ZIndex="2"/>
                     <!-- Simulations-Werkzeugkopf -->
-                    <Canvas x:Name="SimToolCanvas" IsHitTestVisible="False" Panel.ZIndex="5"/>
+                    <Canvas x:Name="SimToolCanvas" IsHitTestVisible="True" Panel.ZIndex="5"/>
                     <!-- Overlay für Vermassen-TextBox (hit-test aktiv, über allem) -->
                     <Canvas x:Name="VermOverlayCanvas" Panel.ZIndex="6" Background="Transparent"
                             IsHitTestVisible="True"/>

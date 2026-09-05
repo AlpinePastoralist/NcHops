@@ -57,6 +57,8 @@ public partial class MainWindow : Window
     private Point      _textDragStart;
     private System.Windows.Shapes.Rectangle? _textRubberBand;
     private ImprovedSkiaTextEditor?   _inlineTextBox;
+    private int _savedSelectionStart = -1;  // Speichert Selection wenn Textfeld Fokus verliert
+    private int _savedSelectionEnd = -1;
     private GraviereParams?           _inlineParams;
     private int                       _inlineExistingIdx = -1; // >=0 = bestehendes Textfeld editieren
     private DispatcherTimer?  _inlineVCarveTimer;      // Debounce: VCarve vorausberechnen während Tippen
@@ -6592,6 +6594,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     // Auswahl-Events → sofort Preview (kein G-Code)
     private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)
     {
+        // WICHTIG: Speichere die Selection BEVOR die Schriftart geändert wird
+        if (_inlineTextBox != null)
+        {
+            var (start, end) = _inlineTextBox.GetSelection();
+            if (start >= 0 && end >= 0)  // Nur wenn eine Selection existiert
+            {
+                _savedSelectionStart = start;
+                _savedSelectionEnd = end;
+            }
+        }
+
         UpdatePreviewFromFields();
         UpdateEditorFontFamily();
 
@@ -6605,7 +6618,40 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             });
         }
     }
-    private void OnEigFontKeyUp(object sender, KeyEventArgs e)                    => RestartEigTimer();
+    private void OnEigFontKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Up && e.Key != Key.Down)
+        {
+            RestartEigTimer();
+            return;
+        }
+
+        // WICHTIG: Speichere die Selection BEVOR die Pfeiltaste verarbeitet wird
+        if (_inlineTextBox != null)
+        {
+            var (start, end) = _inlineTextBox.GetSelection();
+            if (start >= 0 && end >= 0)  // Nur wenn eine Selection existiert
+            {
+                _savedSelectionStart = start;
+                _savedSelectionEnd = end;
+            }
+        }
+
+        // Pfeiltasten zum Durchlaufen von Schriftarten
+        string[] fonts = { "Segoe UI", "Arial", "Courier New", "Times New Roman", "Consolas", "Calibri" };
+        string currentFont = EigFont.Text ?? "Segoe UI";
+        int currentIndex = System.Array.IndexOf(fonts, currentFont);
+        if (currentIndex < 0) currentIndex = 0;
+
+        int newIndex = e.Key == Key.Up
+            ? (currentIndex + 1) % fonts.Length
+            : (currentIndex - 1 + fonts.Length) % fonts.Length;
+
+        EigFont.Text = fonts[newIndex];
+        EigFont.Focus();  // Fokus halten!
+        RestartEigTimer();
+        e.Handled = true;
+    }
 
     /// <summary>
     /// Aktualisiere die Schriftart des ImprovedSkiaTextEditors (wenn vorhanden)
@@ -6614,6 +6660,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void UpdateEditorFontFamily()
     {
         if (_inlineTextBox == null) return;
+
+        var model = _inlineTextBox.GetModel();
+        if (model == null || model.CharacterCount == 0) return;
+
+        // Stelle die gespeicherte Selection wieder her
+        if (_savedSelectionStart >= 0 && _savedSelectionEnd >= 0)
+        {
+            _inlineTextBox.SetSelection(_savedSelectionStart, _savedSelectionEnd);
+        }
+
+        // WICHTIG: Wenn keine Selection existiert, nichts ändern!
+        var (start, end) = _inlineTextBox.GetSelection();
+        if (start < 0 || end < 0) return;  // Keine Selection - nichts tun
 
         string fontFamily = (EigFont.SelectedItem as string) ?? EigFont.Text.Trim();
         if (string.IsNullOrWhiteSpace(fontFamily)) return;
@@ -6644,8 +6703,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Color = SKColors.White
         };
 
-        // Aktualisiere Format ohne Cursor-Zustand zu verändern!
-        _inlineTextBox.UpdateCharacterFormat(format);
+        // Aktualisiere Format: IMMER nur SetSelectedFormat verwenden!
+        // Wenn keine Selection existiert, tut SetSelectedFormat nichts (das ist gewünscht!)
+        _inlineTextBox.SetSelectedFormat(format);
     }
 
     // Schriftgröße mit Pfeiltasten ändern
@@ -6654,13 +6714,24 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (e.Key != Key.Up && e.Key != Key.Down)
             return;
 
+        // WICHTIG: Speichere die Selection BEVOR die Pfeiltaste verarbeitet wird
+        if (_inlineTextBox != null)
+        {
+            var (start, end) = _inlineTextBox.GetSelection();
+            if (start >= 0 && end >= 0)  // Nur wenn eine Selection existiert
+            {
+                _savedSelectionStart = start;
+                _savedSelectionEnd = end;
+            }
+        }
+
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         var sty = System.Globalization.NumberStyles.Float;
 
         if (!double.TryParse(EigFontSize.Text?.Replace(",", "."), sty, inv, out var currentSize))
             return;
 
-        double step = 0.5;  // 0.5 mm pro Taste
+        double step = 2.0;  // 2 mm pro Taste (größere Schritte)
         double newSize = e.Key == Key.Up ? currentSize + step : currentSize - step;
         newSize = Math.Max(0.1, newSize);  // Minimum 0.1 mm
 
@@ -8046,6 +8117,29 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
         _inlineTextBox.LostFocus      += InlineTextBox_LostFocus;
+
+        // Registriere Mouse-Events direkt auf CanvasGrid, da SKElement sie blockiert
+        CanvasGrid.PreviewMouseLeftButtonDown += (s, e) =>
+        {
+            var pos = e.GetPosition(_inlineTextBox);
+            if (pos.X >= 0 && pos.X <= _inlineTextBox.ActualWidth &&
+                pos.Y >= 0 && pos.Y <= _inlineTextBox.ActualHeight)
+            {
+                _inlineTextBox.HandleMouseDown(pos.X, pos.Y);
+                e.Handled = true;
+            }
+        };
+
+        CanvasGrid.PreviewMouseMove += (s, e) =>
+        {
+            if (_inlineTextBox != null && _inlineTextBox.IsFocused && Mouse.LeftButton == MouseButtonState.Pressed)
+            {
+                var pos = e.GetPosition(_inlineTextBox);
+                _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
+                e.Handled = true;
+            }
+        };
+
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
@@ -8103,6 +8197,29 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
         _inlineTextBox.LostFocus      += InlineTextBox_LostFocus;
+
+        // Registriere Mouse-Events direkt auf CanvasGrid, da SKElement sie blockiert
+        CanvasGrid.PreviewMouseLeftButtonDown += (s, e) =>
+        {
+            var pos = e.GetPosition(_inlineTextBox);
+            if (pos.X >= 0 && pos.X <= _inlineTextBox.ActualWidth &&
+                pos.Y >= 0 && pos.Y <= _inlineTextBox.ActualHeight)
+            {
+                _inlineTextBox.HandleMouseDown(pos.X, pos.Y);
+                e.Handled = true;
+            }
+        };
+
+        CanvasGrid.PreviewMouseMove += (s, e) =>
+        {
+            if (_inlineTextBox != null && _inlineTextBox.IsFocused && Mouse.LeftButton == MouseButtonState.Pressed)
+            {
+                var pos = e.GetPosition(_inlineTextBox);
+                _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
+                e.Handled = true;
+            }
+        };
+
         _inlineTextBox.Focus();
         Keyboard.Focus(_inlineTextBox);
         CanvasGrid.Cursor = Cursors.IBeam;
@@ -8373,6 +8490,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void InlineTextBox_LostFocus(object sender, RoutedEventArgs e)
     {
         if (_ctrlResizeReopen >= 0) return;   // LostFocus während Ctrl-Resize ignorieren
+
+        // Speichere Selection bevor Fokus verloren geht!
+        // So können Eigenschaften auf markierte Buchstaben angewendet werden
+        if (_inlineTextBox != null)
+        {
+            var (start, end) = _inlineTextBox.GetSelection();
+            _savedSelectionStart = start;
+            _savedSelectionEnd = end;
+        }
 
         // Don't close editor if focus goes to Properties panel (allows live editing)
         var focused = Keyboard.FocusedElement as DependencyObject;
