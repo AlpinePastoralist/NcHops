@@ -197,11 +197,19 @@ public class SkiaTextModel
     /// </summary>
     public void SetFormat(int startPos, int length, TextCharacterFormat format)
     {
+        System.Diagnostics.Debug.WriteLine($"SetFormat called: startPos={startPos} length={length} charCount={_characters.Count}");
+        int changedCount = 0;
+
         for (int i = startPos; i < startPos + length && i < _characters.Count; i++)
         {
             if (i >= 0)
+            {
                 _characters[i].Format = format.Clone();
+                changedCount++;
+            }
         }
+
+        System.Diagnostics.Debug.WriteLine($"  → {changedCount} Zeichen geändert");
         _runsNeedUpdate = true;
     }
 

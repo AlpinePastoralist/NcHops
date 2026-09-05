@@ -672,7 +672,11 @@ public class ImprovedSkiaTextEditor : SKElement
     /// <summary>
     /// Gibt die aktuelle Selection zurück (selectionStart, selectionEnd)
     /// </summary>
-    public (int start, int end) GetSelection() => (_selectionStart, _selectionEnd);
+    public (int start, int end) GetSelection()
+    {
+        System.Diagnostics.Debug.WriteLine($"GetSelection() called: _selectionStart={_selectionStart} _selectionEnd={_selectionEnd} CharCount={_model.CharacterCount}");
+        return (_selectionStart, _selectionEnd);
+    }
 
     /// <summary>
     /// Setzt die Selection (zum Wiederherstellen gespeicherter Selections)
