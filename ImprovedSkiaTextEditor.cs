@@ -633,7 +633,9 @@ public class ImprovedSkiaTextEditor : SKElement
 
         _model.SetText(text, format);
         _cursorPos = 0;
+        // WICHTIG: Keine Selection beim Setzen von Text!
         _selectionStart = _selectionEnd = -1;
+        System.Diagnostics.Debug.WriteLine($"SetText: Text gesetzt mit {_model.CharacterCount} Zeichen, _selectionStart={_selectionStart} _selectionEnd={_selectionEnd}");
         InvalidateVisual();
     }
 
