@@ -6586,6 +6586,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 if (savedSelStart >= 0 && savedSelEnd >= 0)
                 {
                     UpdateEditorFontFamily();
+                    // Lösche die gespeicherten Werte NACH UpdateEditorFontFamily()
+                    // (nicht in UpdateEditorFontFamily() selbst, damit OnEigFontSizeKeyDown() nicht leidet)
+                    _savedSelectionStart = -1;
+                    _savedSelectionEnd = -1;
                 }
             }
         }
@@ -6639,6 +6643,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         UpdatePreviewFromFields();
         UpdateEditorFontFamily();
+        // NICHT löschen! UpdatePreviewFromFields() wird die Werte löschen, falls nötig!
 
         // Fokus verzögert zurück auf Editor, damit das Textwerkzeug aktiv bleibt
         // (Verzögerung verhindert, dass Events die Schriftart zurücksetzen)
@@ -6807,9 +6812,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Das würde dazu führen, dass ALLE neuen Zeichen die neue Formatierung bekommen!
         // Wir wollen nur die markierten Zeichen ändern!
 
-        // Lösche die gespeicherten Werte
-        _savedSelectionStart = -1;
-        _savedSelectionEnd = -1;
+        // NICHT hier löschen! Der Aufrufer löscht die Werte, wenn nötig!
+        // Das verhindert, dass wenn UpdateEditorFontFamily() direkt aufgerufen wird,
+        // der Timer später mit -1 Werten arbeitet.
     }
 
     // Schriftgröße mit Pfeiltasten ändern
@@ -6842,6 +6847,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         RestartEigTimer();
         UpdateEditorFontFamily();  // Auch Editor aktualisieren
+        // NICHT löschen! Der Timer in UpdatePreviewFromFields() wird die Werte löschen!
         e.Handled = true;
     }
 
