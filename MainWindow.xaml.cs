@@ -6811,6 +6811,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.SetSelection(minPos, maxPos);
         LogToFile($"  → Selection wiederhergestellt: {minPos}-{maxPos}");
 
+        // DEBUG: Zeige alle Zeichen-Schriftgrößen
+        LogToFile("DEBUG: Zeichen-Schriftgrößen nach Formatierung:");
+        for (int i = 0; i < model.CharacterCount; i++)
+        {
+            var ch = model.Characters[i];
+            LogToFile($"  Zeichen[{i}]='{ch.Value}' FontSize={ch.Format.FontSizePt}");
+        }
+
         // Lösche die gespeicherten Werte
         _savedSelectionStart = -1;
         _savedSelectionEnd = -1;
