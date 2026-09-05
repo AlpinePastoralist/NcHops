@@ -8389,9 +8389,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
 
         // Die Sicht-/Zoom-Anpassung des Textfelds muss das komplette Modell neu skalieren.
-        // ABER: Nicht, wenn gerade Zeichen formatiert werden! (_savedSelectionStart/End werden gesetzt)
+        // ABER: Nicht, wenn gerade eine AKTUELLE Selection existiert!
         // Sonst würde UpdateFontSize() ALLE Zeichen ändern, statt nur die ausgewählten!
-        if (_savedSelectionStart < 0 || _savedSelectionEnd < 0)
+        var (selStart, selEnd) = _inlineTextBox.GetSelection();
+        if (selStart < 0 || selEnd < 0)  // Nur wenn KEINE aktuelle Selection
         {
             _inlineTextBox.UpdateFontSize(newFontSize);
         }
