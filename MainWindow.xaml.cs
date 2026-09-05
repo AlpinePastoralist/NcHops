@@ -6742,15 +6742,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         var model = _inlineTextBox.GetModel();
         if (model == null || model.CharacterCount == 0) return;
 
-        // Stelle die gespeicherte Selection wieder her
-        if (_savedSelectionStart >= 0 && _savedSelectionEnd >= 0)
-        {
-            _inlineTextBox.SetSelection(_savedSelectionStart, _savedSelectionEnd);
-        }
+        // WICHTIG: Nutze die gespeicherte Selection direkt, nicht GetSelection()
+        // Damit vermeiden wir Race Conditions
+        int start = _savedSelectionStart;
+        int end = _savedSelectionEnd;
 
-        // WICHTIG: Wenn keine Selection existiert, nichts ändern!
-        var (start, end) = _inlineTextBox.GetSelection();
-        if (start < 0 || end < 0) return;  // Keine Selection - nichts tun
+        // DEBUG: Überprüfe Selection
+        System.Diagnostics.Debug.WriteLine($"UpdateEditorFontFamily: _saved start={start} end={end} charCount={model.CharacterCount}");
+
+        // Wenn keine Selection gespeichert, nichts tun
+        if (start < 0 || end < 0)
+            return;
 
         string fontFamily = (EigFont.SelectedItem as string) ?? EigFont.Text.Trim();
         if (string.IsNullOrWhiteSpace(fontFamily)) return;
@@ -6771,8 +6773,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (double.TryParse(EigLineHeight.Text?.Replace(",", "."), sty, inv, out var lh))
             lineHeight = (float)lh;
 
-        // DEBUG: Überprüfe Selection
-        System.Diagnostics.Debug.WriteLine($"UpdateEditorFontFamily: start={start} end={end} charCount={model.CharacterCount}");
+        // Normalisiere Start/End
+        int minPos = Math.Min(start, end);
+        int maxPos = Math.Max(start, end);
+        System.Diagnostics.Debug.WriteLine($"  → Formatiere {minPos}-{maxPos} mit FontSize={fontSize}");
 
         // Erstelle Format-Objekt
         var format = new TextCharacterFormat
@@ -6784,18 +6788,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Color = SKColors.White
         };
 
-        // Aktualisiere Format: IMMER nur SetSelectedFormat verwenden!
-        // Wenn keine Selection existiert, tut SetSelectedFormat nichts (das ist gewünscht!)
+        // Stelle die Selection wieder her VOR der Formatierung
+        _inlineTextBox.SetSelection(minPos, maxPos);
+
+        // Aktualisiere Format
         _inlineTextBox.SetSelectedFormat(format);
 
-        // WICHTIG: Stelle die Selection WIEDER HER nach der Formatierung
-        // Damit die Selection sichtbar bleibt und der Benutzer weitere Änderungen machen kann
-        if (_savedSelectionStart >= 0 && _savedSelectionEnd >= 0)
-        {
-            _inlineTextBox.SetSelection(_savedSelectionStart, _savedSelectionEnd);
-        }
+        // Stelle die Selection nochmal her NACH der Formatierung
+        _inlineTextBox.SetSelection(minPos, maxPos);
 
-        // Lösche die gespeicherten Werte, damit sie nicht wieder verwendet werden
+        // Lösche die gespeicherten Werte
         _savedSelectionStart = -1;
         _savedSelectionEnd = -1;
     }
