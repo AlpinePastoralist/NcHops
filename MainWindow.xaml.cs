@@ -6620,7 +6620,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var (start, end) = _inlineTextBox.GetSelection();
             _savedSelectionStart = start;
             _savedSelectionEnd = end;
-            LogToFile($"OnEigFontChanged: Speichere Selection start={start} end={end}");
         }
 
         UpdatePreviewFromFields();
@@ -6733,16 +6732,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
     }
 
-    private void LogToFile(string message)
-    {
-        try
-        {
-            string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "NCHops_Debug.log");
-            System.IO.File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss.fff") + " | " + message + "\n");
-        }
-        catch { }
-    }
-
     private void UpdateEditorFontFamily()
     {
         if (_inlineTextBox == null) return;
@@ -6754,13 +6743,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         int start = _savedSelectionStart;
         int end = _savedSelectionEnd;
 
-        LogToFile($"UpdateEditorFontFamily START: _saved start={start} end={end}");
-
         if (start < 0 || end < 0)
-        {
-            LogToFile($"  → Abgebrochen: Keine gültige Selection");
             return;
-        }
 
         string fontFamily = (EigFont.SelectedItem as string) ?? EigFont.Text.Trim();
         if (string.IsNullOrWhiteSpace(fontFamily)) return;
@@ -6785,8 +6769,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         int minPos = Math.Min(start, end);
         int maxPos = Math.Max(start, end);
 
-        LogToFile($"  → Formatiere Position {minPos} bis {maxPos} (Länge: {maxPos - minPos}) mit FontSize={fontSize}");
-
         // Erstelle Format-Objekt
         var format = new TextCharacterFormat
         {
@@ -6802,25 +6784,13 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         // Nutze SetSelectedFormat um das ORIGINAL-Modell zu ändern
         _inlineTextBox.SetSelectedFormat(format);
-        LogToFile($"  → SetSelectedFormat aufgerufen");
 
         // Stelle die Selection nochmal her (falls durch SetSelectedFormat gelöscht)
         _inlineTextBox.SetSelection(minPos, maxPos);
-        LogToFile($"  → Selection wiederhergestellt: {minPos}-{maxPos}");
 
         // WICHTIG: Aktualisiere _defaultFormat NICHT!
         // Das würde dazu führen, dass ALLE neuen Zeichen die neue Formatierung bekommen!
         // Wir wollen nur die markierten Zeichen ändern!
-        LogToFile($"  → _defaultFormat wird NICHT aktualisiert (damit neue Zeichen die ursprüngliche Größe behalten)");
-
-        // DEBUG: Zeige alle Zeichen-Schriftgrößen
-        var model = _inlineTextBox.GetModel();
-        LogToFile("DEBUG: Zeichen-Schriftgrößen nach Formatierung:");
-        for (int i = 0; i < model.CharacterCount; i++)
-        {
-            var ch = model.Characters[i];
-            LogToFile($"  Zeichen[{i}]='{ch.Value}' FontSize={ch.Format.FontSizePt}");
-        }
 
         // Lösche die gespeicherten Werte
         _savedSelectionStart = -1;
@@ -6839,7 +6809,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var (start, end) = _inlineTextBox.GetSelection();
             _savedSelectionStart = start;
             _savedSelectionEnd = end;
-            LogToFile($"OnEigFontSizeKeyDown: Speichere Selection start={start} end={end}");
         }
 
         var inv = System.Globalization.CultureInfo.InvariantCulture;

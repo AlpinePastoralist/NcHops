@@ -198,38 +198,12 @@ public class SkiaTextModel
     /// </summary>
     public void SetFormat(int startPos, int length, TextCharacterFormat format)
     {
-        string msg = $"SetFormat called: startPos={startPos} length={length} charCount={_characters.Count}";
-        LogToFile(msg);
-        int changedCount = 0;
-
-        LogToFile($"  Loop-Bedingung: for (int i={startPos}; i < {startPos + length} && i < {_characters.Count}; i++)");
-
         for (int i = startPos; i < startPos + length && i < _characters.Count; i++)
         {
             if (i >= 0)
-            {
-                LogToFile($"    → Ändere Zeichen[{i}]='{_characters[i].Value}' von {_characters[i].Format.FontSizePt} zu {format.FontSizePt}");
                 _characters[i].Format = format.Clone();
-                changedCount++;
-            }
-        }
-
-        LogToFile($"  → Fertig: {changedCount} Zeichen geändert");
-        for (int i = 0; i < _characters.Count; i++)
-        {
-            LogToFile($"    Zeichen[{i}]='{_characters[i].Value}' hat FontSize={_characters[i].Format.FontSizePt}");
         }
         _runsNeedUpdate = true;
-    }
-
-    private void LogToFile(string message)
-    {
-        try
-        {
-            string logPath = Path.Combine(Path.GetTempPath(), "NCHops_Debug.log");
-            File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss.fff") + " | " + message + "\n");
-        }
-        catch { }
     }
 
     /// <summary>
