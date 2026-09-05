@@ -6618,11 +6618,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_inlineTextBox != null)
         {
             var (start, end) = _inlineTextBox.GetSelection();
-            if (start >= 0 && end >= 0)  // Nur wenn eine Selection existiert
-            {
-                _savedSelectionStart = start;
-                _savedSelectionEnd = end;
-            }
+            _savedSelectionStart = start;
+            _savedSelectionEnd = end;
+            System.Diagnostics.Debug.WriteLine($"OnEigFontChanged: Speichering Selection start={start} end={end}");
         }
 
         UpdatePreviewFromFields();
@@ -6812,11 +6810,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_inlineTextBox != null)
         {
             var (start, end) = _inlineTextBox.GetSelection();
-            if (start >= 0 && end >= 0)  // Nur wenn eine Selection existiert
-            {
-                _savedSelectionStart = start;
-                _savedSelectionEnd = end;
-            }
+            _savedSelectionStart = start;
+            _savedSelectionEnd = end;
+            System.Diagnostics.Debug.WriteLine($"OnEigFontSizeKeyDown: Speichering Selection start={start} end={end}");
         }
 
         var inv = System.Globalization.CultureInfo.InvariantCulture;
