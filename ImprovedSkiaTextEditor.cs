@@ -76,7 +76,6 @@ public class ImprovedSkiaTextEditor : SKElement
         GotFocus += (s, e) =>
         {
             _hasFocus = true;
-            System.Diagnostics.Debug.WriteLine("ImprovedSkiaTextEditor: GotFocus");
             StartCursorBlink();
             InvalidateVisual();
         };
@@ -84,7 +83,6 @@ public class ImprovedSkiaTextEditor : SKElement
         LostFocus += (s, e) =>
         {
             _hasFocus = false;
-            System.Diagnostics.Debug.WriteLine("ImprovedSkiaTextEditor: LostFocus");
             StopCursorBlink();
             InvalidateVisual();
         };
@@ -500,25 +498,29 @@ public class ImprovedSkiaTextEditor : SKElement
     {
         base.OnTextInput(e);
 
-        System.Diagnostics.Debug.WriteLine($"OnTextInput: Text='{e.Text}' Focus={_hasFocus} CursorPos={_cursorPos}");
-
         if (!_hasFocus || string.IsNullOrEmpty(e.Text))
-        {
-            System.Diagnostics.Debug.WriteLine($"  → Abgebrochen: hasFocus={_hasFocus}, Text is empty={string.IsNullOrEmpty(e.Text)}");
             return;
-        }
 
         DeleteSelection();
 
         foreach (char c in e.Text)
         {
-            // Verwende _defaultFormat für neue Zeichen, damit sie die richtige Schriftgröße haben
-            _model.InsertChar(_cursorPos, c, _defaultFormat.Clone());
-            System.Diagnostics.Debug.WriteLine($"  → Zeichen eingefügt: '{c}' an Position {_cursorPos}");
+            // WICHTIG: Nutze die URSPRÜNGLICHE Schriftgröße für neue Zeichen!
+            // Das verhindert, dass neue Zeichen die Formatierung von aktuell markierten Zeichen bekommen
+            var format = new TextCharacterFormat
+            {
+                FontFamily = _defaultFormat.FontFamily,
+                FontSizePt = _originalFontSize,  // ← IMMER die ursprüngliche Größe!
+                Color = _defaultFormat.Color,
+                Bold = _defaultFormat.Bold,
+                Italic = _defaultFormat.Italic,
+                Tracking = _defaultFormat.Tracking,
+                LineHeight = _defaultFormat.LineHeight
+            };
+            _model.InsertChar(_cursorPos, c, format);
             _cursorPos++;
         }
 
-        System.Diagnostics.Debug.WriteLine($"  → Text aktualisiert: '{_model.GetText()}'");
         TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
         InvalidateVisual();
         e.Handled = true;
@@ -641,7 +643,6 @@ public class ImprovedSkiaTextEditor : SKElement
         _cursorPos = 0;
         // WICHTIG: Keine Selection beim Setzen von Text!
         _selectionStart = _selectionEnd = -1;
-        System.Diagnostics.Debug.WriteLine($"SetText: Text gesetzt mit {_model.CharacterCount} Zeichen, _originalFontSize={_originalFontSize}");
         InvalidateVisual();
     }
 
@@ -680,22 +681,7 @@ public class ImprovedSkiaTextEditor : SKElement
     /// <summary>
     /// Gibt die aktuelle Selection zurück (selectionStart, selectionEnd)
     /// </summary>
-    public (int start, int end) GetSelection()
-    {
-        string msg = $"GetSelection() called: _selectionStart={_selectionStart} _selectionEnd={_selectionEnd} CharCount={_model.CharacterCount}";
-        LogToFile(msg);
-        return (_selectionStart, _selectionEnd);
-    }
-
-    private void LogToFile(string message)
-    {
-        try
-        {
-            string logPath = Path.Combine(Path.GetTempPath(), "NCHops_Debug.log");
-            File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss.fff") + " | " + message + "\n");
-        }
-        catch { }
-    }
+    public (int start, int end) GetSelection() => (_selectionStart, _selectionEnd);
 
     /// <summary>
     /// Setzt die Selection (zum Wiederherstellen gespeicherter Selections)
