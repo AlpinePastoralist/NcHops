@@ -6747,17 +6747,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     {
         if (_inlineTextBox == null) return;
 
-        var model = _inlineTextBox.GetModel();
-        if (model == null || model.CharacterCount == 0) return;
+        // WICHTIG: GetModel() gibt einen CLONE zurück! Wir müssen SetSelectedFormat verwenden
+        // um das ORIGINAL-Modell zu ändern!
 
-        // WICHTIG: Nutze die gespeicherte Selection direkt, nicht GetSelection()
-        // Damit vermeiden wir Race Conditions
+        // Wenn keine Selection gespeichert, nichts tun
         int start = _savedSelectionStart;
         int end = _savedSelectionEnd;
 
-        LogToFile($"UpdateEditorFontFamily START: _saved start={start} end={end} charCount={model.CharacterCount}");
+        LogToFile($"UpdateEditorFontFamily START: _saved start={start} end={end}");
 
-        // Wenn keine Selection gespeichert, nichts tun
         if (start < 0 || end < 0)
         {
             LogToFile($"  → Abgebrochen: Keine gültige Selection");
@@ -6786,9 +6784,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Normalisiere Start/End
         int minPos = Math.Min(start, end);
         int maxPos = Math.Max(start, end);
-        int length = maxPos - minPos;
 
-        LogToFile($"  → Formatiere Position {minPos} bis {maxPos} (Länge: {length}) mit FontSize={fontSize}");
+        LogToFile($"  → Formatiere Position {minPos} bis {maxPos} (Länge: {maxPos - minPos}) mit FontSize={fontSize}");
 
         // Erstelle Format-Objekt
         var format = new TextCharacterFormat
@@ -6800,18 +6797,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Color = SKColors.White
         };
 
-        // DIREKT auf das Model zugreifen und SetFormat aufrufen (umgeht SetSelectedFormat)
-        model.SetFormat(minPos, length, format);
-        LogToFile($"  → SetFormat aufgerufen");
+        // Stelle die Selection im Editor her
+        _inlineTextBox.SetSelection(minPos, maxPos);
 
-        // Benachrichtige Editor über Änderung
-        _inlineTextBox.InvalidateVisual();
+        // Nutze SetSelectedFormat um das ORIGINAL-Modell zu ändern
+        _inlineTextBox.SetSelectedFormat(format);
+        LogToFile($"  → SetSelectedFormat aufgerufen");
 
-        // Stelle die Selection wieder her
+        // Stelle die Selection nochmal her (falls durch SetSelectedFormat gelöscht)
         _inlineTextBox.SetSelection(minPos, maxPos);
         LogToFile($"  → Selection wiederhergestellt: {minPos}-{maxPos}");
 
         // DEBUG: Zeige alle Zeichen-Schriftgrößen
+        var model = _inlineTextBox.GetModel();
         LogToFile("DEBUG: Zeichen-Schriftgrößen nach Formatierung:");
         for (int i = 0; i < model.CharacterCount; i++)
         {
