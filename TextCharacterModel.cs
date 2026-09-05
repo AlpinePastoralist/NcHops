@@ -227,6 +227,19 @@ public class SkiaTextModel
     }
 
     /// <summary>
+    /// Skaliere die Schriftgröße für alle Zeichen um einen Faktor
+    /// (behält relative Größenunterschiede zwischen Zeichen)
+    /// </summary>
+    public void ScaleFontSizeAll(float scaleFactor)
+    {
+        foreach (var ch in _characters)
+        {
+            ch.Format.FontSizePt *= scaleFactor;
+        }
+        _runsNeedUpdate = true;
+    }
+
+    /// <summary>
     /// Text mit Range extrahieren
     /// </summary>
     public string GetText(int startPos = 0, int length = -1)

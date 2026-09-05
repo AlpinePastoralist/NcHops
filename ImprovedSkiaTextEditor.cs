@@ -71,6 +71,8 @@ public class ImprovedSkiaTextEditor : SKElement
         this.AddHandler(MouseLeftButtonDownEvent, new MouseButtonEventHandler(OnMouseDown), handledEventsToo: true);
         this.AddHandler(MouseMoveEvent, new MouseEventHandler(OnMouseMove), handledEventsToo: true);
         this.AddHandler(MouseLeftButtonUpEvent, new MouseButtonEventHandler(OnMouseUp), handledEventsToo: true);
+        this.AddHandler(MouseEnterEvent, new MouseEventHandler((s, e) => Cursor = Cursors.IBeam), handledEventsToo: true);
+        this.AddHandler(MouseLeaveEvent, new MouseEventHandler((s, e) => Cursor = Cursors.Arrow), handledEventsToo: true);
         PreviewKeyDown += OnKeyDown;
 
         GotFocus += (s, e) =>
@@ -717,6 +719,21 @@ public class ImprovedSkiaTextEditor : SKElement
 
         // Aktualisiere auch _defaultFormat, damit neue Zeichen die neue Größe bekommen
         _defaultFormat.FontSizePt = newFontSize;
+
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Skaliert die Schriftgröße für alle Zeichen um einen Faktor (für Zoom)
+    /// Behält relative Größenunterschiede zwischen Zeichen!
+    /// </summary>
+    public void ScaleFontSize(float scaleFactor)
+    {
+        _model.ScaleFontSizeAll(scaleFactor);
+
+        // Aktualisiere auch _defaultFormat
+        _defaultFormat.FontSizePt *= scaleFactor;
+        _originalFontSize *= scaleFactor;
 
         InvalidateVisual();
     }

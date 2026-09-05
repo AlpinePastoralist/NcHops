@@ -35,6 +35,7 @@ public partial class MainWindow : Window
 
     // ── Canvas-Zoom / Pan ────────────────────────────────────────
     private double _zoom      = 1.0;
+    private double _lastZoom  = 1.0;  // Speichert letzten Zoom um Änderungen zu erkennen
     private double _panX      = 0.0;
     private double _panY      = 0.0;
     private double _dpiScale  = 1.0;  // physische Pixel / logische Pixel (wird in OnDrawSkia aktualisiert)
@@ -6739,7 +6740,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
             if (!EigFontSize.IsKeyboardFocused)
             {
-                double fontSizeMm = fmt.FontSizePt / (Math.Max(_zoom, 0.0001) * Math.Max(_dpiScale, 0.0001));
+                double fontSizeMm = fmt.FontSizePt / Math.Max(_zoom, 0.0001);
                 Apply(EigFontSize, fontSizeMm.ToString("F1", inv));
             }
 
@@ -8391,13 +8392,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
 
-        // Die Sicht-/Zoom-Anpassung des Textfelds muss das komplette Modell neu skalieren.
-        // Aber NUR wenn die Schriftgröße geändert wurde!
-        // Wenn nur Ausrichtung geändert wird, sollen die formatierten Zeichen NICHT überschrieben werden!
-        if (updateFontSize)
-        {
-            _inlineTextBox.UpdateFontSize(newFontSize);
-        }
+        // DEAKTIVIERT: UpdateFontSize() ändert die Schriftgröße für ALLE Zeichen
+        // Das ist bei der Bearbeitung unerwünscht!
+        // Die Selection-basierte Formatierung wird durch UpdateEditorFontFamily() erledigt.
+
+        //// Die Sicht-/Zoom-Anpassung des Textfelds muss das komplette Modell neu skalieren.
+        //// Aber NUR wenn die Schriftgröße geändert wurde!
+        //// Wenn nur Ausrichtung geändert wird, sollen die formatierten Zeichen NICHT überschrieben werden!
+        //if (updateFontSize)
+        //{
+        //    _inlineTextBox.UpdateFontSize(newFontSize);
+        //}
 
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
@@ -8509,73 +8514,98 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void CommitInlineText()
     {
         if (_inlineTextBox == null) return;
-        var text        = _inlineTextBox.GetText();
-        int existingIdx = _inlineExistingIdx;
 
-        _inlineTextBox.TextChanged -= InlineTextBox_TextChanged;
-        _inlineTextBox.LostFocus   -= InlineTextBox_LostFocus;
-        SimToolCanvas.Children.Remove(_inlineTextBox);
-        _inlineTextBox     = null;
-        _inlineExistingIdx = -1;
-
-        // Timer stoppen — Fallback: cache synchron befüllen falls Debounce noch nicht gelaufen ist
-        _inlineVCarveTimer?.Stop();
-
-        if (existingIdx >= 0)
-        {
-            // Editing existing entry
-            if (!string.IsNullOrWhiteSpace(text) && _inlineParams != null && existingIdx < _history.Count)
-            {
-                var final = _inlineParams with { Text = text };
-                EnsureInlineVCarveCache(final);   // Fallback: garantiert Cache-Hit beim UpdateAll
-                _suppressHistoryRegen = true;
-                try { _history[existingIdx] = new HistoryEntry("V-Carve",
-                    $"\"{text.Replace('\n', ' ')}\" {final.FontFamily} {final.FontSizeMm} mm", final); }
-                finally { _suppressHistoryRegen = false; }
-                _previewGravParams           = final;
-                HistoryList.SelectedItem     = _history[existingIdx];
-                BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
-                BtnGCodeBerechnen.Content    = "● G-Code berechnen";
-            }
-            else { _previewGravParams = null; }
-            _inlineParams = null;
-            // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
-            UpdateAll();
-            return;
-        }
-
-        // New entry created by drag
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            _suppressHistoryRegen = true;
-            try { if (_history.Count > 0) _history.RemoveAt(_history.Count - 1); }
-            finally { _suppressHistoryRegen = false; }
-            _previewGravParams = null;
-            _inlineParams      = null;
-            // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
-            UpdateAll();
-            return;
-        }
-
-        var finalNew = _inlineParams! with { Text = text };
-        EnsureInlineVCarveCache(finalNew);   // Fallback: garantiert Cache-Hit beim UpdateAll
-        _suppressHistoryRegen = true;
         try
         {
-            if (_history.Count > 0)
-                _history[_history.Count - 1] = new HistoryEntry("V-Carve",
-                    $"\"{text.Replace('\n', ' ')}\" {finalNew.FontFamily} {finalNew.FontSizeMm} mm", finalNew);
-        }
-        finally { _suppressHistoryRegen = false; }
+            var text        = _inlineTextBox.GetText();
+            int existingIdx = _inlineExistingIdx;
 
-        _previewGravParams           = finalNew;
-        _inlineParams                = null;
-        HistoryList.SelectedItem     = _history[^1];
-        TabEigenschaften.IsSelected  = true;
-        BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
-        BtnGCodeBerechnen.Content    = "● G-Code berechnen";
-        // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
-        UpdateAll();
+            _inlineTextBox.TextChanged -= InlineTextBox_TextChanged;
+            _inlineTextBox.LostFocus   -= InlineTextBox_LostFocus;
+            SimToolCanvas.Children.Remove(_inlineTextBox);
+            _inlineTextBox     = null;
+            _inlineExistingIdx = -1;
+
+            // Timer stoppen — Fallback: cache synchron befüllen falls Debounce noch nicht gelaufen ist
+            _inlineVCarveTimer?.Stop();
+
+            if (existingIdx >= 0)
+            {
+                // Editing existing entry
+                if (!string.IsNullOrWhiteSpace(text) && _inlineParams != null && existingIdx < _history.Count)
+                {
+                    var final = _inlineParams with { Text = text };
+                    EnsureInlineVCarveCache(final);   // Fallback: garantiert Cache-Hit beim UpdateAll
+                    _suppressHistoryRegen = true;
+                    try { _history[existingIdx] = new HistoryEntry("V-Carve",
+                        $"\"{text.Replace('\n', ' ')}\" {final.FontFamily} {final.FontSizeMm} mm", final); }
+                    finally { _suppressHistoryRegen = false; }
+                    _previewGravParams           = final;
+                    HistoryList.SelectedItem     = _history[existingIdx];
+                    BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
+                    BtnGCodeBerechnen.Content    = "● G-Code berechnen";
+                }
+                else { _previewGravParams = null; }
+                _inlineParams = null;
+                // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
+                UpdateAll();
+                return;
+            }
+
+            // New entry created by drag
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _suppressHistoryRegen = true;
+                try { if (_history.Count > 0) _history.RemoveAt(_history.Count - 1); }
+                finally { _suppressHistoryRegen = false; }
+                _previewGravParams = null;
+                _inlineParams      = null;
+                // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
+                UpdateAll();
+                return;
+            }
+
+            var finalNew = _inlineParams! with { Text = text };
+            EnsureInlineVCarveCache(finalNew);   // Fallback: garantiert Cache-Hit beim UpdateAll
+            _suppressHistoryRegen = true;
+            try
+            {
+                if (_history.Count > 0)
+                    _history[_history.Count - 1] = new HistoryEntry("V-Carve",
+                        $"\"{text.Replace('\n', ' ')}\" {finalNew.FontFamily} {finalNew.FontSizeMm} mm", finalNew);
+            }
+            finally { _suppressHistoryRegen = false; }
+
+            _previewGravParams           = finalNew;
+            _inlineParams                = null;
+            HistoryList.SelectedItem     = _history[^1];
+            TabEigenschaften.IsSelected  = true;
+            BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
+            BtnGCodeBerechnen.Content    = "● G-Code berechnen";
+            // Werkzeug bleibt aktiv — Nutzer muss bewusst wechseln
+            UpdateAll();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"ERROR in CommitInlineText (full): {ex}");
+            // Cleanup bei Fehler sicherstellen
+            if (_inlineTextBox != null)
+            {
+                try
+                {
+                    _inlineTextBox.TextChanged -= InlineTextBox_TextChanged;
+                    _inlineTextBox.LostFocus   -= InlineTextBox_LostFocus;
+                    SimToolCanvas.Children.Remove(_inlineTextBox);
+                    _inlineTextBox = null;
+                }
+                catch { }
+            }
+            _inlineExistingIdx = -1;
+            _inlineParams      = null;
+            _previewGravParams = null;
+            // Zeige dem Benutzer, was schiefging
+            MessageBox.Show($"Fehler beim Speichern des Textes:\n{ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void CancelInlineText()
@@ -8630,7 +8660,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;  // Keep editor open while adjusting properties
         }
 
-        CommitInlineText();
+        // WICHTIG: BeginInvoke(), um das Canvas.Children.Remove() zu deferrieren
+        // So wird der Rendering-Cycle nicht unterbrochen
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                CommitInlineText();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ERROR in CommitInlineText: {ex}");
+                MessageBox.Show($"Fehler beim Speichern des Textes:\n{ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                CancelInlineText();  // Cleanup bei Fehler
+            }
+        });
     }
 
     /// <summary>
@@ -10870,32 +10914,33 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             var (selStart, selEnd) = _inlineTextBox.GetSelection();
             bool hasSelection = selStart >= 0 && selEnd >= 0;
+            // Zoom aktualisieren: Wenn Zoom oder DPI-Skala sich ändert, IMMER die Schriftgröße anpassen
+            // (beim Mausrad-Zoom ändert sich _zoom, nicht _dpiScale!)
             bool needsInitialFontSync = _needsInitialFontSizeUpdate ||
-                (!hasSelection && Math.Abs(_dpiScale - _lastDpiScale) > 0.001);
+                Math.Abs(_zoom - _lastZoom) > 0.001 ||
+                Math.Abs(_dpiScale - _lastDpiScale) > 0.001;
 
             if (needsInitialFontSync)
             {
                 _needsInitialFontSizeUpdate = false;
+
+                // Berechne Zoom-Faktoren BEVOR _lastZoom und _lastDpiScale aktualisiert werden
+                double lastZoom = _lastZoom > 0 ? _lastZoom : 1.0;
+                double lastDpiScale = _lastDpiScale > 0 ? _lastDpiScale : 1.0;
+
+                float zoomFactor = (float)(_zoom / lastZoom);
+                float dpiScaleFactor = (float)(_dpiScale / lastDpiScale);
+                float totalScaleFactor = zoomFactor * dpiScaleFactor;
+
+                // Skaliere nur wenn der Faktor sinnvoll ist (zwischen 0.1 und 10)
+                if (totalScaleFactor > 0.1f && totalScaleFactor < 10.0f && Math.Abs(totalScaleFactor - 1.0f) > 0.001f)
+                {
+                    _inlineTextBox.ScaleFontSize(totalScaleFactor);
+                }
+
+                // Speichere aktuelle Werte
                 _lastDpiScale = _dpiScale;
-
-                float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
-
-                if (hasSelection)
-                {
-                    var selectedFormat = new TextCharacterFormat
-                    {
-                        FontFamily = _inlineParams.FontFamily,
-                        FontSizePt = newFontSize,
-                        Color = SKColors.White,
-                        Tracking = 0f,
-                        LineHeight = 0f,
-                    };
-                    _inlineTextBox.SetSelectedFormat(selectedFormat);
-                }
-                else
-                {
-                    _inlineTextBox.UpdateFontSize(newFontSize);
-                }
+                _lastZoom = _zoom;
             }
         }
 
