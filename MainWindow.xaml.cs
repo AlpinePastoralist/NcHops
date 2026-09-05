@@ -6562,6 +6562,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 // Update font size wird jetzt durch UpdateEditorFontFamily() erledigt
                 // (nur für ausgewählte Zeichen, nicht für alle)
 
+                // Prüfe, ob die Schriftgröße geändert wurde (BEVOR _inlineParams aktualisiert wird!)
+                bool fontSizeChanged = _inlineParams.FontSizeMm != fs || _inlineParams.FontFamily != fontFamily;
+
                 // Update _inlineParams with only the fields that changed from properties
                 // This preserves the edited Text and other important values
                 _inlineParams = _inlineParams with
@@ -6576,7 +6579,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 };
 
                 // Reposition and resize the text box based on updated parameters
-                RepositionInlineTextBox();
+                RepositionInlineTextBox(fontSizeChanged);
 
                 // WICHTIG: Nach RepositionInlineTextBox() muss UpdateEditorFontFamily() aufgerufen werden,
                 // WENN eine Selection existiert! Sonst würde RepositionInlineTextBox() ALLE Zeichen
@@ -8370,7 +8373,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         return (hAlign, vAlign);
     }
 
-    private void RepositionInlineTextBox()
+    private void RepositionInlineTextBox(bool updateFontSize = true)
     {
         if (_inlineTextBox == null || _inlineParams == null) return;
         double wy = WorkY;
@@ -8389,9 +8392,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
 
         // Die Sicht-/Zoom-Anpassung des Textfelds muss das komplette Modell neu skalieren.
-        // IMMER aufrufen - das skaliert alle Zeichen auf die korrekte DPI-Größe.
-        // Die markierten Zeichen werden danach durch UpdateEditorFontFamily() neu formatiert.
-        _inlineTextBox.UpdateFontSize(newFontSize);
+        // Aber NUR wenn die Schriftgröße geändert wurde!
+        // Wenn nur Ausrichtung geändert wird, sollen die formatierten Zeichen NICHT überschrieben werden!
+        if (updateFontSize)
+        {
+            _inlineTextBox.UpdateFontSize(newFontSize);
+        }
 
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
