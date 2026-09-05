@@ -84,9 +84,16 @@ public class ImprovedSkiaTextEditor : SKElement
 
         LostFocus += (s, e) =>
         {
-            _hasFocus = false;
-            StopCursorBlink();
-            InvalidateVisual();
+            try
+            {
+                _hasFocus = false;
+                StopCursorBlink();
+                InvalidateVisual();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ERROR in SKElement.LostFocus: {ex}");
+            }
         };
 
         PaintSurface += OnPaintSurface;
