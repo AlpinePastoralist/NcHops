@@ -6788,8 +6788,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Wenn keine Selection existiert, tut SetSelectedFormat nichts (das ist gewünscht!)
         _inlineTextBox.SetSelectedFormat(format);
 
-        // WICHTIG: Lösche die gespeicherte Selection NACH der Formatierung
-        // Damit wird verhindert, dass bei nächstem Aufruf die alte (möglicherweise falsche) Selection wiederhergestellt wird
+        // WICHTIG: Stelle die Selection WIEDER HER nach der Formatierung
+        // Damit die Selection sichtbar bleibt und der Benutzer weitere Änderungen machen kann
+        if (_savedSelectionStart >= 0 && _savedSelectionEnd >= 0)
+        {
+            _inlineTextBox.SetSelection(_savedSelectionStart, _savedSelectionEnd);
+        }
+
+        // Lösche die gespeicherten Werte, damit sie nicht wieder verwendet werden
         _savedSelectionStart = -1;
         _savedSelectionEnd = -1;
     }

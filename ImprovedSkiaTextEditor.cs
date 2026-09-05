@@ -74,6 +74,7 @@ public class ImprovedSkiaTextEditor : SKElement
         GotFocus += (s, e) =>
         {
             _hasFocus = true;
+            System.Diagnostics.Debug.WriteLine("ImprovedSkiaTextEditor: GotFocus");
             StartCursorBlink();
             InvalidateVisual();
         };
@@ -81,6 +82,7 @@ public class ImprovedSkiaTextEditor : SKElement
         LostFocus += (s, e) =>
         {
             _hasFocus = false;
+            System.Diagnostics.Debug.WriteLine("ImprovedSkiaTextEditor: LostFocus");
             StopCursorBlink();
             InvalidateVisual();
         };
@@ -496,8 +498,13 @@ public class ImprovedSkiaTextEditor : SKElement
     {
         base.OnTextInput(e);
 
+        System.Diagnostics.Debug.WriteLine($"OnTextInput: Text='{e.Text}' Focus={_hasFocus} CursorPos={_cursorPos}");
+
         if (!_hasFocus || string.IsNullOrEmpty(e.Text))
+        {
+            System.Diagnostics.Debug.WriteLine($"  → Abgebrochen: hasFocus={_hasFocus}, Text is empty={string.IsNullOrEmpty(e.Text)}");
             return;
+        }
 
         DeleteSelection();
 
@@ -505,9 +512,11 @@ public class ImprovedSkiaTextEditor : SKElement
         {
             // Verwende _defaultFormat für neue Zeichen, damit sie die richtige Schriftgröße haben
             _model.InsertChar(_cursorPos, c, _defaultFormat.Clone());
+            System.Diagnostics.Debug.WriteLine($"  → Zeichen eingefügt: '{c}' an Position {_cursorPos}");
             _cursorPos++;
         }
 
+        System.Diagnostics.Debug.WriteLine($"  → Text aktualisiert: '{_model.GetText()}'");
         TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
         InvalidateVisual();
         e.Handled = true;
