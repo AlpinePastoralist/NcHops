@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using SkiaSharp;
 
@@ -197,7 +198,8 @@ public class SkiaTextModel
     /// </summary>
     public void SetFormat(int startPos, int length, TextCharacterFormat format)
     {
-        System.Diagnostics.Debug.WriteLine($"SetFormat called: startPos={startPos} length={length} charCount={_characters.Count}");
+        string msg = $"SetFormat called: startPos={startPos} length={length} charCount={_characters.Count}";
+        LogToFile(msg);
         int changedCount = 0;
 
         for (int i = startPos; i < startPos + length && i < _characters.Count; i++)
@@ -209,8 +211,18 @@ public class SkiaTextModel
             }
         }
 
-        System.Diagnostics.Debug.WriteLine($"  → {changedCount} Zeichen geändert");
+        LogToFile($"  → {changedCount} Zeichen geändert");
         _runsNeedUpdate = true;
+    }
+
+    private void LogToFile(string message)
+    {
+        try
+        {
+            string logPath = Path.Combine(Path.GetTempPath(), "NCHops_Debug.log");
+            File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss.fff") + " | " + message + "\n");
+        }
+        catch { }
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Input;
@@ -676,8 +677,19 @@ public class ImprovedSkiaTextEditor : SKElement
     /// </summary>
     public (int start, int end) GetSelection()
     {
-        System.Diagnostics.Debug.WriteLine($"GetSelection() called: _selectionStart={_selectionStart} _selectionEnd={_selectionEnd} CharCount={_model.CharacterCount}");
+        string msg = $"GetSelection() called: _selectionStart={_selectionStart} _selectionEnd={_selectionEnd} CharCount={_model.CharacterCount}";
+        LogToFile(msg);
         return (_selectionStart, _selectionEnd);
+    }
+
+    private void LogToFile(string message)
+    {
+        try
+        {
+            string logPath = Path.Combine(Path.GetTempPath(), "NCHops_Debug.log");
+            File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss.fff") + " | " + message + "\n");
+        }
+        catch { }
     }
 
     /// <summary>
