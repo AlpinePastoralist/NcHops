@@ -46,6 +46,7 @@ public class ImprovedSkiaTextEditor : SKElement
     private float _scaledPadding = 4f;
     private const float Padding = 4f;
     private TextCharacterFormat _defaultFormat = new();  // Standard-Format für neue Zeichen
+    private float _originalFontSize = 12f;  // Speichere die ursprüngliche Schriftgröße!
 
     // ─── Layout Settings ────────────────────────────────────────────
     public TextHorizontalAlign HorizontalAlign { get; set; } = TextHorizontalAlign.Left;
@@ -622,6 +623,10 @@ public class ImprovedSkiaTextEditor : SKElement
         _zoom = zoom;
         _scaledPadding = (float)(Padding * _zoom);
 
+        // WICHTIG: Speichere die URSPRÜNGLICHE Schriftgröße!
+        // Neue Zeichen sollten IMMER diese Größe haben, nicht die aktualisierte Größe!
+        _originalFontSize = fontSize;
+
         var format = new TextCharacterFormat
         {
             FontFamily = fontFamily,
@@ -636,7 +641,7 @@ public class ImprovedSkiaTextEditor : SKElement
         _cursorPos = 0;
         // WICHTIG: Keine Selection beim Setzen von Text!
         _selectionStart = _selectionEnd = -1;
-        System.Diagnostics.Debug.WriteLine($"SetText: Text gesetzt mit {_model.CharacterCount} Zeichen, _selectionStart={_selectionStart} _selectionEnd={_selectionEnd}");
+        System.Diagnostics.Debug.WriteLine($"SetText: Text gesetzt mit {_model.CharacterCount} Zeichen, _originalFontSize={_originalFontSize}");
         InvalidateVisual();
     }
 

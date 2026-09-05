@@ -6808,6 +6808,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.SetSelection(minPos, maxPos);
         LogToFile($"  → Selection wiederhergestellt: {minPos}-{maxPos}");
 
+        // WICHTIG: Aktualisiere _defaultFormat NICHT!
+        // Das würde dazu führen, dass ALLE neuen Zeichen die neue Formatierung bekommen!
+        // Wir wollen nur die markierten Zeichen ändern!
+        LogToFile($"  → _defaultFormat wird NICHT aktualisiert (damit neue Zeichen die ursprüngliche Größe behalten)");
+
         // DEBUG: Zeige alle Zeichen-Schriftgrößen
         var model = _inlineTextBox.GetModel();
         LogToFile("DEBUG: Zeichen-Schriftgrößen nach Formatierung:");
