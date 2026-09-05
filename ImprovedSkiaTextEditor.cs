@@ -25,6 +25,8 @@ public class ImprovedSkiaTextEditorTextChangedEventArgs : EventArgs { }
 /// </summary>
 public class ImprovedSkiaTextEditor : SKElement
 {
+    public event EventHandler? SelectionChanged;
+
     // ─── Datenmodell & Layout ───────────────────────────────────────
     private SkiaTextModel _model = new();
     private TextLayoutEngine _layoutEngine = new();
@@ -68,6 +70,9 @@ public class ImprovedSkiaTextEditor : SKElement
         this.AddHandler(MouseMoveEvent, new MouseEventHandler(OnMouseMove), handledEventsToo: true);
         this.AddHandler(MouseLeftButtonUpEvent, new MouseButtonEventHandler(OnMouseUp), handledEventsToo: true);
         PreviewKeyDown += OnKeyDown;
+
+        // Registriere TextInput-Event manuell (für SkiaSharp SKElement Kompatibilität)
+        this.AddHandler(TextInputEvent, new TextCompositionEventHandler(HandleTextInput), handledEventsToo: true);
 
         GotFocus += (s, e) =>
         {
@@ -254,6 +259,11 @@ public class ImprovedSkiaTextEditor : SKElement
         return charIndex >= start && charIndex < end;
     }
 
+    private void NotifySelectionChanged()
+    {
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     // ─── Maus & Keyboard Input ──────────────────────────────────────
 
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
@@ -286,6 +296,7 @@ public class ImprovedSkiaTextEditor : SKElement
         // Während OnMouseMove wird _selectionEnd aktualisiert
         _selectionStart = _cursorPos;
         _selectionEnd = _cursorPos;
+        NotifySelectionChanged();
 
         // Starte Drag-Timer
         StartDragTimer();
@@ -323,6 +334,7 @@ public class ImprovedSkiaTextEditor : SKElement
         float physicalY = (float)(pos.Y * dpiScale);
         var contentPos = TransformScreenToContent(physicalX, physicalY);
         _selectionEnd = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
+        NotifySelectionChanged();
         InvalidateVisual();
 
         // Event als behandelt markieren
@@ -372,6 +384,7 @@ public class ImprovedSkiaTextEditor : SKElement
                 _cursorPos = Math.Max(0, _cursorPos - 1);
                 _selectionStart = _selectionEnd = -1;
             }
+            NotifySelectionChanged();
             e.Handled = true;
         }
         else if (e.Key == Key.Right)
@@ -391,18 +404,21 @@ public class ImprovedSkiaTextEditor : SKElement
                 _cursorPos = Math.Min(_model.CharacterCount, _cursorPos + 1);
                 _selectionStart = _selectionEnd = -1;
             }
+            NotifySelectionChanged();
             e.Handled = true;
         }
         else if (e.Key == Key.Up)
         {
             MoveCursorUp();
             if (!isShiftPressed) _selectionStart = _selectionEnd = -1;
+            NotifySelectionChanged();
             e.Handled = true;
         }
         else if (e.Key == Key.Down)
         {
             MoveCursorDown();
             if (!isShiftPressed) _selectionStart = _selectionEnd = -1;
+            NotifySelectionChanged();
             e.Handled = true;
         }
         else if (e.Key == Key.Home)
@@ -420,6 +436,7 @@ public class ImprovedSkiaTextEditor : SKElement
                 _cursorPos = 0;
                 _selectionStart = _selectionEnd = -1;
             }
+            NotifySelectionChanged();
             e.Handled = true;
         }
         else if (e.Key == Key.End)
@@ -437,6 +454,7 @@ public class ImprovedSkiaTextEditor : SKElement
                 _cursorPos = _model.CharacterCount;
                 _selectionStart = _selectionEnd = -1;
             }
+            NotifySelectionChanged();
             e.Handled = true;
         }
         else if (e.Key == Key.Delete)
@@ -467,6 +485,7 @@ public class ImprovedSkiaTextEditor : SKElement
         {
             _selectionStart = 0;
             _selectionEnd = _model.CharacterCount;
+            NotifySelectionChanged();
             e.Handled = true;
         }
 
@@ -476,10 +495,11 @@ public class ImprovedSkiaTextEditor : SKElement
         InvalidateVisual();
     }
 
-    protected override void OnTextInput(TextCompositionEventArgs e)
+    /// <summary>
+    /// Behandelt das TextInput-Event (wird von AddHandler aufgerufen)
+    /// </summary>
+    private void HandleTextInput(object sender, TextCompositionEventArgs e)
     {
-        base.OnTextInput(e);
-
         if (!_hasFocus || string.IsNullOrEmpty(e.Text))
             return;
 
@@ -497,6 +517,12 @@ public class ImprovedSkiaTextEditor : SKElement
         e.Handled = true;
     }
 
+    protected override void OnTextInput(TextCompositionEventArgs e)
+    {
+        base.OnTextInput(e);
+        HandleTextInput(this, e);
+    }
+
     private void DeleteSelection()
     {
         if (_selectionStart < 0 || _selectionEnd < 0)
@@ -510,6 +536,7 @@ public class ImprovedSkiaTextEditor : SKElement
 
         _cursorPos = start;
         _selectionStart = _selectionEnd = -1;
+        NotifySelectionChanged();
         TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
     }
 
@@ -622,7 +649,18 @@ public class ImprovedSkiaTextEditor : SKElement
         int start = Math.Min(_selectionStart, _selectionEnd);
         int end = Math.Max(_selectionStart, _selectionEnd);
 
-        _model.SetFormat(start, end - start, format);
+        if (start == end)
+        {
+            if (_model.CharacterCount == 0 || start < 0 || start >= _model.CharacterCount)
+                return;
+
+            _model.Characters[start].Format = format.Clone();
+        }
+        else
+        {
+            _model.SetFormat(start, end - start, format);
+        }
+
         TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
         InvalidateVisual();
     }
@@ -644,6 +682,7 @@ public class ImprovedSkiaTextEditor : SKElement
     {
         _selectionStart = start;
         _selectionEnd = end;
+        NotifySelectionChanged();
         InvalidateVisual();
     }
 
@@ -701,6 +740,7 @@ public class ImprovedSkiaTextEditor : SKElement
         _cursorPos = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
         _selectionStart = _cursorPos;
         _selectionEnd = _cursorPos;
+        NotifySelectionChanged();
 
         // Starte Drag-Timer
         StartDragTimer();
@@ -773,6 +813,7 @@ public class ImprovedSkiaTextEditor : SKElement
         float physicalY = (float)(screenY * dpiScale);
         var contentPos = TransformScreenToContent(physicalX, physicalY);
         _selectionEnd = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
+        NotifySelectionChanged();
         InvalidateVisual();
     }
 
@@ -791,6 +832,7 @@ public class ImprovedSkiaTextEditor : SKElement
         var contentPos = TransformScreenToContent(physicalX, physicalY);
         _cursorPos = _layoutEngine.HitTestCursorPosition(_model, contentPos.X, contentPos.Y);
         _selectionStart = _selectionEnd = -1;
+        NotifySelectionChanged();
         InvalidateVisual();
     }
 
@@ -816,5 +858,30 @@ public class ImprovedSkiaTextEditor : SKElement
         _defaultFormat = format.Clone();
 
         InvalidateVisual();
+    }
+
+    public TextCharacterFormat? GetSelectedFormat()
+    {
+        if (_selectionStart < 0 && _selectionEnd < 0)
+            return null;
+
+        int start = Math.Min(_selectionStart, _selectionEnd);
+        int end = Math.Max(_selectionStart, _selectionEnd);
+
+        if (_selectionStart == _selectionEnd)
+        {
+            int idx = Math.Clamp(_selectionStart, 0, _model.CharacterCount - 1);
+            if (_model.CharacterCount == 0 || _selectionStart < 0 || _selectionStart > _model.CharacterCount)
+                return null;
+            return _model.Characters[idx].Format.Clone();
+        }
+
+        if (end <= start)
+            return null;
+
+        if (start < 0 || start >= _model.CharacterCount)
+            return null;
+
+        return _model.Characters[start].Format.Clone();
     }
 }
