@@ -71,9 +71,6 @@ public class ImprovedSkiaTextEditor : SKElement
         this.AddHandler(MouseLeftButtonUpEvent, new MouseButtonEventHandler(OnMouseUp), handledEventsToo: true);
         PreviewKeyDown += OnKeyDown;
 
-        // Registriere TextInput-Event manuell (für SkiaSharp SKElement Kompatibilität)
-        this.AddHandler(TextInputEvent, new TextCompositionEventHandler(HandleTextInput), handledEventsToo: true);
-
         GotFocus += (s, e) =>
         {
             _hasFocus = true;
@@ -495,11 +492,10 @@ public class ImprovedSkiaTextEditor : SKElement
         InvalidateVisual();
     }
 
-    /// <summary>
-    /// Behandelt das TextInput-Event (wird von AddHandler aufgerufen)
-    /// </summary>
-    private void HandleTextInput(object sender, TextCompositionEventArgs e)
+    protected override void OnTextInput(TextCompositionEventArgs e)
     {
+        base.OnTextInput(e);
+
         if (!_hasFocus || string.IsNullOrEmpty(e.Text))
             return;
 
@@ -515,12 +511,6 @@ public class ImprovedSkiaTextEditor : SKElement
         TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
         InvalidateVisual();
         e.Handled = true;
-    }
-
-    protected override void OnTextInput(TextCompositionEventArgs e)
-    {
-        base.OnTextInput(e);
-        HandleTextInput(this, e);
     }
 
     private void DeleteSelection()

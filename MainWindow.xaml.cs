@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -339,7 +339,11 @@ public partial class MainWindow : Window
 
         _eigTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(400),
             DispatcherPriority.Background, (_, _) =>
-            { _eigTimer.Stop(); UpdatePreviewFromFields(); }, Dispatcher);
+            {
+                _eigTimer.Stop();
+                UpdatePreviewFromFields();
+                UpdateEditorFontFamily();  // Auch Editor aktualisieren (nur für ausgewählte Zeichen!)
+            }, Dispatcher);
         _eigTimer.Stop();
 
         _simTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16),
@@ -6550,10 +6554,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 _inlineTextBox.HorizontalAlign = hAlign;
                 _inlineTextBox.VerticalAlign = vAlign;
 
-                // Update font size in real-time during editing
-                // Formula: FontSizeMm * _zoom * _dpiScale
-                float newFontSize = (float)(fs * _zoom * _dpiScale);
-                _inlineTextBox.UpdateFontSize(newFontSize);
+                // Update font size wird jetzt durch UpdateEditorFontFamily() erledigt
+                // (nur für ausgewählte Zeichen, nicht für alle)
 
                 // Update _inlineParams with only the fields that changed from properties
                 // This preserves the edited Text and other important values
@@ -6590,10 +6592,28 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     }
 
     // Numerische Felder → Debounce → Preview (kein G-Code)
-    private void OnEigSizeChanged(object sender, TextChangedEventArgs e)          => RestartEigTimer();
+    private void OnEigSizeChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_eigSuppressUpdate) return;
+
+        // WICHTIG: Speichere die Selection BEVOR die Schriftgröße geändert wird
+        if (_inlineTextBox != null)
+        {
+            var (start, end) = _inlineTextBox.GetSelection();
+            if (start >= 0 && end >= 0)  // Nur wenn eine Selection existiert
+            {
+                _savedSelectionStart = start;
+                _savedSelectionEnd = end;
+            }
+        }
+
+        RestartEigTimer();
+    }
     // Auswahl-Events → sofort Preview (kein G-Code)
     private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_eigSuppressUpdate) return;
+
         // WICHTIG: Speichere die Selection BEVOR die Schriftart geändert wird
         if (_inlineTextBox != null)
         {
@@ -6657,6 +6677,64 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     /// Aktualisiere die Schriftart des ImprovedSkiaTextEditors (wenn vorhanden)
     /// Behält den Cursor-Blinkzustand bei!
     /// </summary>
+    private void UpdateSelectedCharacterPropertiesFromEditor()
+    {
+        if (_inlineTextBox == null) return;
+
+        _eigSuppressUpdate = true;
+        try
+        {
+            static void Apply(TextBox tb, string value)
+            {
+                if (!tb.IsKeyboardFocused)
+                    tb.Text = value;
+            }
+
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var fmt = _inlineTextBox.GetSelectedFormat();
+
+            if (fmt == null)
+            {
+                if (_inlineParams != null)
+                {
+                    Apply(EigFontSize, _inlineParams.FontSizeMm.ToString(inv));
+                    Apply(EigTracking, "0");
+                    Apply(EigLineHeight, "0");
+                    string fontFamily = _inlineParams.FontFamily;
+                    var match = (EigFont.ItemsSource as IEnumerable<string>)?
+                        .FirstOrDefault(f => f.Equals(fontFamily, StringComparison.OrdinalIgnoreCase));
+                    if (match != null) EigFont.SelectedItem = match;
+                    else if (!EigFont.IsKeyboardFocused) EigFont.Text = fontFamily;
+                }
+                return;
+            }
+
+            if (!EigFont.IsKeyboardFocused)
+            {
+                var match = (EigFont.ItemsSource as IEnumerable<string>)?
+                    .FirstOrDefault(f => f.Equals(fmt.FontFamily, StringComparison.OrdinalIgnoreCase));
+                if (match != null) EigFont.SelectedItem = match;
+                else EigFont.Text = fmt.FontFamily;
+            }
+
+            if (!EigFontSize.IsKeyboardFocused)
+            {
+                double fontSizeMm = fmt.FontSizePt / (Math.Max(_zoom, 0.0001) * Math.Max(_dpiScale, 0.0001));
+                Apply(EigFontSize, fontSizeMm.ToString("F1", inv));
+            }
+
+            if (!EigTracking.IsKeyboardFocused)
+                Apply(EigTracking, fmt.Tracking.ToString("F2", inv));
+
+            if (!EigLineHeight.IsKeyboardFocused)
+                Apply(EigLineHeight, fmt.LineHeight.ToString("F2", inv));
+        }
+        finally
+        {
+            _eigSuppressUpdate = false;
+        }
+    }
+
     private void UpdateEditorFontFamily()
     {
         if (_inlineTextBox == null) return;
@@ -6685,13 +6763,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         float lineHeight = 0f;
 
         if (double.TryParse(EigFontSize.Text?.Replace(",", "."), sty, inv, out var fs))
-            fontSize = (float)fs;
+            fontSize = (float)(fs * Math.Max(_zoom, 0.0001) * Math.Max(_dpiScale, 0.0001));
 
         if (double.TryParse(EigTracking.Text?.Replace(",", "."), sty, inv, out var t))
             tracking = (float)t;
 
         if (double.TryParse(EigLineHeight.Text?.Replace(",", "."), sty, inv, out var lh))
             lineHeight = (float)lh;
+
+        // DEBUG: Überprüfe Selection
+        System.Diagnostics.Debug.WriteLine($"UpdateEditorFontFamily: start={start} end={end} charCount={model.CharacterCount}");
 
         // Erstelle Format-Objekt
         var format = new TextCharacterFormat
@@ -8115,8 +8196,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
 
-        _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
-        _inlineTextBox.LostFocus      += InlineTextBox_LostFocus;
+        _inlineTextBox.TextChanged      += InlineTextBox_TextChanged;
+        _inlineTextBox.SelectionChanged += InlineTextBox_SelectionChanged;
+        _inlineTextBox.LostFocus        += InlineTextBox_LostFocus;
 
         // Registriere Mouse-Events direkt auf CanvasGrid, da SKElement sie blockiert
         CanvasGrid.PreviewMouseLeftButtonDown += (s, e) =>
@@ -8195,8 +8277,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         System.Windows.Controls.Canvas.SetTop(_inlineTextBox, screenTop);
         SimToolCanvas.Children.Add(_inlineTextBox);
 
-        _inlineTextBox.TextChanged    += InlineTextBox_TextChanged;
-        _inlineTextBox.LostFocus      += InlineTextBox_LostFocus;
+        _inlineTextBox.TextChanged      += InlineTextBox_TextChanged;
+        _inlineTextBox.SelectionChanged += InlineTextBox_SelectionChanged;
+        _inlineTextBox.LostFocus        += InlineTextBox_LostFocus;
 
         // Registriere Mouse-Events direkt auf CanvasGrid, da SKElement sie blockiert
         CanvasGrid.PreviewMouseLeftButtonDown += (s, e) =>
@@ -8277,8 +8360,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.Width    = sw;
         _inlineTextBox.Height   = sh;
 
-        // Nur die Schriftgröße aktualisieren, NICHT SetText() aufrufen (würde Cursor resetten)
         float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
+
+        // Die Sicht-/Zoom-Anpassung des Textfelds muss das komplette Modell neu skalieren.
+        // Eine Auswahl-abhängige Formatänderung passiert nur beim expliziten Ändern der Eigenschaften,
+        // nicht bei jedem Zoom-Update des gesamten Canvas.
         _inlineTextBox.UpdateFontSize(newFontSize);
 
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
@@ -8303,6 +8389,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         else return;
         System.Windows.Controls.Canvas.SetLeft(_vermTextBox, pos.X - 40);
         System.Windows.Controls.Canvas.SetTop (_vermTextBox, pos.Y - 28);
+    }
+
+    private void InlineTextBox_SelectionChanged(object? sender, EventArgs e)
+    {
+        UpdateSelectedCharacterPropertiesFromEditor();
     }
 
     private void InlineTextBox_TextChanged(object? sender, EventArgs e)
@@ -10743,20 +10834,37 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             ? e.Info.Width / DrawSkia.ActualWidth : 1.0;
         double dpiScale = _dpiScale;
 
-        // Wenn Textfeld gerade erstellt wurde, korrigiere Schriftgröße sofort
-        if (_needsInitialFontSizeUpdate && _inlineTextBox != null && _inlineParams != null)
+        if (_inlineTextBox != null && _inlineParams != null)
         {
-            _needsInitialFontSizeUpdate = false;
-            _lastDpiScale = _dpiScale;
-            float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
-            _inlineTextBox.UpdateFontSize(newFontSize);
-        }
-        // Wenn sich _dpiScale während Bearbeitung geändert hat (Zoom), aktualisiere Schriftgröße
-        else if (_inlineTextBox != null && _inlineParams != null && Math.Abs(_dpiScale - _lastDpiScale) > 0.001)
-        {
-            _lastDpiScale = _dpiScale;
-            float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
-            _inlineTextBox.UpdateFontSize(newFontSize);
+            var (selStart, selEnd) = _inlineTextBox.GetSelection();
+            bool hasSelection = selStart >= 0 && selEnd >= 0;
+            bool needsInitialFontSync = _needsInitialFontSizeUpdate ||
+                (!hasSelection && Math.Abs(_dpiScale - _lastDpiScale) > 0.001);
+
+            if (needsInitialFontSync)
+            {
+                _needsInitialFontSizeUpdate = false;
+                _lastDpiScale = _dpiScale;
+
+                float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
+
+                if (hasSelection)
+                {
+                    var selectedFormat = new TextCharacterFormat
+                    {
+                        FontFamily = _inlineParams.FontFamily,
+                        FontSizePt = newFontSize,
+                        Color = SKColors.White,
+                        Tracking = 0f,
+                        LineHeight = 0f,
+                    };
+                    _inlineTextBox.SetSelectedFormat(selectedFormat);
+                }
+                else
+                {
+                    _inlineTextBox.UpdateFontSize(newFontSize);
+                }
+            }
         }
 
         // Alle Zoom/Pan-Berechnungen in logischen Pixeln (cw/ch = WPF-DIPs).
