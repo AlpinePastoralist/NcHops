@@ -6745,12 +6745,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         int start = _savedSelectionStart;
         int end = _savedSelectionEnd;
 
-        // DEBUG: Überprüfe Selection
-        System.Diagnostics.Debug.WriteLine($"UpdateEditorFontFamily: _saved start={start} end={end} charCount={model.CharacterCount}");
+        System.Diagnostics.Debug.WriteLine($"UpdateEditorFontFamily START: _saved start={start} end={end} charCount={model.CharacterCount}");
 
         // Wenn keine Selection gespeichert, nichts tun
         if (start < 0 || end < 0)
+        {
+            System.Diagnostics.Debug.WriteLine($"  → Abgebrochen: Keine gültige Selection");
             return;
+        }
 
         string fontFamily = (EigFont.SelectedItem as string) ?? EigFont.Text.Trim();
         if (string.IsNullOrWhiteSpace(fontFamily)) return;
@@ -6774,7 +6776,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Normalisiere Start/End
         int minPos = Math.Min(start, end);
         int maxPos = Math.Max(start, end);
-        System.Diagnostics.Debug.WriteLine($"  → Formatiere {minPos}-{maxPos} mit FontSize={fontSize}");
+        int length = maxPos - minPos;
+
+        System.Diagnostics.Debug.WriteLine($"  → Formatiere Position {minPos} bis {maxPos} (Länge: {length}) mit FontSize={fontSize}");
 
         // Erstelle Format-Objekt
         var format = new TextCharacterFormat
@@ -6786,14 +6790,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             Color = SKColors.White
         };
 
-        // Stelle die Selection wieder her VOR der Formatierung
-        _inlineTextBox.SetSelection(minPos, maxPos);
+        // DIREKT auf das Model zugreifen und SetFormat aufrufen (umgeht SetSelectedFormat)
+        model.SetFormat(minPos, length, format);
+        System.Diagnostics.Debug.WriteLine($"  → SetFormat aufgerufen");
 
-        // Aktualisiere Format
-        _inlineTextBox.SetSelectedFormat(format);
+        // Benachrichtige Editor über Änderung
+        _inlineTextBox.InvalidateVisual();
 
-        // Stelle die Selection nochmal her NACH der Formatierung
+        // Stelle die Selection wieder her
         _inlineTextBox.SetSelection(minPos, maxPos);
+        System.Diagnostics.Debug.WriteLine($"  → Selection wiederhergestellt: {minPos}-{maxPos}");
 
         // Lösche die gespeicherten Werte
         _savedSelectionStart = -1;
