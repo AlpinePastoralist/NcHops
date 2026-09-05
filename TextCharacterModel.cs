@@ -202,16 +202,23 @@ public class SkiaTextModel
         LogToFile(msg);
         int changedCount = 0;
 
+        LogToFile($"  Loop-Bedingung: for (int i={startPos}; i < {startPos + length} && i < {_characters.Count}; i++)");
+
         for (int i = startPos; i < startPos + length && i < _characters.Count; i++)
         {
             if (i >= 0)
             {
+                LogToFile($"    → Ändere Zeichen[{i}]='{_characters[i].Value}' von {_characters[i].Format.FontSizePt} zu {format.FontSizePt}");
                 _characters[i].Format = format.Clone();
                 changedCount++;
             }
         }
 
-        LogToFile($"  → {changedCount} Zeichen geändert");
+        LogToFile($"  → Fertig: {changedCount} Zeichen geändert");
+        for (int i = 0; i < _characters.Count; i++)
+        {
+            LogToFile($"    Zeichen[{i}]='{_characters[i].Value}' hat FontSize={_characters[i].Format.FontSizePt}");
+        }
         _runsNeedUpdate = true;
     }
 
