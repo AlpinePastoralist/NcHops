@@ -8231,8 +8231,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.LostFocus        += InlineTextBox_LostFocus;
 
         // Registriere Mouse-Events direkt auf CanvasGrid, da SKElement sie blockiert
+        // WICHTIG: Null-Check, da diese Handler auch nach dem Löschen des Textfeldes aufgerufen werden können
         CanvasGrid.PreviewMouseLeftButtonDown += (s, e) =>
         {
+            if (_inlineTextBox == null) return;  // Textfeld wurde gelöscht → ignoriere Event
             var pos = e.GetPosition(_inlineTextBox);
             if (pos.X >= 0 && pos.X <= _inlineTextBox.ActualWidth &&
                 pos.Y >= 0 && pos.Y <= _inlineTextBox.ActualHeight)
@@ -8244,12 +8246,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         CanvasGrid.PreviewMouseMove += (s, e) =>
         {
-            if (_inlineTextBox != null && _inlineTextBox.IsFocused && Mouse.LeftButton == MouseButtonState.Pressed)
-            {
-                var pos = e.GetPosition(_inlineTextBox);
-                _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
-                e.Handled = true;
-            }
+            if (_inlineTextBox == null) return;  // Textfeld wurde gelöscht → ignoriere Event
+            if (!_inlineTextBox.IsFocused || Mouse.LeftButton != MouseButtonState.Pressed)
+                return;
+            var pos = e.GetPosition(_inlineTextBox);
+            _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
+            e.Handled = true;
         };
 
         _inlineTextBox.Focus();
@@ -8312,8 +8314,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _inlineTextBox.LostFocus        += InlineTextBox_LostFocus;
 
         // Registriere Mouse-Events direkt auf CanvasGrid, da SKElement sie blockiert
+        // WICHTIG: Null-Check, da diese Handler auch nach dem Löschen des Textfeldes aufgerufen werden können
         CanvasGrid.PreviewMouseLeftButtonDown += (s, e) =>
         {
+            if (_inlineTextBox == null) return;  // Textfeld wurde gelöscht → ignoriere Event
             var pos = e.GetPosition(_inlineTextBox);
             if (pos.X >= 0 && pos.X <= _inlineTextBox.ActualWidth &&
                 pos.Y >= 0 && pos.Y <= _inlineTextBox.ActualHeight)
@@ -8325,12 +8329,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         CanvasGrid.PreviewMouseMove += (s, e) =>
         {
-            if (_inlineTextBox != null && _inlineTextBox.IsFocused && Mouse.LeftButton == MouseButtonState.Pressed)
-            {
-                var pos = e.GetPosition(_inlineTextBox);
-                _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
-                e.Handled = true;
-            }
+            if (_inlineTextBox == null) return;  // Textfeld wurde gelöscht → ignoriere Event
+            if (!_inlineTextBox.IsFocused || Mouse.LeftButton != MouseButtonState.Pressed)
+                return;
+            var pos = e.GetPosition(_inlineTextBox);
+            _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
+            e.Handled = true;
         };
 
         _inlineTextBox.Focus();
