@@ -6496,6 +6496,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         BtnGCodeBerechnen.Background = new SolidColorBrush(Color.FromRgb(0xC8, 0xA0, 0x30));
         BtnGCodeBerechnen.Content    = "● G-Code berechnen";
 
+        // Speichere die Selection, damit wir NACH RepositionInlineTextBox()
+        // wissen, ob wir UpdateEditorFontFamily() aufrufen müssen
+        int savedSelStart = _savedSelectionStart;
+        int savedSelEnd = _savedSelectionEnd;
+
         var entry = HistoryList.SelectedItem as HistoryEntry;
         if (entry?.Params is GraviereParams gp)
         {
@@ -6572,6 +6577,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
                 // Reposition and resize the text box based on updated parameters
                 RepositionInlineTextBox();
+
+                // WICHTIG: Nach RepositionInlineTextBox() muss UpdateEditorFontFamily() aufgerufen werden,
+                // WENN eine Selection existiert! Sonst würde RepositionInlineTextBox() ALLE Zeichen
+                // mit UpdateFontSize() geändert haben (wenn _savedSelectionStart >= 0 wäre).
+                // Aber jetzt wird UpdateFontSize() NICHT aufgerufen, weil _savedSelectionStart >= 0.
+                // Deshalb müssen wir UpdateEditorFontFamily() aufrufen, um die markierten Zeichen zu ändern.
+                if (savedSelStart >= 0 && savedSelEnd >= 0)
+                {
+                    UpdateEditorFontFamily();
+                }
             }
         }
         UpdateAll();
@@ -8368,9 +8383,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         float newFontSize = (float)(_inlineParams.FontSizeMm * _zoom * _dpiScale);
 
         // Die Sicht-/Zoom-Anpassung des Textfelds muss das komplette Modell neu skalieren.
-        // Eine Auswahl-abhängige Formatänderung passiert nur beim expliziten Ändern der Eigenschaften,
-        // nicht bei jedem Zoom-Update des gesamten Canvas.
-        _inlineTextBox.UpdateFontSize(newFontSize);
+        // ABER: Nicht, wenn gerade Zeichen formatiert werden! (_savedSelectionStart/End werden gesetzt)
+        // Sonst würde UpdateFontSize() ALLE Zeichen ändern, statt nur die ausgewählten!
+        if (_savedSelectionStart < 0 || _savedSelectionEnd < 0)
+        {
+            _inlineTextBox.UpdateFontSize(newFontSize);
+        }
 
         System.Windows.Controls.Canvas.SetLeft(_inlineTextBox, sl);
         System.Windows.Controls.Canvas.SetTop (_inlineTextBox, st);
