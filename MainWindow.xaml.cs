@@ -6787,6 +6787,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Aktualisiere Format: IMMER nur SetSelectedFormat verwenden!
         // Wenn keine Selection existiert, tut SetSelectedFormat nichts (das ist gewünscht!)
         _inlineTextBox.SetSelectedFormat(format);
+
+        // WICHTIG: Lösche die gespeicherte Selection NACH der Formatierung
+        // Damit wird verhindert, dass bei nächstem Aufruf die alte (möglicherweise falsche) Selection wiederhergestellt wird
+        _savedSelectionStart = -1;
+        _savedSelectionEnd = -1;
     }
 
     // Schriftgröße mit Pfeiltasten ändern
