@@ -95,8 +95,10 @@ public partial class TextEditorPrototypeWindow : Window
             // Zeilen rendern
             foreach (var line in layoutEngine.Lines)
             {
+                // WICHTIG: Konsistente Baseline für alle Buchstaben in dieser Zeile
+                // unabhängig von ihrer Schriftgröße!
                 float lineX = padding + line.LineX;
-                float lineY = padding + line.LineY + line.Ascent;
+                float baselineY = padding + line.LineY - line.Ascent;  // Baseline Position
 
                 for (int i = line.StartCharIdx; i < line.EndCharIdx; i++)
                 {
@@ -107,23 +109,24 @@ public partial class TextEditorPrototypeWindow : Window
                         Typeface = SkiaTextModel.GetTypeface(ch.Format.FontFamily, ch.Format.Bold, ch.Format.Italic),
                         TextSize = ch.Format.FontSizePt,
                         Color = ch.Format.Color,
-                        IsAntialias = true
+                        IsAntialias = false  // Konsistent mit GCodeGenerator.BuildTextGeoSk für exakte Positionen
                     })
                     {
-                        // Selection-Highlight
+                        var m = paint.FontMetrics;
+
+                        // Selection-Highlight verwendet Zeilen-Ascent/Descent für konsistente Höhe
                         if (IsCharInSelection(i))
                         {
-                            var bounds = layoutEngine.GetCharacterBounds(_currentModel, i);
-                            if (!bounds.IsEmpty)
+                            var charWidth = paint.MeasureText(ch.Value.ToString());
+                            using (var selPaint = new SKPaint { Color = new SKColor(100, 150, 255, 180) })
                             {
-                                using (var selPaint = new SKPaint { Color = new SKColor(100, 150, 255, 180) })
-                                {
-                                    canvas.DrawRect(bounds, selPaint);
-                                }
+                                // Highlight geht von Zeilen-Top bis Zeilen-Bottom
+                                canvas.DrawRect(new SKRect(lineX, baselineY - line.Ascent, lineX + charWidth, baselineY + line.Descent), selPaint);
                             }
                         }
 
-                        canvas.DrawText(ch.Value.ToString(), lineX, lineY, paint);
+                        // Text wird auf der Baseline gezeichnet (unabhängig von seiner Schriftgröße)
+                        canvas.DrawText(ch.Value.ToString(), lineX, baselineY, paint);
                         lineX += paint.MeasureText(ch.Value.ToString());
                     }
                 }
@@ -143,12 +146,12 @@ public partial class TextEditorPrototypeWindow : Window
                     }
                 }
 
-                float cursorY = padding + cursorLine.LineY;
-                float cursorBottom = cursorY + cursorLine.Ascent + cursorLine.Descent;
+                float baselineY = padding + cursorLine.LineY - cursorLine.Ascent;  // Baseline Position
+                float cursorTop = baselineY - (cursorLine.Ascent + cursorLine.Descent);
 
-                using (var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 2f, IsAntialias = true })
+                using (var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 2f, IsAntialias = false })
                 {
-                    canvas.DrawLine(cursorX, cursorY, cursorX, cursorBottom, cursorPaint);
+                    canvas.DrawLine(cursorX, baselineY, cursorX, cursorTop, cursorPaint);
                 }
             }
         }
@@ -377,5 +380,18 @@ public partial class TextEditorPrototypeWindow : Window
                 txtInfo.Text = $"Zeichen: {_currentModel.CharacterCount}\nCursor: {_cursorPos}\nSelection: {_selectionStart}-{_selectionEnd}\nAlign: {_currentHAlign}";
         }
         catch { /* Ignorieren */ }
+    }
+
+    private void OnOpenAdvancedProperties(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var advancedWindow = new TextEditorPropertiesWindow();
+            advancedWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Fehler beim Öffnen der Rendering-Optionen:\n{ex.Message}");
+        }
     }
 }

@@ -28,11 +28,33 @@ public class SkiaTextEditor : SKElement
     private bool _cursorVisible = true;
     private System.Windows.Threading.DispatcherTimer? _dragTimer;  // Drag-to-Select Timer
     private double _zoom = 1.0;
+    private SKPaintStyle _textStyle = SKPaintStyle.Fill;
+    private SKColor _textColor = SKColors.White;
+    private float _strokeWidth = 0.5f;
 
     private const float Padding = 4f;
     private const float LineHeight = 20f;
 
     public event EventHandler<SkiaTextEditorTextChangedEventArgs>? TextChanged;
+
+    // Eigenschaften für Rendering
+    public SKPaintStyle TextStyle
+    {
+        get => _textStyle;
+        set { _textStyle = value; InvalidateVisual(); }
+    }
+
+    public SKColor TextColor
+    {
+        get => _textColor;
+        set { _textColor = value; InvalidateVisual(); }
+    }
+
+    public float StrokeWidth
+    {
+        get => _strokeWidth;
+        set { _strokeWidth = Math.Max(0.1f, value); InvalidateVisual(); }
+    }
 
     public SkiaTextEditor()
     {
@@ -73,9 +95,11 @@ public class SkiaTextEditor : SKElement
         var textPaint = new SKPaint
         {
             TextSize = 12f,
-            IsAntialias = true,
-            Color = SKColors.White,
-            Typeface = SKTypeface.FromFamilyName("Segoe UI")
+            IsAntialias = false,  // Konsistent mit GCodeGenerator.BuildTextGeoSk für exakte Positionen
+            Color = _textColor,
+            Typeface = SKTypeface.FromFamilyName("Segoe UI"),
+            Style = _textStyle,
+            StrokeWidth = _strokeWidth
         };
 
         int charIndex = 0;
@@ -83,6 +107,22 @@ public class SkiaTextEditor : SKElement
         float cursorY = scaledPadding;
         float y = 0;
         float lineHeight = 0;
+        float maxAscent = 0;
+        float maxDescent = 0;
+
+        // Berechne die größten Ascent und Descent für die Zeile (konsistente Baseline für alle Buchstaben)
+        foreach (var run in _content)
+        {
+            if (string.IsNullOrEmpty(run.Text)) continue;
+            textPaint.TextSize = run.FontSize;
+            textPaint.Typeface = SKTypeface.FromFamilyName(run.FontFamily);
+            var metrics = textPaint.FontMetrics;
+            maxAscent = Math.Max(maxAscent, -metrics.Ascent);
+            maxDescent = Math.Max(maxDescent, metrics.Descent);
+        }
+
+        lineHeight = maxAscent + maxDescent;
+        y = scaledPadding + maxAscent;  // Konsistente Baseline für alle Buchstaben
 
         // Zeichne Text mit Selection-Highlight
         foreach (var run in _content)
@@ -91,11 +131,11 @@ public class SkiaTextEditor : SKElement
 
             textPaint.TextSize = run.FontSize;
             textPaint.Typeface = SKTypeface.FromFamilyName(run.FontFamily);
-            textPaint.Color = run.Color;
+            textPaint.Color = _textColor;
+            textPaint.Style = _textStyle;
+            textPaint.StrokeWidth = _strokeWidth;
 
             var metrics = textPaint.FontMetrics;
-            lineHeight = metrics.Bottom - metrics.Top;
-            y = scaledPadding + run.FontSize - metrics.Top;
 
             for (int i = 0; i < run.Text.Length; i++)
             {
@@ -105,15 +145,15 @@ public class SkiaTextEditor : SKElement
                 if (charIndex == _cursorPos)
                 {
                     cursorX = x;
-                    cursorY = y - run.FontSize;
+                    cursorY = y;
                 }
 
-                // Selection-Highlight (Orange)
+                // Selection-Highlight (Orange) - verwendet Baseline für konsistente Höhe
                 if (IsCharInSelection(charIndex))
                 {
                     var charWidth = textPaint.MeasureText(charStr);
                     var selectionPaint = new SKPaint { Color = new SKColor(255, 165, 0, 200) };  // Orange!
-                    canvas.DrawRect(new SKRect(x, y - run.FontSize, x + charWidth, y - metrics.Bottom), selectionPaint);
+                    canvas.DrawRect(new SKRect(x, y - maxAscent, x + charWidth, y + maxDescent), selectionPaint);
                     selectionPaint.Dispose();
                 }
 
@@ -127,15 +167,15 @@ public class SkiaTextEditor : SKElement
         if (charIndex == _cursorPos)
         {
             cursorX = x;
-            cursorY = y - (y > 0 ? lineHeight : 0);
+            cursorY = y;
         }
 
         // Blinkender Cursor
         if (_hasFocus && _cursorVisible && y > 0)
         {
             var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 1f };
-            float cursorBottom = y - lineHeight + scaledPadding;
-            canvas.DrawLine(cursorX, cursorY, cursorX, cursorBottom, cursorPaint);
+            float cursorTop = y - lineHeight;
+            canvas.DrawLine(cursorX, y, cursorX, cursorTop, cursorPaint);
             cursorPaint.Dispose();
         }
 
@@ -184,7 +224,7 @@ public class SkiaTextEditor : SKElement
     {
         float scaledPadding = (float)(Padding * _zoom);
         float x = scaledPadding;
-        var textPaint = new SKPaint { TextSize = 12f, IsAntialias = true };
+        var textPaint = new SKPaint { TextSize = 12f, IsAntialias = false };
 
         int charIndex = 0;
         foreach (var run in _content)
