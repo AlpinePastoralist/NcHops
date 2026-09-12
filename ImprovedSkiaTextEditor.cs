@@ -902,10 +902,10 @@ public class ImprovedSkiaTextEditor : SKElement
 
         if (_selectionStart == _selectionEnd)
         {
-            int idx = Math.Clamp(_selectionStart, 0, _model.CharacterCount - 1);
-            if (_model.CharacterCount == 0 || _selectionStart < 0 || _selectionStart > _model.CharacterCount)
+            // WICHTIG: Prüfe ZUERST, ob Index gültig ist, BEVOR Math.Clamp aufgerufen wird!
+            if (_model.CharacterCount == 0 || _selectionStart < 0 || _selectionStart >= _model.CharacterCount)
                 return null;
-            return _model.Characters[idx].Format.Clone();
+            return _model.Characters[_selectionStart].Format.Clone();
         }
 
         if (end <= start)
