@@ -117,85 +117,83 @@ public class ImprovedSkiaTextEditor : SKElement
 
         DrawFieldBorder(canvas, e.Info.Width, e.Info.Height, dpiScale);
 
-        // ─── Früh rückgängig wenn kein Text vorhanden ──────────────────
-        if (_model.CharacterCount == 0)
-            return;
-
-        // ─── Layout berechnen ───────────────────────────────────────
-        // Arbeite direkt mit physischen Pixeln (e.Info.Width/Height sind physische Pixel)
-        // Der Text sollte sich von padding bis (width - padding) in physischen Pixeln ausdehnen
+        // ─── Layout berechnen auch wenn Text leer ist (für Cursor-Position) ──────────────────
         float layoutWidth = e.Info.Width - _scaledPadding * 2;
         float layoutHeight = e.Info.Height - _scaledPadding * 2;
 
         _layoutEngine.Layout(
             _model,
-            Math.Max(layoutWidth, 1),  // Ensure minimum width
+            Math.Max(layoutWidth, 1),
             Math.Max(layoutHeight, 1),
             HorizontalAlign,
             VerticalAlign
         );
 
-        // ─── Text rendern (nach Zeilen) ─────────────────────────────
-        using var textPaint = new SKPaint
+        // ─── Text rendern (nach Zeilen) nur wenn Text vorhanden ──────────────────────────────
+        if (_model.CharacterCount > 0)
         {
-            TextSize = 12f,
-            IsAntialias = true,
-            Typeface = SKTypeface.Default
-        };
-
-        foreach (var line in _layoutEngine.Lines)
-        {
-            float lineX = _scaledPadding + line.LineX;
-            float lineY = _scaledPadding + line.LineY + line.Ascent;
-
-            // Character-weise rendern (für Selection-Highlight)
-            for (int i = line.StartCharIdx; i < line.EndCharIdx; i++)
+            using var textPaint = new SKPaint
             {
-                var ch = _model.Characters[i];
+                TextSize = 12f,
+                IsAntialias = true,
+                Typeface = SKTypeface.Default
+            };
 
-                // Formatting anwenden
-                textPaint.Typeface = SkiaTextModel.GetTypeface(
-                    ch.Format.FontFamily,
-                    ch.Format.Bold,
-                    ch.Format.Italic
-                );
-                textPaint.TextSize = ch.Format.FontSizePt;
-                textPaint.Color = ch.Format.Color;
+            foreach (var line in _layoutEngine.Lines)
+            {
+                float lineX = _scaledPadding + line.LineX;
+                float lineY = _scaledPadding + line.LineY + line.Ascent;
 
-                // Selection-Highlight (sehr auffällige Rot-Farbe zum Testen!)
-                if (IsCharInSelection(i))
+                // Character-weise rendern (für Selection-Highlight)
+                for (int i = line.StartCharIdx; i < line.EndCharIdx; i++)
                 {
-                    var bounds = _layoutEngine.GetCharacterBounds(_model, i);
-                    if (!bounds.IsEmpty)
+                    var ch = _model.Characters[i];
+
+                    // Formatting anwenden
+                    textPaint.Typeface = SkiaTextModel.GetTypeface(
+                        ch.Format.FontFamily,
+                        ch.Format.Bold,
+                        ch.Format.Italic
+                    );
+                    textPaint.TextSize = ch.Format.FontSizePt;
+                    textPaint.Color = ch.Format.Color;
+
+                    // Selection-Highlight (sehr auffällige Rot-Farbe zum Testen!)
+                    if (IsCharInSelection(i))
                     {
-                        // Bounds sind im Content-Space, wir müssen Padding hinzufügen für Screen-Koordinaten
-                        var screenBounds = new SKRect(
-                            bounds.Left + _scaledPadding,
-                            bounds.Top + _scaledPadding,
-                            bounds.Right + _scaledPadding,
-                            bounds.Bottom + _scaledPadding
-                        );
-
-                        using var selectionPaint = new SKPaint
+                        var bounds = _layoutEngine.GetCharacterBounds(_model, i);
+                        if (!bounds.IsEmpty)
                         {
-                            Color = new SKColor(255, 165, 0, 200),  // Orange!
-                            Style = SKPaintStyle.Fill
-                        };
-                        canvas.DrawRect(screenBounds, selectionPaint);
+                            // Bounds sind im Content-Space, wir müssen Padding hinzufügen für Screen-Koordinaten
+                            var screenBounds = new SKRect(
+                                bounds.Left + _scaledPadding,
+                                bounds.Top + _scaledPadding,
+                                bounds.Right + _scaledPadding,
+                                bounds.Bottom + _scaledPadding
+                            );
+
+                            using var selectionPaint = new SKPaint
+                            {
+                                Color = new SKColor(255, 165, 0, 200),  // Orange!
+                                Style = SKPaintStyle.Fill
+                            };
+                            canvas.DrawRect(screenBounds, selectionPaint);
+                        }
                     }
+
+                    // Charakter rendern
+                    canvas.DrawText(ch.Value.ToString(), lineX, lineY, textPaint);
+
+                    // Advance für nächstes Zeichen
+                    float charWidth = textPaint.MeasureText(ch.Value.ToString()) + ch.Format.Tracking;
+                    lineX += charWidth;
                 }
-
-                // Charakter rendern
-                canvas.DrawText(ch.Value.ToString(), lineX, lineY, textPaint);
-
-                // Advance für nächstes Zeichen
-                float charWidth = textPaint.MeasureText(ch.Value.ToString()) + ch.Format.Tracking;
-                lineX += charWidth;
             }
         }
 
-        // ─── Cursor ─────────────────────────────────────────────────
-        if (_hasFocus && _cursorVisible && _layoutEngine.Lines.Count > 0)
+        // ─── Cursor: IMMER zeichnen wenn fokussiert, auch im leeren Textfeld! ─────────────────────────────
+        // DrawCursor() kann auch mit leeren Textfeldern umgehen (zeichnet Cursor am Anfang)
+        if (_hasFocus && _cursorVisible)
             DrawCursor(canvas);
     }
 
@@ -222,10 +220,22 @@ public class ImprovedSkiaTextEditor : SKElement
     }
 
     /// <summary>
-    /// Zeichne blinkenden Cursor
+    /// Zeichne blinkenden Cursor (auch im leeren Textfeld!)
     /// </summary>
     private void DrawCursor(SKCanvas canvas)
     {
+        using var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 2f };
+
+        // Wenn keine Zeilen, zeichne Cursor am Anfang des leeren Textfeldes
+        if (_layoutEngine.Lines.Count == 0)
+        {
+            float x = _scaledPadding;
+            float y1 = _scaledPadding;
+            float y2 = _scaledPadding + _defaultFormat.FontSizePt * 1.5f;  // Cursor-Höhe basierend auf Schriftgröße
+            canvas.DrawLine(x, y1, x, y2, cursorPaint);
+            return;
+        }
+
         var (lineIdx, colInLine) = _layoutEngine.GetCursorLineColumn(_cursorPos);
         if (lineIdx >= _layoutEngine.Lines.Count)
             return;
@@ -233,7 +243,7 @@ public class ImprovedSkiaTextEditor : SKElement
         var line = _layoutEngine.Lines[lineIdx];
 
         // Character-Position in der Zeile berechnen (mit korrekter Messung)
-        float cursorX = line.LineX;
+        float charPosX = line.LineX;
         for (int i = line.StartCharIdx; i < line.StartCharIdx + colInLine; i++)
         {
             if (i < _model.CharacterCount)
@@ -244,16 +254,15 @@ public class ImprovedSkiaTextEditor : SKElement
                     Typeface = SkiaTextModel.GetTypeface(ch.Format.FontFamily, ch.Format.Bold, ch.Format.Italic),
                     TextSize = ch.Format.FontSizePt
                 };
-                cursorX += paint.MeasureText(ch.Value.ToString());
+                charPosX += paint.MeasureText(ch.Value.ToString());
             }
         }
 
         // Screen-Koordinaten (mit Padding)
-        float screenCursorX = _scaledPadding + cursorX;
+        float screenCursorX = _scaledPadding + charPosX;
         float screenCursorY = _scaledPadding + line.LineY;
         float screenCursorBottom = _scaledPadding + line.LineY + line.Ascent + line.Descent;
 
-        using var cursorPaint = new SKPaint { Color = SKColors.White, StrokeWidth = 2f };
         canvas.DrawLine(screenCursorX, screenCursorY, screenCursorX, screenCursorBottom, cursorPaint);
     }
 
