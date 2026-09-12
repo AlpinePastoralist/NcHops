@@ -6632,6 +6632,27 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         RestartEigTimer();
     }
+
+    // Zeichenabstand und Zeilenabstand → SOFORT auf markierten Text anwenden (kein Debounce)
+    // Diese wirken NUR auf den markierten Text, nicht auf den gesamten Text!
+    private void OnEigTrackingLineHeightChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_eigSuppressUpdate) return;
+
+        // Speichere die aktuelle Selection
+        if (_inlineTextBox != null)
+        {
+            var (start, end) = _inlineTextBox.GetSelection();
+            if (start >= 0 && end >= 0)
+            {
+                _savedSelectionStart = start;
+                _savedSelectionEnd = end;
+            }
+        }
+
+        // Wende sofort auf markierten Text an (kein Debounce!)
+        UpdateEditorFontFamily();
+    }
     // Auswahl-Events → sofort Preview (kein G-Code)
     private void OnEigFontChanged(object sender, SelectionChangedEventArgs e)
     {

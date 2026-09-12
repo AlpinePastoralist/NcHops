@@ -1098,11 +1098,11 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
                                         <TextBlock Text="Zeichenabstand (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigTracking" TextChanged="OnEigSizeChanged"/>
+                                        <TextBox x:Name="EigTracking" TextChanged="OnEigTrackingLineHeightChanged"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <TextBlock Text="Zeilenabstand (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="EigLineHeight" TextChanged="OnEigSizeChanged"/>
+                                        <TextBox x:Name="EigLineHeight" TextChanged="OnEigTrackingLineHeightChanged"/>
                                     </StackPanel>
                                 </Grid>
 
