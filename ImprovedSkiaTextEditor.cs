@@ -496,6 +496,7 @@ public class ImprovedSkiaTextEditor : SKElement
             _model.InsertChar(_cursorPos, '\n', _defaultFormat.Clone());
             _cursorPos++;
             TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
+            InvalidateVisual();  // SOFORT rendern, damit Cursor sofort auf nächste Zeile springt!
             e.Handled = true;
         }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.A)
