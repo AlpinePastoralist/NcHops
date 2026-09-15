@@ -784,12 +784,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnShowTextfieldPrototype(object sender, RoutedEventArgs e)
-    {
-        var prototypeWindow = new TextEditorPrototypeWindow();
-        prototypeWindow.ShowDialog();
-    }
-
     private void OnWerkstueckNullpunkt(object sender, RoutedEventArgs e)
     {
         var dlg = new NullpunktDialog { Owner = this };
