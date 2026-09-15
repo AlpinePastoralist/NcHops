@@ -41,7 +41,7 @@ public class TextToLineSegments
     }
 
     /// <summary>
-    /// Konvertiert Text in Liniensegmente.
+    /// Konvertiert Text in Liniensegmente mit voller Formatierungsunterstützung pro Buchstabe.
     /// </summary>
     /// <param name="text">Der zu konvertierende Text</param>
     /// <param name="fontFamily">Schriftfamilie (z.B. "Segoe UI")</param>
@@ -58,37 +58,88 @@ public class TextToLineSegments
         float startY,
         float tolerance = 0.5f)
     {
+        return ConvertTextToLineSegmentsWithFormat(
+            text,
+            new List<(int start, int end, CharacterFormat format)>
+            {
+                (0, text.Length, new CharacterFormat {
+                    FontFamily = fontFamily,
+                    FontSize = fontSize
+                })
+            },
+            startX, startY, tolerance);
+    }
+
+    /// <summary>
+    /// Konvertiert Text mit Formatierung pro Abschnitt in Liniensegmente.
+    /// Unterstützt verschiedene Schriftarten, Größen und Stile pro Buchstabe.
+    /// </summary>
+    /// <param name="text">Der zu konvertierende Text</param>
+    /// <param name="formats">Liste von (Start, Ende, Format)-Tupeln für Textabschnitte</param>
+    /// <param name="startX">Startposition X</param>
+    /// <param name="startY">Startposition Y (Baseline)</param>
+    /// <param name="tolerance">Toleranz für Kurven-zu-Linien-Konvertierung</param>
+    /// <returns>Liste der Zeichengeometrien mit Liniensegmenten</returns>
+    public static List<CharacterGeometry> ConvertTextToLineSegmentsWithFormat(
+        string text,
+        List<(int start, int end, CharacterFormat format)> formats,
+        float startX,
+        float startY,
+        float tolerance = 0.5f)
+    {
         var result = new List<CharacterGeometry>();
 
-        if (string.IsNullOrEmpty(text))
+        if (string.IsNullOrEmpty(text) || formats.Count == 0)
             return result;
 
-        var typeface = SKTypeface.FromFamilyName(fontFamily);
-        using var paint = new SKPaint
+        // Erstelle eine Mapping-Liste: Für jeden Character die passende Formatierung
+        var charFormats = new CharacterFormat[text.Length];
+        foreach (var (start, end, format) in formats)
         {
-            Typeface = typeface,
-            TextSize = fontSize,
-            IsAntialias = true
-        };
+            for (int i = Math.Max(0, start); i < Math.Min(text.Length, end); i++)
+                charFormats[i] = format ?? new CharacterFormat();
+        }
 
         float currentX = startX;
         float baselineY = startY;
+        float maxLineHeight = 0;
 
-        var metrics = paint.FontMetrics;
-        float ascent = -metrics.Ascent;
-        float descent = metrics.Descent;
-        float lineHeight = ascent + descent;
-
-        foreach (char c in text)
+        // Berechne maximale Line Height für alle Formate
+        foreach (var fmt in charFormats)
         {
+            if (fmt == null) continue;
+            var typeface = SKTypeface.FromFamilyName(fmt.FontFamily);
+            using var paint = new SKPaint { Typeface = typeface, TextSize = fmt.FontSize };
+            var metrics = paint.FontMetrics;
+            float lineHeight = -metrics.Ascent + metrics.Descent;
+            maxLineHeight = Math.Max(maxLineHeight, lineHeight);
+        }
+
+        for (int charIdx = 0; charIdx < text.Length; charIdx++)
+        {
+            char c = text[charIdx];
+
             if (c == '\n')
             {
                 currentX = startX;
-                baselineY += lineHeight;
+                baselineY += maxLineHeight;
                 continue;
             }
 
-            // Hole Glyphen-Geometrie für diesen Charakter
+            // Hole das Format für diesen Charakter
+            var fmt = charFormats[charIdx] ?? new CharacterFormat();
+            var typeface = SKTypeface.FromFamilyName(fmt.FontFamily);
+
+            using var paint = new SKPaint
+            {
+                Typeface = typeface,
+                TextSize = fmt.FontSize,
+                IsAntialias = true,
+                TextScaleX = fmt.ScaleX,
+                TextSkewX = fmt.SkewX
+            };
+
+            // Erstelle Charakter-Geometrie
             var charGeo = new CharacterGeometry
             {
                 Character = c.ToString(),
@@ -96,7 +147,7 @@ public class TextToLineSegments
                 Y = baselineY
             };
 
-            // Besorge SKPath für den Charakter
+            // Besorge SKPath für diesen Charakter mit seiner Formatierung
             using var path = paint.GetTextPath(c.ToString(), 0, 0);
 
             if (path != null && !path.IsEmpty)
@@ -112,9 +163,9 @@ public class TextToLineSegments
 
             result.Add(charGeo);
 
-            // Advance zum nächsten Charakter
+            // Advance zum nächsten Charakter (mit Tracking)
             float charWidth = paint.MeasureText(c.ToString());
-            currentX += charWidth;
+            currentX += charWidth + fmt.Tracking;
         }
 
         return result;
