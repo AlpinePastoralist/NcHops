@@ -121,6 +121,8 @@ public class TextLayoutEngine
         float lineWidth = 0;
         float maxAscent = 0;
         float maxDescent = 0;
+        float lastCharAscent = 0;  // Speichere die Metriken des letzten Zeichens
+        float lastCharDescent = 0;
 
         for (int i = 0; i < model.CharacterCount; i++)
         {
@@ -129,9 +131,12 @@ public class TextLayoutEngine
             // Zeilenumbruch-Charakter?
             if (ch.Value == '\n')
             {
-                FinishLine(lineStart, i, lineWidth, maxAscent, maxDescent);
+                // Beziehe den Zeilenumbruch in die Zeile ein (EndCharIdx ist exclusive)
+                FinishLine(lineStart, i + 1, lineWidth, maxAscent, maxDescent);
                 lineStart = i + 1;
                 lineWidth = 0;
+                lastCharAscent = maxAscent;  // Speichere für die leere Zeile nach dem Zeilenumbruch
+                lastCharDescent = maxDescent;
                 maxAscent = maxDescent = 0;
                 continue;
             }
@@ -162,6 +167,20 @@ public class TextLayoutEngine
         // Letzte Zeile
         if (lineStart < model.CharacterCount)
             FinishLine(lineStart, model.CharacterCount, lineWidth, maxAscent, maxDescent);
+
+        // WICHTIG: Wenn der Text mit einem Zeilenumbruch endet, erstelle eine leere Zeile für den Cursor
+        if (model.CharacterCount > 0 && model.Characters[model.CharacterCount - 1].Value == '\n')
+        {
+            _lines.Add(new TextLine
+            {
+                StartCharIdx = model.CharacterCount,
+                EndCharIdx = model.CharacterCount,
+                Width = 0,
+                Ascent = lastCharAscent,  // Verwende die Metriken von der vorherigen Zeile
+                Descent = lastCharDescent
+            });
+            TotalHeight += lastCharAscent + lastCharDescent;
+        }
     }
 
     /// <summary>
@@ -268,21 +287,37 @@ public class TextLayoutEngine
             if (clickY < line.LineY || clickY > line.LineY + line.Ascent + line.Descent)
                 continue;
 
-            // Character suchen in dieser Zeile
+            // Suche die beste Position für den Cursor (aber nicht auf dem Zeilenumbruch!)
             float charX = line.LineX;
+            int closestCharIdx = line.StartCharIdx;
+            bool hasLineBreak = false;
+
             for (int i = line.StartCharIdx; i < line.EndCharIdx; i++)
             {
                 var ch = model.Characters[i];
-                var metrics = GetCharMetrics(ch);
 
-                if (clickX < charX + metrics.advanceX / 2)
+                // Zeilenumbruch gefunden - stoppe hier (nicht drauf landen)
+                if (ch.Value == '\n')
+                {
+                    hasLineBreak = true;
+                    break;
+                }
+
+                var metrics = GetCharMetrics(ch);
+                float charMidpoint = charX + metrics.advanceX / 2;
+
+                // Wenn Klick LINKS der Mitte → auf diesem Zeichen
+                if (clickX < charMidpoint)
                     return i;
 
+                closestCharIdx = i;  // Merke dieses Zeichen
                 charX += metrics.advanceX;
             }
 
-            // Hinter letztem Zeichen
-            return line.EndCharIdx;
+            // Klick ist am Ende der Zeile
+            // Gib die Position NACH dem letzten Zeichen zurück
+            // Das ist die Position VOR dem Zeilenumbruch (falls vorhanden)
+            return closestCharIdx + 1;
         }
 
         // Außerhalb aller Zeilen → Ende des Textes

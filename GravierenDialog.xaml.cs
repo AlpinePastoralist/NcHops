@@ -19,7 +19,7 @@ public record GraviereParams(
     double Drehzahl,
     string Bezugspunkt,
     string Ausrichtung    = "Links",    // "Links" | "Mitte" | "Rechts" — horizontal alignment
-    string AusrichtungV   = "Unten",    // "Oben" | "Mitte" | "Unten" — vertical alignment (new in Phase 2)
+    string AusrichtungV   = "Oben",     // "Oben" | "Mitte" | "Unten" — vertical alignment (new in Phase 2)
     bool   IsVCarve       = false,      // true = V-Carve (Medialachse), false = Umriss
     bool   IsTasche       = false,      // true = Tasche pro Buchstabe
     double VereinfachungMm = 1.0,       // Spitzentoleranz: Umkehrpunkte kollabieren (0 = aus)

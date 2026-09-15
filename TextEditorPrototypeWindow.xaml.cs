@@ -15,6 +15,7 @@ public partial class TextEditorPrototypeWindow : Window
 {
     private SkiaTextModel _currentModel;
     private TextHorizontalAlign _currentHAlign = TextHorizontalAlign.Left;
+    private SKPaintStyle _textStyle = SKPaintStyle.Fill;
     private int _cursorPos = 0;
     private int _selectionStart = -1;
     private int _selectionEnd = -1;
@@ -109,7 +110,9 @@ public partial class TextEditorPrototypeWindow : Window
                         Typeface = SkiaTextModel.GetTypeface(ch.Format.FontFamily, ch.Format.Bold, ch.Format.Italic),
                         TextSize = ch.Format.FontSizePt,
                         Color = ch.Format.Color,
-                        IsAntialias = false  // Konsistent mit GCodeGenerator.BuildTextGeoSk für exakte Positionen
+                        IsAntialias = false,  // Konsistent mit GCodeGenerator.BuildTextGeoSk für exakte Positionen
+                        Style = _textStyle,
+                        StrokeWidth = 0.5f
                     })
                     {
                         var m = paint.FontMetrics;
@@ -359,6 +362,21 @@ public partial class TextEditorPrototypeWindow : Window
         catch (Exception ex) { MessageBox.Show($"Fehler: {ex.Message}"); }
     }
 
+    private void OnTextStyleChanged(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var rdoFill = (RadioButton)FindName("RdoFill");
+            if (rdoFill?.IsChecked == true)
+                _textStyle = SKPaintStyle.Fill;
+            else
+                _textStyle = SKPaintStyle.Stroke;
+
+            _editorCanvas?.InvalidateVisual();
+        }
+        catch (Exception ex) { MessageBox.Show($"Fehler: {ex.Message}"); }
+    }
+
     private void OnExport(object sender, RoutedEventArgs e)
     {
         try
@@ -382,16 +400,4 @@ public partial class TextEditorPrototypeWindow : Window
         catch { /* Ignorieren */ }
     }
 
-    private void OnOpenAdvancedProperties(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var advancedWindow = new TextEditorPropertiesWindow();
-            advancedWindow.Show();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Fehler beim Öffnen der Rendering-Optionen:\n{ex.Message}");
-        }
-    }
 }

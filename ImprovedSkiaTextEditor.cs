@@ -46,11 +46,33 @@ public class ImprovedSkiaTextEditor : SKElement
     private float _scaledPadding = 4f;
     private const float Padding = 4f;
     private TextCharacterFormat _defaultFormat = new();  // Standard-Format für neue Zeichen
-    private float _originalFontSize = 12f;  // Speichere die ursprüngliche Schriftgröße!
+    private float _originalFontSize = 30f;  // Speichere die ursprüngliche Schriftgröße!
+    private SKPaintStyle _textStyle = SKPaintStyle.Fill;
+    private float _strokeWidth = 1.3f;
+    private SKColor? _textColor = null;  // null = verwende Format-Farbe, sonst Override
 
     // ─── Layout Settings ────────────────────────────────────────────
     public TextHorizontalAlign HorizontalAlign { get; set; } = TextHorizontalAlign.Left;
     public TextVerticalAlign VerticalAlign { get; set; } = TextVerticalAlign.Top;
+
+    // ─── Text Style Properties ──────────────────────────────────────
+    public SKPaintStyle TextStyle
+    {
+        get => _textStyle;
+        set { _textStyle = value; InvalidateVisual(); }
+    }
+
+    public float StrokeWidth
+    {
+        get => _strokeWidth;
+        set { _strokeWidth = Math.Max(0.1f, value); InvalidateVisual(); }
+    }
+
+    public SKColor? TextColor
+    {
+        get => _textColor;
+        set { _textColor = value; InvalidateVisual(); }
+    }
 
     // ─── Events & Properties ────────────────────────────────────────
     public event EventHandler<ImprovedSkiaTextEditorTextChangedEventArgs>? TextChanged;
@@ -63,7 +85,7 @@ public class ImprovedSkiaTextEditor : SKElement
         _defaultFormat = new TextCharacterFormat
         {
             FontFamily = "Segoe UI",
-            FontSizePt = 12f,
+            FontSizePt = 30f,
             Color = SKColors.White
         };
 
@@ -149,6 +171,10 @@ public class ImprovedSkiaTextEditor : SKElement
                 {
                     var ch = _model.Characters[i];
 
+                    // Überspringe Zeilenumbrüche (nicht rendern)
+                    if (ch.Value == '\n')
+                        continue;
+
                     // Formatting anwenden
                     textPaint.Typeface = SkiaTextModel.GetTypeface(
                         ch.Format.FontFamily,
@@ -156,7 +182,9 @@ public class ImprovedSkiaTextEditor : SKElement
                         ch.Format.Italic
                     );
                     textPaint.TextSize = ch.Format.FontSizePt;
-                    textPaint.Color = ch.Format.Color;
+                    textPaint.Color = _textColor ?? ch.Format.Color;  // Override-Farbe oder Format-Farbe
+                    textPaint.Style = _textStyle;
+                    textPaint.StrokeWidth = _strokeWidth;
 
                     // Selection-Highlight (sehr auffällige Rot-Farbe zum Testen!)
                     if (IsCharInSelection(i))
@@ -231,7 +259,17 @@ public class ImprovedSkiaTextEditor : SKElement
         {
             float x = _scaledPadding;
             float y1 = _scaledPadding;
-            float y2 = _scaledPadding + _defaultFormat.FontSizePt * 1.5f;  // Cursor-Höhe basierend auf Schriftgröße
+
+            // Berechne Cursor-Höhe basierend auf Default-Format-Metriken (konsistent mit normalen Zeilen)
+            using var paint = new SKPaint
+            {
+                Typeface = SkiaTextModel.GetTypeface(_defaultFormat.FontFamily, false, false),
+                TextSize = _defaultFormat.FontSizePt
+            };
+            var fontMetrics = paint.FontMetrics;
+            float cursorHeight = -fontMetrics.Ascent + fontMetrics.Descent;  // Ascent + Descent
+
+            float y2 = _scaledPadding + cursorHeight;
             canvas.DrawLine(x, y1, x, y2, cursorPaint);
             return;
         }
@@ -481,8 +519,14 @@ public class ImprovedSkiaTextEditor : SKElement
         }
         else if (e.Key == Key.Back)
         {
-            if (_cursorPos > 0)
+            // Wenn eine Selection vorhanden ist, lösche die Selection
+            if (_selectionStart >= 0 && _selectionEnd >= 0)
             {
+                DeleteSelection();
+            }
+            else if (_cursorPos > 0)
+            {
+                // Sonst lösche das Zeichen vor dem Cursor
                 _cursorPos--;
                 _model.DeleteCharAt(_cursorPos);
                 TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
@@ -495,6 +539,10 @@ public class ImprovedSkiaTextEditor : SKElement
             DeleteSelection();
             _model.InsertChar(_cursorPos, '\n', _defaultFormat.Clone());
             _cursorPos++;
+            // Cursor sofort sichtbar machen (synchronisiere Blink-Timer neu)
+            _cursorVisible = true;
+            StopCursorBlink();
+            StartCursorBlink();
             TextChanged?.Invoke(this, new ImprovedSkiaTextEditorTextChangedEventArgs());
             InvalidateVisual();  // SOFORT rendern, damit Cursor sofort auf nächste Zeile springt!
             e.Handled = true;
@@ -524,18 +572,20 @@ public class ImprovedSkiaTextEditor : SKElement
 
         foreach (char c in e.Text)
         {
-            // WICHTIG: Nutze die URSPRÜNGLICHE Schriftgröße für neue Zeichen!
-            // Das verhindert, dass neue Zeichen die Formatierung von aktuell markierten Zeichen bekommen
-            var format = new TextCharacterFormat
+            // Übernehme die Formatierung des Zeichens vor dem Cursor
+            TextCharacterFormat format;
+
+            if (_cursorPos > 0 && _model.CharacterCount > 0 && _cursorPos <= _model.CharacterCount)
             {
-                FontFamily = _defaultFormat.FontFamily,
-                FontSizePt = _originalFontSize,  // ← IMMER die ursprüngliche Größe!
-                Color = _defaultFormat.Color,
-                Bold = _defaultFormat.Bold,
-                Italic = _defaultFormat.Italic,
-                Tracking = _defaultFormat.Tracking,
-                LineHeight = _defaultFormat.LineHeight
-            };
+                // Wenn der Cursor nicht am Anfang steht, übernehme die Formatierung des vorherigen Zeichens
+                format = _model.Characters[_cursorPos - 1].Format.Clone();
+            }
+            else
+            {
+                // Wenn der Cursor am Anfang steht, verwende das Standard-Format
+                format = _defaultFormat.Clone();
+            }
+
             _model.InsertChar(_cursorPos, c, format);
             _cursorPos++;
         }
@@ -579,8 +629,14 @@ public class ImprovedSkiaTextEditor : SKElement
         // Zur vorherigen Zeile wechseln
         var prevLine = _layoutEngine.Lines[lineIdx - 1];
 
-        // Versuche, die gleiche Spalte in der vorherigen Zeile zu erreichen
-        int targetCol = Math.Min(colInLine, prevLine.EndCharIdx - prevLine.StartCharIdx);
+        // Berechne die Länge der Zeile (ohne Zeilenumbruch)
+        int lineLength = prevLine.EndCharIdx - prevLine.StartCharIdx;
+        // Wenn die Zeile mit '\n' endet, subtract 1 (aber nicht unter 0)
+        if (lineLength > 0 && _model.Characters[prevLine.EndCharIdx - 1].Value == '\n')
+            lineLength--;
+
+        // Versuche, die gleiche Spalte in der vorherigen Zeile zu erreichen (ohne Zeilenumbruch)
+        int targetCol = Math.Min(colInLine, lineLength);
         _cursorPos = prevLine.StartCharIdx + targetCol;
     }
 
@@ -601,8 +657,14 @@ public class ImprovedSkiaTextEditor : SKElement
         // Zur nächsten Zeile wechseln
         var nextLine = _layoutEngine.Lines[lineIdx + 1];
 
-        // Versuche, die gleiche Spalte in der nächsten Zeile zu erreichen
-        int targetCol = Math.Min(colInLine, nextLine.EndCharIdx - nextLine.StartCharIdx);
+        // Berechne die Länge der Zeile (ohne Zeilenumbruch)
+        int lineLength = nextLine.EndCharIdx - nextLine.StartCharIdx;
+        // Wenn die Zeile mit '\n' endet, subtract 1 (aber nicht unter 0)
+        if (lineLength > 0 && _model.Characters[nextLine.EndCharIdx - 1].Value == '\n')
+            lineLength--;
+
+        // Versuche, die gleiche Spalte in der nächsten Zeile zu erreichen (ohne Zeilenumbruch)
+        int targetCol = Math.Min(colInLine, lineLength);
         _cursorPos = nextLine.StartCharIdx + targetCol;
     }
 
@@ -611,6 +673,7 @@ public class ImprovedSkiaTextEditor : SKElement
         if (_cursorBlinkTimer != null)
             return;
 
+        _cursorVisible = true;  // Cursor sofort sichtbar machen
         _cursorBlinkTimer = new System.Windows.Threading.DispatcherTimer();
         _cursorBlinkTimer.Interval = TimeSpan.FromMilliseconds(500);
         _cursorBlinkTimer.Tick += (s, e) =>

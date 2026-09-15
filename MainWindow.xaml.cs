@@ -6002,7 +6002,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             // Vertical alignment
             EigAusrOben.IsChecked   = p.AusrichtungV == "Oben"  || string.IsNullOrEmpty(p.AusrichtungV);
             EigAusrVMitte.IsChecked = p.AusrichtungV == "Mitte";
-            EigAusrUnten.IsChecked  = p.AusrichtungV == "Unten" || p.AusrichtungV == "";
+            EigAusrUnten.IsChecked  = p.AusrichtungV == "Unten";
             // Fräser-Info (rein informativ, kein Auswahl mehr im Eigenschaften-Panel)
             var eigWzInfo = _werkzeuge.FirstOrDefault(w => w.Nr == p.WerkzeugNr);
             // V-Carve-Felder
@@ -6761,7 +6761,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
             if (!EigFontSize.IsKeyboardFocused)
             {
-                double fontSizeMm = fmt.FontSizePt / Math.Max(_zoom, 0.0001);
+                double fontSizeMm = fmt.FontSizePt / (Math.Max(_zoom, 0.0001) * Math.Max(_dpiScale, 0.0001));
                 Apply(EigFontSize, fontSizeMm.ToString("F1", inv));
             }
 
@@ -6882,6 +6882,36 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         _eigTimer.Stop(); _eigTimer.Start();
     }
     private void OnEigAusrichtungChanged(object sender, RoutedEventArgs e)        => UpdatePreviewFromFields();
+
+    private void OnEigTextStyleChanged(object sender, RoutedEventArgs e)
+    {
+        if (_inlineTextBox == null) return;
+
+        var rdoFill = (RadioButton)FindName("EigTextFill");
+        if (rdoFill?.IsChecked == true)
+        {
+            _inlineTextBox.TextStyle = SKPaintStyle.Fill;
+            _inlineTextBox.TextColor = null;  // Verwende Format-Farbe
+        }
+        else
+        {
+            _inlineTextBox.TextStyle = SKPaintStyle.Stroke;
+            _inlineTextBox.TextColor = SKColors.Black;  // Stroke-Standard: Schwarz
+        }
+    }
+
+    private void OnEigStrokeWidthChanged(object sender, RoutedEventArgs e)
+    {
+        if (_inlineTextBox == null) return;
+
+        var slider = (Slider)FindName("EigStrokeWidth");
+        var label = (TextBlock)FindName("EigStrokeWidthLabel");
+
+        float width = (float)slider.Value;
+        _inlineTextBox.StrokeWidth = width;
+        label.Text = width.ToString("F2");
+    }
+
 
     private void OnHorizEinmitten(object sender, RoutedEventArgs e)
     {
@@ -8199,7 +8229,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (width < 0.5 || height < 0.5) return;
 
         var lastGrav  = _history.Select(h => h.Params).OfType<GraviereParams>().LastOrDefault();
-        double fontSizeMm = Math.Round(height * 0.7, 1);
+        double fontSizeMm = 30.0;  // Standard-Schriftgröße: 30mm
 
         // Temporärer History-Eintrag mit leerem Text — wird live beim Tippen aktualisiert
         _inlineParams = new GraviereParams(
@@ -8268,9 +8298,31 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         CanvasGrid.PreviewMouseMove += (s, e) =>
         {
             if (_inlineTextBox == null) return;  // Textfeld wurde gelöscht → ignoriere Event
+
+            // Prüfe ob Maus über dem Text-Editor ist
+            var pos = e.GetPosition(_inlineTextBox);
+            bool mouseOverTextBox = pos.X >= 0 && pos.X <= _inlineTextBox.ActualWidth &&
+                                    pos.Y >= 0 && pos.Y <= _inlineTextBox.ActualHeight;
+
+            // Setze Cursor auf IBeam wenn über TextBox, sonst auf Standard-Cursor
+            CanvasGrid.Cursor = mouseOverTextBox ? Cursors.IBeam : _activeTool switch
+            {
+                CanvasTool.Hand         => Cursors.Hand,
+                CanvasTool.Zoom         => Cursors.Cross,
+                CanvasTool.VCarveTextSk => Cursors.Cross,
+                CanvasTool.PfadStart    => Cursors.Cross,
+                CanvasTool.PfadLinie    => Cursors.Cross,
+                CanvasTool.PfadBogen    => Cursors.Cross,
+                CanvasTool.Rechteck     => Cursors.Cross,
+                CanvasTool.Kreis        => Cursors.Cross,
+                CanvasTool.NEck         => Cursors.Cross,
+                _                       => Cursors.Arrow,
+            };
+
+            // Nur wenn Maus gedrückt und über TextBox: weitergeben an Editor
             if (!_inlineTextBox.IsFocused || Mouse.LeftButton != MouseButtonState.Pressed)
                 return;
-            var pos = e.GetPosition(_inlineTextBox);
+
             _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
             e.Handled = true;
         };
@@ -8351,9 +8403,31 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         CanvasGrid.PreviewMouseMove += (s, e) =>
         {
             if (_inlineTextBox == null) return;  // Textfeld wurde gelöscht → ignoriere Event
+
+            // Prüfe ob Maus über dem Text-Editor ist
+            var pos = e.GetPosition(_inlineTextBox);
+            bool mouseOverTextBox = pos.X >= 0 && pos.X <= _inlineTextBox.ActualWidth &&
+                                    pos.Y >= 0 && pos.Y <= _inlineTextBox.ActualHeight;
+
+            // Setze Cursor auf IBeam wenn über TextBox, sonst auf Standard-Cursor
+            CanvasGrid.Cursor = mouseOverTextBox ? Cursors.IBeam : _activeTool switch
+            {
+                CanvasTool.Hand         => Cursors.Hand,
+                CanvasTool.Zoom         => Cursors.Cross,
+                CanvasTool.VCarveTextSk => Cursors.Cross,
+                CanvasTool.PfadStart    => Cursors.Cross,
+                CanvasTool.PfadLinie    => Cursors.Cross,
+                CanvasTool.PfadBogen    => Cursors.Cross,
+                CanvasTool.Rechteck     => Cursors.Cross,
+                CanvasTool.Kreis        => Cursors.Cross,
+                CanvasTool.NEck         => Cursors.Cross,
+                _                       => Cursors.Arrow,
+            };
+
+            // Nur wenn Maus gedrückt und über TextBox: weitergeben an Editor
             if (!_inlineTextBox.IsFocused || Mouse.LeftButton != MouseButtonState.Pressed)
                 return;
-            var pos = e.GetPosition(_inlineTextBox);
+
             _inlineTextBox.HandleMouseMove(pos.X, pos.Y);
             e.Handled = true;
         };
@@ -8463,6 +8537,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_inlineTextBox == null || _inlineParams == null) return;
         _inlineParams      = _inlineParams with { Text = _inlineTextBox.GetText() };
         _previewGravParams = _inlineParams;
+
+        // Aktualisiere die Eigenschaften (Schriftgröße, etc.) des aktuellen Zeichens
+        UpdateSelectedCharacterPropertiesFromEditor();
 
         // Debounced VCarve-Vorausberechnung + Canvas-Update: 300 ms nach letztem Tastendruck.
         // Kein InvalidateVisual() pro Tastendruck – das würde BuildTextGeo bei jedem Zeichen aufrufen.
@@ -12768,6 +12845,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _simPlaying        = false;
             _simTimer.Stop();
             BtnSimPlay.Content = "▶";
+        }
+    }
+
+    private void OnOpenTextEditorRendering(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var textEditorWindow = new TextEditorPropertiesWindow();
+            textEditorWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Fehler beim Öffnen des Text-Editor Rendering:\n{ex.Message}", "Fehler");
         }
     }
 }

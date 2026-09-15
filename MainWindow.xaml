@@ -443,6 +443,13 @@
                         <TextBlock Style="{StaticResource MI}" Text="◎" FontSize="13"/>
                     </MenuItem.Icon>
                 </MenuItem>
+                <Separator/>
+                <MenuItem Header="Text-Editor Rendering..." Click="OnOpenTextEditorRendering">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE245;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
 
             <!-- Hilfe ──────────────────────────────────────── -->
@@ -1138,6 +1145,30 @@
                                                  IsChecked="True" VerticalAlignment="Center"
                                                  Checked="OnEigAusrichtungChanged"/>
                                 </StackPanel>
+
+                                <!-- Text-Darstellung (Fill/Stroke) -->
+                                <TextBlock Text="Text-Darstellung:" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <RadioButton x:Name="EigTextFill" Content="Fill" GroupName="TextStyleGroup"
+                                                 IsChecked="True" Margin="0,0,15,0" VerticalAlignment="Center"
+                                                 Checked="OnEigTextStyleChanged"/>
+                                    <RadioButton x:Name="EigTextStroke" Content="Stroke" GroupName="TextStyleGroup"
+                                                 VerticalAlignment="Center"
+                                                 Checked="OnEigTextStyleChanged"/>
+                                </StackPanel>
+
+                                <!-- Stroke-Dicke Slider -->
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="80"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="40"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Stroke-Breite:" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <Slider x:Name="EigStrokeWidth" Grid.Column="1" Minimum="0.1" Maximum="3" Value="1.3"
+                                            ValueChanged="OnEigStrokeWidthChanged" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBlock x:Name="EigStrokeWidthLabel" Grid.Column="2" Text="1.3" VerticalAlignment="Center" FontSize="11"/>
+                                </Grid>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                                     <Button Content="↔ H. einmitten" Padding="6,3"
