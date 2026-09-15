@@ -91,8 +91,8 @@ public static class TextToSegmentsDemo
 
         int[] sizes = { 12, 24, 36, 48 };
 
-        Console.WriteLine($"{'Größe (pt)',6} | {'Zeichen',8} | {'Segmente',9} | {'Durchschnitt',10}");
-        Console.WriteLine("─".PadRight(50, '─'));
+        Console.WriteLine($"{"Größe (pt)",6} | {"Zeichen",8} | {"Segmente",9} | {"Durchschnitt",10}");
+        Console.WriteLine("".PadRight(50, '─'));
 
         foreach (int size in sizes)
         {
