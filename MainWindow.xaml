@@ -1196,6 +1196,20 @@
                                             <TextBox x:Name="EigSpitzenTol" TextChanged="OnEigSizeChanged"/>
                                         </StackPanel>
                                     </Grid>
+
+                                    <!-- Text zu Liniensegmente Button -->
+                                    <Separator Margin="0,8,0,8"/>
+                                    <Button x:Name="BtnTextToLineSegments"
+                                            Content="Text zu Liniensegmenten konvertieren"
+                                            Padding="8,6" Margin="0,0,0,0"
+                                            Background="#0e639c"
+                                            Foreground="White"
+                                            Click="OnConvertTextToLineSegments"
+                                            FontSize="11"
+                                            ToolTip="Konvertiert den aktuellen Text in Liniensegmente für CNC-Bearbeitung"/>
+                                    <TextBlock x:Name="TbTextConversionInfo"
+                                               Foreground="#888" FontSize="10" TextWrapping="Wrap"
+                                               Margin="0,4,0,0" Height="0"/>
                                 </StackPanel>
 
                                 <TextBlock x:Name="TbEigInfo"

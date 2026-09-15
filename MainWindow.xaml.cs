@@ -12848,6 +12848,62 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         MessageBox.Show("Die Text-zu-Liniensegmente-Konvertierung ist jetzt im Textfeld-Werkzeug integriert.\n\n" +
                         "Verwenden Sie das VCarveTextSk-Werkzeug zum Konvertieren von Text.", "Info");
     }
+
+    /// <summary>
+    /// Konvertiert den aktuellen Text zu Liniensegmenten für CNC-Bearbeitung
+    /// </summary>
+    private void OnConvertTextToLineSegments(object sender, RoutedEventArgs e)
+    {
+        if (_inlineParams == null || string.IsNullOrWhiteSpace(_inlineParams.Text))
+        {
+            MessageBox.Show("Das Textfeld ist leer. Bitte geben Sie Text ein.", "Info");
+            return;
+        }
+
+        try
+        {
+            TbTextConversionInfo.Height = double.NaN;
+            TbTextConversionInfo.Text = "Konvertiere...";
+            TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(100, 150, 255));
+
+            var gp = _inlineParams;
+
+            // Konvertiere Text zu Liniensegmenten
+            var geometries = TextToLineSegments.ConvertTextToLineSegments(
+                text: gp.Text,
+                fontFamily: gp.FontFamily ?? "Segoe UI",
+                fontSize: (float)gp.FontSizeMm,
+                startX: (float)gp.XRel,
+                startY: (float)gp.YRel,
+                tolerance: 0.3f
+            );
+
+            var allSegments = TextToLineSegments.ExtractAllLineSegments(geometries);
+
+            if (allSegments.Count == 0)
+            {
+                TbTextConversionInfo.Text = "✗ Keine Liniensegmente generiert";
+                TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+                return;
+            }
+
+            // Info anzeigen
+            TbTextConversionInfo.Text = $"✓ Konvertiert! {geometries.Count} Zeichen, {allSegments.Count} Liniensegmente";
+            TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(100, 200, 100));
+
+            System.Diagnostics.Debug.WriteLine($"Text zu Liniensegmenten: {geometries.Count} Zeichen → {allSegments.Count} Segmente");
+
+            // Die Liniensegmente sind jetzt verfügbar
+            // Sie können damit im G-Code generiert oder visualisiert werden
+        }
+        catch (Exception ex)
+        {
+            TbTextConversionInfo.Height = double.NaN;
+            TbTextConversionInfo.Text = $"✗ Fehler: {ex.Message}";
+            TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+            System.Diagnostics.Debug.WriteLine($"ERROR in OnConvertTextToLineSegments: {ex}");
+        }
+    }
 }
 
 public sealed class GCodeColorizer : DocumentColorizingTransformer
