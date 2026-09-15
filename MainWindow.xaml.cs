@@ -12844,15 +12844,9 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void OnOpenTextEditorRendering(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            var textEditorWindow = new TextEditorPropertiesWindow();
-            textEditorWindow.Show();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Fehler beim Öffnen des Text-Editor Rendering:\n{ex.Message}", "Fehler");
-        }
+        // Text-zu-Liniensegmente wird jetzt direkt im Textfeld-Werkzeug (VCarveTextSk) verwendet
+        MessageBox.Show("Die Text-zu-Liniensegmente-Konvertierung ist jetzt im Textfeld-Werkzeug integriert.\n\n" +
+                        "Verwenden Sie das VCarveTextSk-Werkzeug zum Konvertieren von Text.", "Info");
     }
 }
 
