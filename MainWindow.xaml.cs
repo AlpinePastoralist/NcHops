@@ -12873,20 +12873,23 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var gp = _inlineParams;
 
             // Konvertiere Text zu Liniensegmenten
-            // Schriftgröße von mm zu Punkten (1mm ≈ 2.834645669 Punkte)
-            float fontSizeInPoints = (float)gp.FontSizeMm * 2.834645669f;
+            // DEBUG: Teste verschiedene Größen
+            float fontSizeMm = (float)gp.FontSizeMm;
+            System.Diagnostics.Debug.WriteLine($"=== Text Konvertierung ===");
+            System.Diagnostics.Debug.WriteLine($"Text: '{gp.Text}'");
+            System.Diagnostics.Debug.WriteLine($"FontSizeMm (direkt): {fontSizeMm}");
+            System.Diagnostics.Debug.WriteLine($"FontSizeMm * 2.83: {fontSizeMm * 2.834645669f}");
+            System.Diagnostics.Debug.WriteLine($"FontSizeMm * 1: {fontSizeMm * 1}");
 
-            // Verwende Ursprung (0,0) für die Konvertierung, dann skaliere später
+            // Verwende Ursprung (0,0) für die Konvertierung
             var geometries = TextToLineSegments.ConvertTextToLineSegments(
                 text: gp.Text,
                 fontFamily: gp.FontFamily ?? "Segoe UI",
-                fontSize: fontSizeInPoints,
-                startX: 0,  // Beginne bei Ursprung
+                fontSize: fontSizeMm,  // Versuche direkt ohne Konvertierung
+                startX: 0,
                 startY: 0,
                 tolerance: 0.3f
             );
-
-            System.Diagnostics.Debug.WriteLine($"FontSizeMm: {gp.FontSizeMm} → {fontSizeInPoints:F2} pt");
 
             var allSegments = TextToLineSegments.ExtractAllLineSegments(geometries);
 
@@ -12906,6 +12909,20 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(100, 200, 100));
 
             System.Diagnostics.Debug.WriteLine($"Text zu Liniensegmenten: {geometries.Count} Zeichen → {allSegments.Count} Segmente");
+
+            // Berechne Bounding Box der Segmente
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            foreach (var seg in allSegments)
+            {
+                minX = Math.Min(minX, Math.Min(seg.X1, seg.X2));
+                maxX = Math.Max(maxX, Math.Max(seg.X1, seg.X2));
+                minY = Math.Min(minY, Math.Min(seg.Y1, seg.Y2));
+                maxY = Math.Max(maxY, Math.Max(seg.Y1, seg.Y2));
+            }
+            float width = maxX - minX;
+            float height = maxY - minY;
+            System.Diagnostics.Debug.WriteLine($"Bounding Box: X=[{minX:F2}..{maxX:F2}] Y=[{minY:F2}..{maxY:F2}] Größe={width:F2}x{height:F2}");
             System.Diagnostics.Debug.WriteLine($"Erste 3 Segmente:");
             for (int i = 0; i < Math.Min(3, allSegments.Count); i++)
             {
