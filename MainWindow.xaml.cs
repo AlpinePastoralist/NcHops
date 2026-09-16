@@ -12873,21 +12873,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var gp = _inlineParams;
 
             // Konvertiere Text zu Liniensegmenten
-            // DEBUG: Teste verschiedene Größen
+            // WICHTIG: Verwende die exakte Position des Textfeldes (XRel, YRel)
             float fontSizeMm = (float)gp.FontSizeMm;
-            System.Diagnostics.Debug.WriteLine($"=== Text Konvertierung ===");
-            System.Diagnostics.Debug.WriteLine($"Text: '{gp.Text}'");
-            System.Diagnostics.Debug.WriteLine($"FontSizeMm (direkt): {fontSizeMm}");
-            System.Diagnostics.Debug.WriteLine($"FontSizeMm * 2.83: {fontSizeMm * 2.834645669f}");
-            System.Diagnostics.Debug.WriteLine($"FontSizeMm * 1: {fontSizeMm * 1}");
+            float posX = (float)gp.XRel;
+            float posY = (float)gp.YRel;
 
-            // Verwende Ursprung (0,0) für die Konvertierung
+            System.Diagnostics.Debug.WriteLine($"=== Text Konvertierung ===");
+            System.Diagnostics.Debug.WriteLine($"Text: '{gp.Text}' @ ({posX}, {posY}) Size: {fontSizeMm}mm");
+
+            // Verwende die exakte Position des Textfeldes für die Konvertierung
             var geometries = TextToLineSegments.ConvertTextToLineSegments(
                 text: gp.Text,
                 fontFamily: gp.FontFamily ?? "Segoe UI",
-                fontSize: fontSizeMm,  // Versuche direkt ohne Konvertierung
-                startX: 0,
-                startY: 0,
+                fontSize: fontSizeMm,
+                startX: posX,  // Exakte X-Position des Textfeldes
+                startY: posY,  // Exakte Y-Position des Textfeldes
                 tolerance: 0.3f
             );
 
