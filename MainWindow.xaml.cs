@@ -61,6 +61,7 @@ public partial class MainWindow : Window
     private int _savedSelectionStart = -1;  // Speichert Selection wenn Textfeld Fokus verliert
     private int _savedSelectionEnd = -1;
     private GraviereParams?           _inlineParams;
+    private List<TextToLineSegments.LineSegment>? _inlineTextLineSegments;  // Liniensegmente für Schrift-Zeichnung
     private int                       _inlineExistingIdx = -1; // >=0 = bestehendes Textfeld editieren
     private DispatcherTimer?  _inlineVCarveTimer;      // Debounce: VCarve vorausberechnen während Tippen
     private System.Threading.CancellationTokenSource? _inlineVCarveCts; // laufende Hintergrundberechnung abbrechen
@@ -11078,6 +11079,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             DrawPfadPunkteDots(canvas);
 
         DrawVermassungOverlay(canvas);
+        DrawTextLineSegmentsSk(canvas);
 
         // Pfad- und Textfeld-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
@@ -12850,13 +12852,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     }
 
     /// <summary>
-    /// Konvertiert den aktuellen Text zu Liniensegmenten für CNC-Bearbeitung
+    /// Konvertiert den aktuellen Text zu Liniensegmenten und zeichnet sie auf der Canvas
     /// </summary>
     private void OnConvertTextToLineSegments(object sender, RoutedEventArgs e)
     {
         if (_inlineParams == null || string.IsNullOrWhiteSpace(_inlineParams.Text))
         {
             MessageBox.Show("Das Textfeld ist leer. Bitte geben Sie Text ein.", "Info");
+            _inlineTextLineSegments = null;
             return;
         }
 
@@ -12884,8 +12887,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             {
                 TbTextConversionInfo.Text = "✗ Keine Liniensegmente generiert";
                 TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+                _inlineTextLineSegments = null;
                 return;
             }
+
+            // Speichere Liniensegmente für Canvas-Zeichnung
+            _inlineTextLineSegments = allSegments;
 
             // Info anzeigen
             TbTextConversionInfo.Text = $"✓ Konvertiert! {geometries.Count} Zeichen, {allSegments.Count} Liniensegmente";
@@ -12893,16 +12900,43 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
             System.Diagnostics.Debug.WriteLine($"Text zu Liniensegmenten: {geometries.Count} Zeichen → {allSegments.Count} Segmente");
 
-            // Die Liniensegmente sind jetzt verfügbar
-            // Sie können damit im G-Code generiert oder visualisiert werden
+            // Aktualisiere Canvas zum Zeichnen der Liniensegmente
+            DrawSkia?.InvalidateVisual();
         }
         catch (Exception ex)
         {
             TbTextConversionInfo.Height = double.NaN;
             TbTextConversionInfo.Text = $"✗ Fehler: {ex.Message}";
             TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+            _inlineTextLineSegments = null;
             System.Diagnostics.Debug.WriteLine($"ERROR in OnConvertTextToLineSegments: {ex}");
         }
+    }
+
+    /// <summary>
+    /// Zeichnet die konvertierten Text-Liniensegmente auf der Canvas
+    /// </summary>
+    private void DrawTextLineSegmentsSk(SKCanvas canvas)
+    {
+        if (_inlineTextLineSegments == null || _inlineTextLineSegments.Count == 0)
+            return;
+
+        using var paint = new SKPaint
+        {
+            Color = SKColors.LimeGreen,      // Grüne Linien für Schrift
+            StrokeWidth = 0.1f,              // Dünne Linien
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke
+        };
+
+        // Zeichne alle Liniensegmente
+        foreach (var segment in _inlineTextLineSegments)
+        {
+            canvas.DrawLine(segment.X1, segment.Y1, segment.X2, segment.Y2, paint);
+        }
+
+        // Debug-Info in Konsole
+        System.Diagnostics.Debug.WriteLine($"DrawTextLineSegmentsSk: {_inlineTextLineSegments.Count} Segmente gezeichnet");
     }
 }
 
