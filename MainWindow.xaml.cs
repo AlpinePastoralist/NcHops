@@ -8102,11 +8102,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         {
             _neckRubberBand = new System.Windows.Shapes.Polygon
             {
-                Stroke           = System.Windows.Media.Brushes.LimeGreen,
+                Stroke           = System.Windows.Media.Brushes.Orange,
                 StrokeThickness  = 1.5,
                 StrokeDashArray  = new System.Windows.Media.DoubleCollection { 5, 3 },
                 Fill             = new System.Windows.Media.SolidColorBrush(
-                                       System.Windows.Media.Color.FromArgb(25, 50, 255, 50)),
+                                       System.Windows.Media.Color.FromArgb(25, 255, 160, 0)),
                 IsHitTestVisible = false,
             };
         }
@@ -12872,14 +12872,20 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var gp = _inlineParams;
 
             // Konvertiere Text zu Liniensegmenten
+            // Schriftgröße von mm zu Punkten (1mm ≈ 2.834645669 Punkte)
+            float fontSizeInPoints = (float)gp.FontSizeMm * 2.834645669f;
+
+            // Verwende Ursprung (0,0) für die Konvertierung, dann skaliere später
             var geometries = TextToLineSegments.ConvertTextToLineSegments(
                 text: gp.Text,
                 fontFamily: gp.FontFamily ?? "Segoe UI",
-                fontSize: (float)gp.FontSizeMm,
-                startX: (float)gp.XRel,
-                startY: (float)gp.YRel,
+                fontSize: fontSizeInPoints,
+                startX: 0,  // Beginne bei Ursprung
+                startY: 0,
                 tolerance: 0.3f
             );
+
+            System.Diagnostics.Debug.WriteLine($"FontSizeMm: {gp.FontSizeMm} → {fontSizeInPoints:F2} pt");
 
             var allSegments = TextToLineSegments.ExtractAllLineSegments(geometries);
 
@@ -12899,6 +12905,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(100, 200, 100));
 
             System.Diagnostics.Debug.WriteLine($"Text zu Liniensegmenten: {geometries.Count} Zeichen → {allSegments.Count} Segmente");
+            System.Diagnostics.Debug.WriteLine($"Erste 3 Segmente:");
+            for (int i = 0; i < Math.Min(3, allSegments.Count); i++)
+            {
+                var seg = allSegments[i];
+                System.Diagnostics.Debug.WriteLine($"  [{i}] ({seg.X1:F2},{seg.Y1:F2}) → ({seg.X2:F2},{seg.Y2:F2})");
+            }
 
             // Aktualisiere Canvas zum Zeichnen der Liniensegmente
             DrawSkia?.InvalidateVisual();
@@ -12924,19 +12936,28 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         using var paint = new SKPaint
         {
             Color = SKColors.LimeGreen,      // Grüne Linien für Schrift
-            StrokeWidth = 0.1f,              // Dünne Linien
+            StrokeWidth = 2.0f,              // Dickere Linien für Sichtbarkeit
             IsAntialias = true,
             Style = SKPaintStyle.Stroke
         };
 
+        // Debug: Erste 5 Segmente ausgeben
+        System.Diagnostics.Debug.WriteLine($"DrawTextLineSegmentsSk: {_inlineTextLineSegments.Count} Segmente vorhanden");
+        for (int i = 0; i < Math.Min(5, _inlineTextLineSegments.Count); i++)
+        {
+            var seg = _inlineTextLineSegments[i];
+            System.Diagnostics.Debug.WriteLine($"  Segment {i}: ({seg.X1:F2},{seg.Y1:F2}) → ({seg.X2:F2},{seg.Y2:F2})");
+        }
+
         // Zeichne alle Liniensegmente
+        int drawnCount = 0;
         foreach (var segment in _inlineTextLineSegments)
         {
             canvas.DrawLine(segment.X1, segment.Y1, segment.X2, segment.Y2, paint);
+            drawnCount++;
         }
 
-        // Debug-Info in Konsole
-        System.Diagnostics.Debug.WriteLine($"DrawTextLineSegmentsSk: {_inlineTextLineSegments.Count} Segmente gezeichnet");
+        System.Diagnostics.Debug.WriteLine($"DrawTextLineSegmentsSk: {drawnCount} Segmente gezeichnet");
     }
 }
 
