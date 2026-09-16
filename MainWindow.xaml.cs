@@ -8700,6 +8700,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _inlineExistingIdx = -1;
             _inlineParams      = null;
             _previewGravParams = null;
+            // NICHT löschen: _inlineTextLineSegments bleibt für Visualisierung bestehen!
             // Zeige dem Benutzer, was schiefging
             MessageBox.Show($"Fehler beim Speichern des Textes:\n{ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -12958,6 +12959,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
 
         System.Diagnostics.Debug.WriteLine($"DrawTextLineSegmentsSk: {drawnCount} Segmente gezeichnet");
+    }
+
+    /// <summary>
+    /// Löscht die angezeigten Liniensegmente
+    /// </summary>
+    private void OnClearLineSegments(object sender, RoutedEventArgs e)
+    {
+        _inlineTextLineSegments = null;
+        TbTextConversionInfo.Text = "Liniensegmente gelöscht";
+        TbTextConversionInfo.Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150));
+        TbTextConversionInfo.Height = double.NaN;
+        DrawSkia?.InvalidateVisual();
+        System.Diagnostics.Debug.WriteLine("Liniensegmente gelöscht");
     }
 }
 
