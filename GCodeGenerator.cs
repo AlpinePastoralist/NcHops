@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 using System.Text;
 
@@ -1305,6 +1306,8 @@ public static class GCodeGenerator
         // Build absolute endpoint coords + arc midpoints (arcMids[i] = midpoint for segment i-1→i)
         var pts     = new List<(double x, double y)>();
         var arcMids = new List<(double mx, double my)?>();
+        var splineTypes = new List<(int originalIdx, PfadPunktTyp typ)>(); // Track Spline segments
+
         for (int i = 0; i < path.Count; i++)
         {
             var p = path[i];
@@ -1314,6 +1317,7 @@ public static class GCodeGenerator
             else
                 pt = ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, workW, workH);
             pts.Add(pt);
+            splineTypes.Add((i, p.Typ));
 
             if (i > 0 && p.Typ == PfadPunktTyp.Bogen)
             {
@@ -1324,6 +1328,31 @@ public static class GCodeGenerator
                 arcMids.Add(null);
             }
         }
+
+        // Diskretisiere Spline-Segmente in Linien
+        for (int i = path.Count - 1; i >= 1; i--)
+        {
+            if (path[i].Typ == PfadPunktTyp.Spline)
+            {
+                var splinePts = InterpolateSplineSegment(pts, i - 1, path[i].SplineModus, path[i].SplineTension);
+                if (splinePts.Count > 1)
+                {
+                    pts.RemoveAt(i);
+                    splineTypes.RemoveAt(i);
+                    for (int j = 0; j < splinePts.Count - 1; j++)
+                    {
+                        pts.Insert(i, splinePts[j]);
+                        splineTypes.Insert(i, (i, PfadPunktTyp.Linie));
+                    }
+                    pts.Insert(i + splinePts.Count - 1, splinePts[^1]);
+                    splineTypes.Insert(i + splinePts.Count - 1, (i, PfadPunktTyp.Linie));
+                }
+            }
+        }
+
+        // Aktualisiere arcMids für neue Länge
+        while (arcMids.Count < pts.Count)
+            arcMids.Add(null);
 
         bool hasBogen = arcMids.Skip(1).Any(m => m.HasValue);
 
@@ -2455,6 +2484,94 @@ public static class GCodeGenerator
         if (Math.Abs(denom) < 1e-10) return null;
         double t = ((b.x - a.x) * db.y - (b.y - a.y) * db.x) / denom;
         return (a.x + t * da.x, a.y + t * da.y);
+    }
+
+    // ── Spline-Interpolation ────────────────────────────────────────────
+
+    private static (double x, double y) CatmullRomPoint(
+        (double x, double y) p0, (double x, double y) p1,
+        (double x, double y) p2, (double x, double y) p3,
+        double t, double tension = 0.5)
+    {
+        // Standard Catmull-Rom Spline Formel
+        // Geht durch p1 bei t=0 und durch p2 bei t=1
+        double t2 = t * t;
+        double t3 = t2 * t;
+        double m = 1.0 - tension;
+        double c = m / 2.0;
+
+        // Kurve = c * [ a*t³ + b*t² + d*t + e ]
+        double a = -p0.x + 3*p1.x - 3*p2.x + p3.x;
+        double b = 2*p0.x - 5*p1.x + 4*p2.x - p3.x;
+        double d = -p0.x + p2.x;
+        double e = 2*p1.x;
+
+        double x = c * (a * t3 + b * t2 + d * t + e);
+
+        a = -p0.y + 3*p1.y - 3*p2.y + p3.y;
+        b = 2*p0.y - 5*p1.y + 4*p2.y - p3.y;
+        d = -p0.y + p2.y;
+        e = 2*p1.y;
+
+        double y = c * (a * t3 + b * t2 + d * t + e);
+
+        return (x, y);
+    }
+
+    // Diskretisiere Spline-Segment in Linien-Punkte
+    private static List<(double x, double y)> InterpolateSplineSegment(
+        List<(double x, double y)> allPts, int segIdx, string splineMode, double splineTension)
+    {
+        var result = new List<(double x, double y)>();
+
+        if (splineMode == "Bézier")
+        {
+            // Vereinfachte Bézier: Nutze aktuelle und nächste Punkt, plus Nachbarn als Kontrollpunkte
+            int n = allPts.Count;
+            if (segIdx < 0 || segIdx >= n - 1) return new List<(double x, double y)> { allPts[segIdx + 1] };
+
+            var p1 = allPts[segIdx];
+            var p2 = allPts[segIdx + 1];
+            var cp0 = segIdx > 0 ? allPts[segIdx - 1] : p1;
+            var cp3 = segIdx < n - 2 ? allPts[segIdx + 2] : p2;
+
+            // Quadratische Bézier mit 3 Kontrollpunkten
+            int steps = Math.Max(5, (int)Math.Ceiling(Math.Sqrt(
+                Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2)) / 0.5));
+
+            for (int i = 1; i <= steps; i++)
+            {
+                double t = (double)i / steps;
+                double mt = 1 - t;
+
+                // Quadratische Bézier-Kurve
+                double x = mt*mt*p1.x + 2*mt*t*cp0.x + t*t*p2.x;
+                double y = mt*mt*p1.y + 2*mt*t*cp0.y + t*t*p2.y;
+                result.Add((x, y));
+            }
+        }
+        else // Catmull-Rom (default)
+        {
+            int n = allPts.Count;
+            if (segIdx < 0 || segIdx >= n - 1) return new List<(double x, double y)> { allPts[segIdx + 1] };
+
+            var p0 = segIdx > 0 ? allPts[segIdx - 1] : allPts[segIdx];
+            var p1 = allPts[segIdx];
+            var p2 = allPts[segIdx + 1];
+            var p3 = segIdx < n - 2 ? allPts[segIdx + 2] : allPts[segIdx + 1];
+
+            int steps = Math.Max(5, (int)Math.Ceiling(Math.Sqrt(
+                Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2)) / 0.5));
+
+            for (int i = 1; i <= steps; i++)
+            {
+                double t = (double)i / steps;
+                var pt = CatmullRomPoint(p0, p1, p2, p3, t, splineTension);
+                result.Add(pt);
+            }
+        }
+
+        return result;
     }
 
     public static (double x, double y) ConvertBezugspunkt(string ref_, double xRel, double yRel, double w, double h)

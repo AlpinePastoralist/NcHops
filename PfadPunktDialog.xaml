@@ -98,11 +98,28 @@
                 <ComboBoxItem Content="Pfeilhöhe"/>
             </ComboBox>
 
+            <!-- Spline-Modus-Auswahl -->
+            <Label Grid.Row="4" Grid.Column="0" x:Name="LblSplineModus" Content="Spline-Art:"
+                   VerticalAlignment="Center" Visibility="Collapsed"/>
+            <ComboBox Grid.Row="4" Grid.Column="1" x:Name="CbSplineModus"
+                      VerticalAlignment="Center" Visibility="Collapsed"
+                      SelectionChanged="OnSplineModusChanged">
+                <ComboBoxItem Content="Catmull-Rom"/>
+                <ComboBoxItem Content="Bézier"/>
+            </ComboBox>
+
             <!-- Wert: Bogen X-Mitte / Radius / Pfeilhöhe -->
             <Label Grid.Row="5" Grid.Column="0" x:Name="LblXMid" Content="Bogen X-Mitte:"
                    VerticalAlignment="Center" Visibility="Collapsed"/>
             <TextBox Grid.Row="5" Grid.Column="1" x:Name="TxtXMid" Text="0"
                      VerticalAlignment="Center" Visibility="Collapsed"/>
+
+            <!-- Spline-Spannung (Tension) -->
+            <Label Grid.Row="5" Grid.Column="0" x:Name="LblSplineTension" Content="Spannung:"
+                   VerticalAlignment="Center" Visibility="Collapsed"/>
+            <TextBox Grid.Row="5" Grid.Column="1" x:Name="TxtSplineTension" Text="0.5"
+                     VerticalAlignment="Center" Visibility="Collapsed"
+                     ToolTip="Spline-Spannung (0.0-1.0), höher = straffere Kurve"/>
 
             <!-- Bogen Y-Mitte (nur für Bogenmitte-Modus) -->
             <Label Grid.Row="6" Grid.Column="0" x:Name="LblYMid" Content="Bogen Y-Mitte:"

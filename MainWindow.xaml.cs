@@ -79,6 +79,9 @@ public partial class MainWindow : Window
     private (double x, double y) _pfadBogenEndAbs;       // Bogen-Endpunkt (absolut mm)
     private (double x, double y) _pfadMouseMm;            // Aktuell gefangene Mausposition (mm)
     private bool             _pfadMouseValid = false;
+    private List<(double x, double y)> _splinePointsBeingCreated = [];
+    private string _splineModeBeingCreated = "Catmull-Rom";
+    private double _splineTensionBeingCreated = 0.5;
 
     // ── Rechteck-Werkzeug ────────────────────────────────────────
     private bool             _rktDragging  = false;
@@ -156,6 +159,10 @@ public partial class MainWindow : Window
     private double _vermDragOffset;   // Vorschau-Offset beim Ziehen (State 3)
     private bool _vermIsHolding = false;  // Maustaste nach 1. Klick gehalten (Drag-Positionierung)
     private (double x, double y) _vermDownMm; // Klick-Position beim Drücken (für Bewegungs-Schwellwert)
+
+    // ── Template-Image (Schablone) ────────────────────────────────────────
+    private TemplateImage? _templateImage;
+    private int _templateImageDragAnchor = -1;  // Welcher Ankerpunkt wird gerade gezogen (-1 = keiner)
 
     // ── G-Code Zeilenmarkierung ───────────────────────────────────
     private int _highlightGCodeLine = -1;   // Caret-Zeile
@@ -716,6 +723,40 @@ public partial class MainWindow : Window
     }
 
     // ── Menü ─────────────────────────────────────────────────────
+
+    private void OnBildOeffnen(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Bild als Schablone öffnen",
+            Filter = "Bilder (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp|PNG (*.png)|*.png|JPEG (*.jpg;*.jpeg)|*.jpg;*.jpeg|Alle Dateien (*.*)|*.*",
+            CheckFileExists = true
+        };
+
+        if (dlg.ShowDialog(this) != true)
+            return;
+
+        try
+        {
+            _templateImage = new TemplateImage(dlg.FileName);
+            if (_templateImage.Bitmap != null)
+            {
+                _templateImage.UpdateAnchorPoints();
+                DrawSkia.InvalidateVisual();
+                MessageBox.Show("Schablone geladen. Verwenden Sie das Verschieben-Werkzeug um die Ankerpunkte zu adjustieren.", "Schablone geladen", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                MessageBox.Show("Bild konnte nicht geladen werden.", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                _templateImage = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Fehler beim Laden der Schablone: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+            _templateImage = null;
+        }
+    }
 
     private void OnSpeichern(object sender, RoutedEventArgs e)
     {
@@ -1575,23 +1616,171 @@ public partial class MainWindow : Window
 
     private void AddPfadSpline(double mmX, double mmY)
     {
-        double xRel = Math.Round(mmX, 3);
-        double yRel = Math.Round(mmY, 3);
+        _splinePointsBeingCreated.Add((mmX, mmY));
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void FinalizePfadSpline()
+    {
+        if (_splinePointsBeingCreated.Count < 2)
+        {
+            MessageBox.Show("Mindestens 2 Punkte erforderlich.", "Fehler",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         _suppressNextAutoFit = true;
-        var p = new PfadPunktParams(
-            XRel: xRel, YRel: yRel,
-            ZTiefe: 0, ZZustellung: 0, FraeserD: 0, Drehzahl: 0,
-            Vorschub: 0, VorschubFz: 0,
-            Radiuskorrektur: "Mittig",
-            Bezugspunkt: "Unten links",
-            Typ: PfadPunktTyp.Spline
-        );
-        p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
-        _history.Add(new HistoryEntry($"Pfad Spline #{PfadPunktNummer(_history.Count)}",
-            $"X={p.XRel} Y={p.YRel}", p, level: 1));
-        AutoDetectGeomConstraints(_history.Count - 1);
-        HistoryList.SelectedItem    = _history[^1];
-        TabEigenschaften.IsSelected = true;
+
+        var interpolatedPts = InterpolateFullSpline(_splinePointsBeingCreated,
+                                                     _splineModeBeingCreated,
+                                                     _splineTensionBeingCreated);
+
+        foreach (var pt in interpolatedPts)
+        {
+            double xRel = Math.Round(pt.x, 3);
+            double yRel = Math.Round(pt.y, 3);
+
+            var p = new PfadPunktParams(
+                XRel: xRel, YRel: yRel,
+                ZTiefe: 0, ZZustellung: 0, FraeserD: 0, Drehzahl: 0,
+                Vorschub: 0, VorschubFz: 0,
+                Radiuskorrektur: "Mittig",
+                Bezugspunkt: "Unten links",
+                Typ: PfadPunktTyp.Linie
+            );
+            p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
+            _history.Add(new HistoryEntry($"Pfad Linie (Spline) #{PfadPunktNummer(_history.Count)}",
+                $"X={p.XRel} Y={p.YRel}", p, level: 1));
+        }
+
+        RegenerateGCodeFromHistory();
+        HistoryList.SelectedIndex = _history.Count - 1;
+
+        _splinePointsBeingCreated.Clear();
+        SetActiveTool(CanvasTool.Select);
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private List<(double x, double y)> InterpolateFullSpline(List<(double x, double y)> pts,
+                                                               string splineMode, double tension)
+    {
+        if (pts.Count < 2) return new();
+        if (pts.Count == 2)
+        {
+            // Mit nur 2 Punkten: Gerade Linie mit Zwischen-Punkte
+            var result = new List<(double x, double y)> { pts[0] };
+            double dx = pts[1].x - pts[0].x;
+            double dy = pts[1].y - pts[0].y;
+            double dist = Math.Sqrt(dx * dx + dy * dy);
+            int steps = Math.Max(10, (int)Math.Ceiling(dist / 0.5));
+
+            for (int s = 1; s <= steps; s++)
+            {
+                double t = (double)s / steps;
+                result.Add((pts[0].x + t * dx, pts[0].y + t * dy));
+            }
+            return result;
+        }
+        if (pts.Count == 3)
+        {
+            // Mit 3 Punkten: Catmull-Rom Kurve mit maximaler Krümmung (tension=0)
+            var result = new List<(double x, double y)>();
+            double curveTension = 0.0;  // Maximale Krümmung für 3 Punkte
+
+            // Segment 1: Start -> Spline1
+            var p0 = pts[0];  // Wiederhole Start als Kontrollpunkt
+            var p1 = pts[0];
+            var p2 = pts[1];
+            var p3 = pts[2];
+
+            double dist1 = Math.Sqrt(Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2));
+            int steps1 = Math.Max(15, (int)Math.Ceiling(dist1 / 0.5));
+
+            result.Add(p1);
+            for (int s = 1; s <= steps1; s++)
+            {
+                double t = (double)s / steps1;
+                var pt = CatmullRomPointPreview(p0, p1, p2, p3, t, curveTension);
+                result.Add(pt);
+            }
+
+            // Segment 2: Spline1 -> Cursor
+            p0 = pts[0];
+            p1 = pts[1];
+            p2 = pts[2];
+            p3 = pts[2];  // Wiederhole Cursor als Kontrollpunkt
+
+            double dist2 = Math.Sqrt(Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2));
+            int steps2 = Math.Max(15, (int)Math.Ceiling(dist2 / 0.5));
+
+            for (int s = 1; s <= steps2; s++)
+            {
+                double t = (double)s / steps2;
+                var pt = CatmullRomPointPreview(p0, p1, p2, p3, t, curveTension);
+                result.Add(pt);
+            }
+
+            return result;
+        }
+
+        // 4+ Punkte: Catmull-Rom Spline mit maximaler Krümmung
+        var fullResult = new List<(double x, double y)> { pts[0] };
+        int n = pts.Count;
+        double maxTension = 0.0;  // Maximale Krümmung
+
+        for (int i = 0; i < n - 1; i++)
+        {
+            var p1 = pts[i];
+            var p2 = pts[i + 1];
+            // Für erste Segment: p0 = p1 wiederholt (keine Extrapolation)
+            var p0 = i > 0 ? pts[i - 1] : pts[i];
+            // Für letzte Segment: p3 = p2 wiederholt (keine Extrapolation)
+            var p3 = i < n - 2 ? pts[i + 2] : pts[i + 1];
+
+            double dx = p2.x - p1.x;
+            double dy = p2.y - p1.y;
+            double dist = Math.Sqrt(dx * dx + dy * dy);
+            int steps = Math.Max(10, (int)Math.Ceiling(dist / 0.5));
+
+            for (int s = 1; s <= steps; s++)
+            {
+                double t = (double)s / steps;
+                var pt = CatmullRomPointPreview(p0, p1, p2, p3, t, maxTension);
+                fullResult.Add(pt);
+            }
+        }
+
+        return fullResult;
+    }
+
+    private static (double x, double y) CatmullRomPointPreview(
+        (double x, double y) p0, (double x, double y) p1,
+        (double x, double y) p2, (double x, double y) p3,
+        double t, double tension = 0.5)
+    {
+        // Standard Catmull-Rom Spline Formel
+        // Geht durch p1 bei t=0 und durch p2 bei t=1
+        double t2 = t * t;
+        double t3 = t2 * t;
+        double m = 1.0 - tension;
+        double c = m / 2.0;
+
+        // Kurve = c * [ a*t³ + b*t² + d*t + e ]
+        double a = -p0.x + 3*p1.x - 3*p2.x + p3.x;
+        double b = 2*p0.x - 5*p1.x + 4*p2.x - p3.x;
+        double d = -p0.x + p2.x;
+        double e = 2*p1.x;
+
+        double x = c * (a * t3 + b * t2 + d * t + e);
+
+        a = -p0.y + 3*p1.y - 3*p2.y + p3.y;
+        b = 2*p0.y - 5*p1.y + 4*p2.y - p3.y;
+        d = -p0.y + p2.y;
+        e = 2*p1.y;
+
+        double y = c * (a * t3 + b * t2 + d * t + e);
+
+        return (x, y);
     }
 
     // Erkennt geometrische Eigenschaften automatisch nach dem Setzen eines Linienpunkts:
@@ -7557,6 +7746,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 }
                 else if (_activeTool == CanvasTool.PfadBogen && _pfadBogenWaiting)
                 { _pfadBogenWaiting = false; DrawSkia?.InvalidateVisual(); }
+                else if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count > 0)
+                { _splinePointsBeingCreated.Clear(); DrawSkia?.InvalidateVisual(); }
                 else if ((_activeTool == CanvasTool.VCarveTextSk) && _isTextDragging)
                 { _isTextDragging = false; ClearTextRubberBand(); }
                 else if (_activeTool == CanvasTool.Rechteck && _rktDragging)
@@ -7570,6 +7761,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 e.Handled = true; break;
             case Key.D0 or Key.NumPad0 when ctrl: ZoomTo100();    e.Handled = true; break;
             case Key.D1 or Key.NumPad1 when ctrl: ZoomTo1to1();   e.Handled = true; break;
+
+            case Key.Return:
+                if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 2)
+                { FinalizePfadSpline(); e.Handled = true; }
+                break;
         }
     }
 #if false
@@ -8231,6 +8427,39 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         canvas.DrawArc(new SKRect(dOcx - dR, dOcy - dR, dOcx + dR, dOcy + dR),
                        (float)a1, (float)sweep, false, paint);
+    }
+
+    private void DrawSplinePreviewSk(SKCanvas canvas, List<(double x, double y)> pts,
+                                     string splineMode, double tension)
+    {
+        if (pts.Count < 2) return;
+
+        using var paint = new SKPaint
+        {
+            Color = new SKColor(255, 165, 0, 200),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1.5f,
+            IsAntialias = true
+        };
+
+        double sc = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+        double px(double x) => _topRect.Left + x * sc;
+        double py(double y) => _topRect.Bottom - y * sc;
+
+        // Erstelle temporäre Liste mit aktuellem Mauszeiger als letztem Punkt
+        var ptsWithMouse = new List<(double x, double y)>(pts);
+        if (_pfadMouseValid)
+            ptsWithMouse.Add(_pfadMouseMm);
+
+        var interpolated = InterpolateFullSpline(ptsWithMouse, splineMode, tension);
+        for (int i = 1; i < interpolated.Count; i++)
+        {
+            float x1 = (float)px(interpolated[i - 1].x);
+            float y1 = (float)py(interpolated[i - 1].y);
+            float x2 = (float)px(interpolated[i].x);
+            float y2 = (float)py(interpolated[i].y);
+            canvas.DrawLine(x1, y1, x2, y2, paint);
+        }
     }
 
     private void StartInlineTextEdit(Point screenA, Point screenB)
@@ -9383,6 +9612,28 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
+        // Template-Image: Ankerpunkt mit Move-Werkzeug vergrößern/verschieben
+        if (_activeTool == CanvasTool.Move && _templateImage?.Bitmap != null && e.ChangedButton == MouseButton.Left)
+        {
+            var screenPt = e.GetPosition(CanvasGrid);
+            double mmX = (screenPt.X - _panX) / _zoom;
+            double mmY = (screenPt.Y - _panY) / _zoom;
+
+            double sc = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+            double canvasMmX = (mmX - _topRect.Left) / sc;
+            double canvasMmY = (_topRect.Bottom - mmY) / sc;
+
+            int anchorIdx = _templateImage.GetClosestAnchorPoint(canvasMmX, canvasMmY, 10.0);
+
+            if (anchorIdx >= 0)
+            {
+                _templateImageDragAnchor = anchorIdx;
+                CanvasGrid.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+        }
+
         // Zoom-Werkzeug
         if (_activeTool == CanvasTool.Zoom)
         {
@@ -10046,6 +10297,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     {
         if (e.ChangedButton == MouseButton.Left)
         {
+            // Template-Image: Ankerpunkt-Drag beendet
+            if (_templateImageDragAnchor >= 0 && CanvasGrid.IsMouseCaptured)
+            {
+                CanvasGrid.ReleaseMouseCapture();
+                _templateImageDragAnchor = -1;
+                DrawSkia?.InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+
             // VCarveText/Sk + Ctrl-Resize: Drag beendet → Resize committen, Editor wieder öffnen
             if ((_activeTool == CanvasTool.VCarveTextSk)
                 && _ctrlResizeReopen >= 0 && CanvasGrid.IsMouseCaptured)
@@ -10214,6 +10475,22 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void OnCanvasMouseMove(object sender, MouseEventArgs e)
     {
+        // Template-Image: Ankerpunkt verschieben
+        if (_templateImageDragAnchor >= 0 && CanvasGrid.IsMouseCaptured && _templateImage != null)
+        {
+            var screenPt = e.GetPosition(CanvasGrid);
+            double mmX = (screenPt.X - _panX) / _zoom;
+            double mmY = (screenPt.Y - _panY) / _zoom;
+
+            double sc = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+            double canvasMmX = (mmX - _topRect.Left) / sc;
+            double canvasMmY = (_topRect.Bottom - mmY) / sc;
+
+            _templateImage.ResizeFromAnchor(_templateImageDragAnchor, canvasMmX, canvasMmY);
+            DrawSkia?.InvalidateVisual();
+            return;
+        }
+
         // Pfad-Werkzeuge: Mausposition für Vorschau-Fadenkreuz tracken
         if (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline
             && !_isPanning && !CanvasGrid.IsMouseCaptured)
@@ -11122,6 +11399,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         DrawVermassungOverlay(canvas);
         DrawTextLineSegmentsSk(canvas);
+        DrawTemplateImageSk(canvas);
 
         // Pfad- und Textfeld-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
@@ -11169,8 +11447,120 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 if (p1.HasValue)
                     DrawBogenPreview(canvas, p1.Value, _pfadBogenEndAbs, _pfadMouseMm, lt2);
             }
+
+            // Live-Spline-Vorschau und Punkt-Markierungen
+            if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 1)
+            {
+                // Kurvenvorschau bereits nach 1. Spline-Punkt
+                var previewPts = new List<(double x, double y)>();
+
+                // Versuche Start-Punkt hinzuzufügen
+                var lastPt = GetLastPfadAbsPoint();
+                if (lastPt.HasValue)
+                    previewPts.Add(lastPt.Value);
+
+                // Füge Spline-Punkte hinzu
+                previewPts.AddRange(_splinePointsBeingCreated);
+
+                // Zeichne Vorschau wenn mindestens 1 Punkt vorhanden
+                if (previewPts.Count >= 1)
+                {
+                    DrawSplinePreviewSk(canvas, previewPts,
+                                        _splineModeBeingCreated, _splineTensionBeingCreated);
+                }
+
+                // Markiere ALLE eingeklickten Spline-Punkte (auch wenn nur 1)
+                using var pointPaint = new SKPaint
+                {
+                    Color = new SKColor(255, 165, 0, 220),
+                    Style = SKPaintStyle.Fill,
+                    IsAntialias = true
+                };
+                foreach (var pt in _splinePointsBeingCreated)
+                {
+                    float px = (float)(_topRect.Left + pt.x * sc2);
+                    float py = (float)(_topRect.Bottom - pt.y * sc2);
+                    canvas.DrawCircle(px, py, (float)(3.5 / _zoom), pointPaint);
+                }
+            }
         }
 
+    }
+
+    // ── Template-Image zeichnen ──────────────────────────────────────
+    private void DrawTemplateImageSk(SKCanvas canvas)
+    {
+        if (_templateImage?.Bitmap == null) return;
+
+        double sc = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+        if (sc <= 0) return;
+
+        var bitmap = _templateImage.Bitmap;
+
+        // Bildmitte in Canvas-Koordinaten
+        float centerX = (float)(_topRect.Left + _templateImage.X * sc);
+        float centerY = (float)(_topRect.Bottom - _templateImage.Y * sc);
+
+        // Skaliere Bild auf mm-Größe
+        float dstWidth = (float)(_templateImage.Width * sc);
+        float dstHeight = (float)(_templateImage.Height * sc);
+
+        using var paint = new SKPaint
+        {
+            IsAntialias = true,
+            FilterQuality = SKFilterQuality.High,
+            Color = new SKColor(255, 255, 255, (byte)(int)(_templateImage.Opacity * 255))
+        };
+
+        canvas.Save();
+        canvas.Translate(centerX, centerY);
+        canvas.RotateDegrees((float)_templateImage.Rotation);
+        canvas.Translate(-dstWidth / 2, -dstHeight / 2);
+
+        var src = new SKRect(0, 0, bitmap.Width, bitmap.Height);
+        var dst = new SKRect(0, 0, dstWidth, dstHeight);
+        canvas.DrawBitmap(bitmap, src, dst, paint);
+        canvas.Restore();
+
+        // 9 Ankerpunkte zeichnen
+        using var anchorPaint = new SKPaint
+        {
+            Color = new SKColor(255, 150, 0, 220),
+            Style = SKPaintStyle.Fill,
+            IsAntialias = true
+        };
+
+        using var borderPaint = new SKPaint
+        {
+            Color = new SKColor(255, 200, 0, 200),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(2.0 / _zoom),
+            IsAntialias = true
+        };
+
+        for (int i = 0; i < 9; i++)
+        {
+            var pt = _templateImage.AnchorPoints[i];
+            float px = (float)(_topRect.Left + pt.x * sc);
+            float py = (float)(_topRect.Bottom - pt.y * sc);
+
+            float radius = (float)(4.0 / _zoom);
+
+            // Höheres Highlight für gerade gezogenen Punkt
+            if (i == _templateImageDragAnchor)
+            {
+                using var highlightPaint = new SKPaint
+                {
+                    Color = new SKColor(255, 100, 0, 255),
+                    Style = SKPaintStyle.Fill,
+                    IsAntialias = true
+                };
+                canvas.DrawCircle(px, py, radius * 1.5f, highlightPaint);
+            }
+
+            canvas.DrawCircle(px, py, radius, anchorPaint);
+            canvas.DrawCircle(px, py, radius, borderPaint);
+        }
     }
 
     // ── Werkstück-Layout berechnen (stabile mm-Weltkoordinaten) ──────

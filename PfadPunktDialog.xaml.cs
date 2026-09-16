@@ -9,7 +9,7 @@ public partial class PfadPunktDialog : Window
     public PfadPunktParams? Result { get; private set; }
 
     public PfadPunktDialog(string title, double defaultZ, bool isStart = false, PfadPunktParams? prefill = null,
-                           IReadOnlyList<Werkzeug>? werkzeuge = null, bool isBogen = false)
+                           IReadOnlyList<Werkzeug>? werkzeuge = null, bool isBogen = false, bool isSpline = false)
     {
         InitializeComponent();
         Title = title;
@@ -35,6 +35,13 @@ public partial class PfadPunktDialog : Window
             LblXMid.Visibility       = Visibility.Visible;
             TxtXMid.Visibility       = Visibility.Visible;
         }
+        if (isSpline)
+        {
+            LblSplineModus.Visibility = Visibility.Visible;
+            CbSplineModus.Visibility  = Visibility.Visible;
+            LblSplineTension.Visibility = Visibility.Visible;
+            TxtSplineTension.Visibility = Visibility.Visible;
+        }
         if (prefill != null)
         {
             TxtXRel.Text = prefill.XRel.ToString(inv);
@@ -59,6 +66,11 @@ public partial class PfadPunktDialog : Window
                 TxtXMid.Text = prefill.XMid.ToString(inv);
                 TxtYMid.Text = prefill.YMid.ToString(inv);
             }
+            if (isSpline)
+            {
+                CbSplineModus.SelectedIndex = prefill.SplineModus == "Bézier" ? 1 : 0;
+                TxtSplineTension.Text = prefill.SplineTension.ToString(inv);
+            }
         }
         else
         {
@@ -67,6 +79,8 @@ public partial class PfadPunktDialog : Window
                 RbLetzterPunkt.IsChecked = true;
             if (isBogen)
                 CbBogenModus.SelectedIndex = 2; // Pfeilhöhe als Standard
+            if (isSpline)
+                CbSplineModus.SelectedIndex = 0; // Catmull-Rom als Standard
         }
     }
 
@@ -85,6 +99,11 @@ public partial class PfadPunktDialog : Window
         LblBezugHinweis.Visibility = isMitte ? Visibility.Collapsed : Visibility.Visible;
         LblYMid.Visibility  = isMitte ? Visibility.Visible : Visibility.Collapsed;
         TxtYMid.Visibility  = isMitte ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnSplineModusChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        // Spline-Modus ist derzeit nur informativ, keine zusätzliche UI nötig
     }
 
     private string GetBogenModus() => CbBogenModus.SelectedIndex switch
@@ -127,9 +146,15 @@ public partial class PfadPunktDialog : Window
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         bool vis    = TxtZ.Visibility  == Visibility.Visible;
         bool hasMid = TxtXMid.Visibility == Visibility.Visible;
+        bool hasSpline = CbSplineModus.Visibility == Visibility.Visible;
         bool isMitte = GetBogenModus() == "Bogenmitte";
         var w = CbWerkzeug.SelectedItem as Werkzeug;
         string radiuskorrektur = CbRadiuskorrektur.SelectedIndex switch { 0 => "Links", 2 => "Rechts", _ => "Mittig" };
+        string splineModus = hasSpline ? (CbSplineModus.SelectedIndex switch { 1 => "Bézier", _ => "Catmull-Rom" }) : "Catmull-Rom";
+        double splineTension = 0.5;
+        if (hasSpline && double.TryParse(TxtSplineTension.Text, inv, out var st))
+            splineTension = Math.Clamp(st, 0.0, 1.0);
+
         Result = new PfadPunktParams(
             XRel:            double.Parse(TxtXRel.Text, inv),
             YRel:            double.Parse(TxtYRel.Text, inv),
@@ -145,7 +170,9 @@ public partial class PfadPunktDialog : Window
             Eintauchwinkel:  w?.Eintauchwinkel ?? 90,
             XMid:            hasMid ? double.Parse(TxtXMid.Text, inv) : 0,
             YMid:            hasMid && isMitte ? double.Parse(TxtYMid.Text, inv) : 0,
-            BogenModus:      hasMid ? GetBogenModus() : "Bogenmitte"
+            BogenModus:      hasMid ? GetBogenModus() : "Bogenmitte",
+            SplineModus:     splineModus,
+            SplineTension:   splineTension
         );
         DialogResult = true;
     }
@@ -153,7 +180,7 @@ public partial class PfadPunktDialog : Window
     private void OnCancel(object sender, RoutedEventArgs e) => DialogResult = false;
 }
 
-public enum PfadPunktTyp { Start, Linie, Bogen }
+public enum PfadPunktTyp { Start, Linie, Bogen, Spline }
 
 public record PfadPunktParams(
     double XRel, double YRel, double ZTiefe, double ZZustellung,
@@ -161,4 +188,6 @@ public record PfadPunktParams(
     string Radiuskorrektur, string Bezugspunkt, PfadPunktTyp Typ,
     double Verrundung = 0, double Eintauchwinkel = 90,
     double XMid = 0, double YMid = 0,
-    string BogenModus = "Pfeilhöhe"); // "Bogenmitte" | "Radius" | "Pfeilhöhe"
+    string BogenModus = "Pfeilhöhe", // "Bogenmitte" | "Radius" | "Pfeilhöhe"
+    string SplineModus = "Catmull-Rom", // "Catmull-Rom" | "Bézier"
+    double SplineTension = 0.5); // Catmull-Rom Spannung (0.0-1.0)

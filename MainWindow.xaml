@@ -248,6 +248,13 @@
 
             <!-- Datei ─────────────────────────────────────── -->
             <MenuItem Header="Datei">
+                <MenuItem Header="Bild öffnen..." Click="OnBildOeffnen">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}"
+                                   FontFamily="Segoe MDL2 Assets" Text="&#xE8B4;"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
                 <MenuItem Header="Speichern" Click="OnSpeichern">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}"
@@ -344,6 +351,12 @@
                 <MenuItem Header="Bogen" Click="OnPfadBogen" x:Name="MnuPfadBogen">
                     <MenuItem.Icon>
                         <TextBlock Style="{StaticResource MI}" Text="◜" FontSize="14"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <!-- Spline: Wellenlinie = Spline -->
+                <MenuItem Header="Spline" Click="OnPfadSpline" x:Name="MnuPfadSpline">
+                    <MenuItem.Icon>
+                        <TextBlock Style="{StaticResource MI}" Text="∿" FontSize="14"/>
                     </MenuItem.Icon>
                 </MenuItem>
             </MenuItem>
@@ -721,6 +734,15 @@
                                     IsEnabled="False"
                                     ToolTip="Pfad-Kurve (Bogen)">
                                 <TextBlock Text="◜" FontSize="15" Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <Button x:Name="BtnToolPfadSpline"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnPfadSpline"
+                                    IsEnabled="False"
+                                    ToolTip="Pfad-Spline">
+                                <TextBlock Text="∿" FontSize="14" Foreground="White"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>
