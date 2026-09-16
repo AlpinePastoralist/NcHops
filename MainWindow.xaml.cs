@@ -49,7 +49,7 @@ public partial class MainWindow : Window
     private int _nullpunktPosition = 6; // 0-8: Oben-Links bis Unten-Rechts (Standard: Unten-Links)
 
     // ── Aktives Werkzeug ─────────────────────────────────────────
-    private enum CanvasTool { Select, Hand, Zoom, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, Rechteck, Kreis, NEck }
+    private enum CanvasTool { Select, Hand, Zoom, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, PfadSpline, Rechteck, Kreis, NEck }
     private CanvasTool _activeTool    = CanvasTool.Select;
     private bool       _isZoomDragging = false;
     private Point      _zoomDragStart;
@@ -1070,8 +1070,10 @@ public partial class MainWindow : Window
         bool aktiv = IsPfadAktiv();
         MnuPfadLinie.IsEnabled     = aktiv;
         MnuPfadBogen.IsEnabled     = aktiv;
+        MnuPfadSpline.IsEnabled    = aktiv;
         BtnToolPfadLinie.IsEnabled = aktiv;
         BtnToolPfadKurve.IsEnabled = aktiv;
+        BtnToolPfadSpline.IsEnabled = aktiv;
     }
 
     // ── Verlauf: Einklappen ──────────────────────────────────────
@@ -1147,6 +1149,9 @@ public partial class MainWindow : Window
 
     private void OnPfadBogen(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.PfadBogen ? CanvasTool.Select : CanvasTool.PfadBogen);
+
+    private void OnPfadSpline(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.PfadSpline ? CanvasTool.Select : CanvasTool.PfadSpline);
 
     // ── Pfad-Klick-Werkzeuge: Punkt per Canvas-Klick setzen ─────
 
@@ -1563,6 +1568,26 @@ public partial class MainWindow : Window
         );
         p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
         _history.Add(new HistoryEntry($"Pfad Linie #{PfadPunktNummer(_history.Count)}",
+            $"X={p.XRel} Y={p.YRel}", p, level: 1));
+        AutoDetectGeomConstraints(_history.Count - 1);
+        HistoryList.SelectedItem    = _history[^1];
+    }
+
+    private void AddPfadSpline(double mmX, double mmY)
+    {
+        double xRel = Math.Round(mmX, 3);
+        double yRel = Math.Round(mmY, 3);
+        _suppressNextAutoFit = true;
+        var p = new PfadPunktParams(
+            XRel: xRel, YRel: yRel,
+            ZTiefe: 0, ZZustellung: 0, FraeserD: 0, Drehzahl: 0,
+            Vorschub: 0, VorschubFz: 0,
+            Radiuskorrektur: "Mittig",
+            Bezugspunkt: "Unten links",
+            Typ: PfadPunktTyp.Spline
+        );
+        p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
+        _history.Add(new HistoryEntry($"Pfad Spline #{PfadPunktNummer(_history.Count)}",
             $"X={p.XRel} Y={p.YRel}", p, level: 1));
         AutoDetectGeomConstraints(_history.Count - 1);
         HistoryList.SelectedItem    = _history[^1];
@@ -7156,12 +7181,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 {
                     PfadPunktTyp.Start => "Pfad – Startpunkt",
                     PfadPunktTyp.Bogen => "Pfad – Bogen",
+                    PfadPunktTyp.Spline => "Pfad – Spline",
                     _                  => "Pfad – Linie"
                 };
                 var dlg = new PfadPunktDialog(title, -(WorkZ + 3),
                     isStart: p.Typ == PfadPunktTyp.Start, p,
                     werkzeuge: [_aktivesWerkzeug!],
-                    isBogen: p.Typ == PfadPunktTyp.Bogen) { Owner = this };
+                    isBogen: p.Typ == PfadPunktTyp.Bogen,
+                    isSpline: p.Typ == PfadPunktTyp.Spline) { Owner = this };
                 if (dlg.ShowDialog() != true) return;
                 var np = dlg.Result! with { Typ = p.Typ };
                 int lvl = np.Typ == PfadPunktTyp.Start ? 0 : 1;
@@ -7171,11 +7198,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     ? (np.BogenModus == "Bogenmitte"
                         ? $"X={np.XRel} Y={np.YRel}, M={np.XMid}/{np.YMid}"
                         : $"X={np.XRel} Y={np.YRel}, {np.BogenModus}={np.XMid}")
+                    : np.Typ == PfadPunktTyp.Spline
+                    ? $"X={np.XRel} Y={np.YRel}, {np.SplineModus}, T={np.SplineTension}"
                     : $"X={np.XRel} Y={np.YRel}";
                 string lbl = np.Typ switch
                 {
                     PfadPunktTyp.Start => "Pfad Start",
                     PfadPunktTyp.Bogen => $"Pfad Bogen #{PfadPunktNummer(idx)}",
+                    PfadPunktTyp.Spline => $"Pfad Spline #{PfadPunktNummer(idx)}",
                     _                  => $"Pfad Linie #{PfadPunktNummer(idx)}"
                 };
                 _history[idx] = new HistoryEntry(lbl, det, np, lvl);
@@ -7815,8 +7845,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             FlushInlineEdit();
 
         // Pfad-Vorschau und Bogen-Warte-Zustand abbrechen wenn Werkzeug wechselt
-        bool leavingPfad = _activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen
-                           && tool is not (CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen);
+        bool leavingPfad = _activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline
+                           && tool is not (CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline);
         if (leavingPfad) { _pfadMouseValid = false; _pfadBogenWaiting = false; }
 
         _activeTool = tool;
@@ -7843,6 +7873,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         BtnToolPfadStart.Background   = tool == CanvasTool.PfadStart  ? active : inactive;
         BtnToolPfadLinie.Background   = tool == CanvasTool.PfadLinie  ? active : inactive;
         BtnToolPfadKurve.Background   = tool == CanvasTool.PfadBogen  ? active : inactive;
+        BtnToolPfadSpline.Background  = tool == CanvasTool.PfadSpline ? active : inactive;
         BtnToolRechteck.Background    = tool == CanvasTool.Rechteck  ? active : inactive;
         BtnToolKreis.Background       = tool == CanvasTool.Kreis     ? active : inactive;
         BtnToolNEck.Background        = tool == CanvasTool.NEck      ? active : inactive;
@@ -7854,6 +7885,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             CanvasTool.PfadStart    => Cursors.Cross,
             CanvasTool.PfadLinie    => Cursors.Cross,
             CanvasTool.PfadBogen    => Cursors.Cross,
+            CanvasTool.PfadSpline   => Cursors.Cross,
             CanvasTool.Rechteck     => Cursors.Cross,
             CanvasTool.Kreis        => Cursors.Cross,
             CanvasTool.NEck         => Cursors.Cross,
@@ -8308,6 +8340,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 CanvasTool.PfadStart    => Cursors.Cross,
                 CanvasTool.PfadLinie    => Cursors.Cross,
                 CanvasTool.PfadBogen    => Cursors.Cross,
+                CanvasTool.PfadSpline   => Cursors.Cross,
                 CanvasTool.Rechteck     => Cursors.Cross,
                 CanvasTool.Kreis        => Cursors.Cross,
                 CanvasTool.NEck         => Cursors.Cross,
@@ -8413,6 +8446,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 CanvasTool.PfadStart    => Cursors.Cross,
                 CanvasTool.PfadLinie    => Cursors.Cross,
                 CanvasTool.PfadBogen    => Cursors.Cross,
+                CanvasTool.PfadSpline   => Cursors.Cross,
                 CanvasTool.Rechteck     => Cursors.Cross,
                 CanvasTool.Kreis        => Cursors.Cross,
                 CanvasTool.NEck         => Cursors.Cross,
@@ -9653,6 +9687,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 e.Handled = true;
                 return;
             }
+            if (_activeTool == CanvasTool.PfadSpline)
+            {
+                AddPfadSpline(pfX, pfY);
+                e.Handled = true;
+                return;
+            }
             if (_activeTool == CanvasTool.PfadBogen)
             {
                 if (!_pfadBogenWaiting)
@@ -10175,7 +10215,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     private void OnCanvasMouseMove(object sender, MouseEventArgs e)
     {
         // Pfad-Werkzeuge: Mausposition für Vorschau-Fadenkreuz tracken
-        if (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen
+        if (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline
             && !_isPanning && !CanvasGrid.IsMouseCaptured)
         {
             var pos = e.GetPosition(CanvasGrid);
@@ -11065,6 +11105,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Werkstücke + G-Code + Nullpunkt + Raster zeichnen
         DrawWorkpiecesSk(canvas);
         DrawGCodeTopViewSk(canvas);
+        DrawShapeOutlinesSk(canvas);
         DrawGCodeSideViewSk(canvas);
         DrawNullpunktCrosshairSk(canvas);
         if (_rasterEnabled) DrawRasterSk(canvas, cw, ch);
@@ -11084,7 +11125,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
         // Pfad- und Textfeld-Werkzeuge: Fadenkreuz über gesamte Zeichenfläche
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
-            && (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen
+            && (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline
                 or CanvasTool.VCarveTextSk or CanvasTool.VCarveTextSk or CanvasTool.Rechteck
                 || _activeTool == CanvasTool.Kreis))
         {
@@ -12208,6 +12249,67 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         }
     }
 
+    // ── Rechteck-, Kreis- und NEck-Konturen zeichnen ──────────────
+    private void DrawShapeOutlinesSk(SKCanvas canvas)
+    {
+        if (_topRect.IsEmpty) return;
+        double wx = WorkX, wy = WorkY;
+        if (wx <= 0 || wy <= 0) return;
+
+        double scale = Math.Min(_topRect.Width / wx, _topRect.Height / wy);
+        (float px, float py) MmToPx(double x, double y)
+        {
+            var (standardX, standardY) = ConvertFromNullpunktCoordinates(x, y);
+            return (
+                (float)(_topRect.Left + standardX * scale),
+                (float)(_topRect.Bottom - standardY * scale)
+            );
+        }
+
+        float lt = (float)(1.5 / _zoom);
+        using var outlinePaint = new SKPaint
+        {
+            Color = new SKColor(255, 150, 0),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = lt,
+            IsAntialias = true,
+            PathEffect = SKPathEffect.CreateDash(new float[] { 4 * lt, 3 * lt }, 0)
+        };
+
+        foreach (var entry in _history)
+        {
+            if (entry.Params is RechteckParams rp)
+            {
+                var (left, bottom, w, h) = RechteckBoundsInMm(rp);
+                var (x1, y1) = MmToPx(left, bottom);
+                var (x2, y2) = MmToPx(left + w, bottom + h);
+                canvas.DrawRect(Math.Min(x1, x2), Math.Min(y1, y2), Math.Abs(x2 - x1), Math.Abs(y2 - y1), outlinePaint);
+            }
+            else if (entry.Params is KreisParams kp)
+            {
+                var (cx, cy) = MmToPx(kp.XRel, kp.YRel);
+                float r = (float)(kp.Radius * scale);
+                canvas.DrawCircle(cx, cy, r, outlinePaint);
+            }
+            else if (entry.Params is NEckParams np)
+            {
+                var (cx, cy) = MmToPx(np.XRel, np.YRel);
+                float r = (float)(np.Radius * scale);
+                using var path = new SKPath();
+                for (int i = 0; i < np.Ecken; i++)
+                {
+                    double angle = 2 * Math.PI * i / np.Ecken - Math.PI / 2;
+                    float px = (float)(cx + r * Math.Cos(angle));
+                    float py = (float)(cy + r * Math.Sin(angle));
+                    if (i == 0) path.MoveTo(px, py);
+                    else path.LineTo(px, py);
+                }
+                path.Close();
+                canvas.DrawPath(path, outlinePaint);
+            }
+        }
+    }
+
     // ── Pfad Fräsen zeichnen ─────────────────────────────────────
 
 #if false // DrawPfadFräsen + DrawHoverArrows
@@ -12873,13 +12975,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             var gp = _inlineParams;
 
             // Konvertiere Text zu Liniensegmenten
-            // WICHTIG: Verwende die exakte Position des Textfeldes (XRel, YRel)
+            // DEBUG: Überprüfe alle Positions-Variablen
             float fontSizeMm = (float)gp.FontSizeMm;
-            float posX = (float)gp.XRel;
-            float posY = (float)gp.YRel;
 
             System.Diagnostics.Debug.WriteLine($"=== Text Konvertierung ===");
-            System.Diagnostics.Debug.WriteLine($"Text: '{gp.Text}' @ ({posX}, {posY}) Size: {fontSizeMm}mm");
+            System.Diagnostics.Debug.WriteLine($"Text: '{gp.Text}'");
+            System.Diagnostics.Debug.WriteLine($"gp.XRel: {gp.XRel}, gp.YRel: {gp.YRel}");
+            System.Diagnostics.Debug.WriteLine($"gp.TextBreite: {gp.TextBreite}");
+            System.Diagnostics.Debug.WriteLine($"gp.Ausrichtung: {gp.Ausrichtung}");
+            System.Diagnostics.Debug.WriteLine($"gp.Bezugspunkt: {gp.Bezugspunkt}");
+            System.Diagnostics.Debug.WriteLine($"FontSize: {fontSizeMm}mm");
+
+            float posX = (float)gp.XRel;
+            float posY = (float)gp.YRel;
 
             // Verwende die exakte Position des Textfeldes für die Konvertierung
             var geometries = TextToLineSegments.ConvertTextToLineSegments(
