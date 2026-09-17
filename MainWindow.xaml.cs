@@ -11581,18 +11581,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                                         _splineModeBeingCreated, _splineTensionBeingCreated, _splineFinalized);
                 }
 
-                // Markiere ALLE eingeklickten Spline-Punkte (auch wenn nur 1)
-                using var pointPaint = new SKPaint
+                // Markiere Spline-Punkte NUR wenn noch nicht fertig
+                if (!_splineFinalized)
                 {
-                    Color = new SKColor(255, 165, 0, 220),
-                    Style = SKPaintStyle.Fill,
-                    IsAntialias = true
-                };
-                foreach (var pt in _splinePointsBeingCreated)
-                {
-                    float px = (float)(_topRect.Left + pt.x * sc2);
-                    float py = (float)(_topRect.Bottom - pt.y * sc2);
-                    canvas.DrawCircle(px, py, (float)(3.5 / _zoom), pointPaint);
+                    using var pointPaint = new SKPaint
+                    {
+                        Color = new SKColor(255, 165, 0, 220),
+                        Style = SKPaintStyle.Fill,
+                        IsAntialias = true
+                    };
+                    foreach (var pt in _splinePointsBeingCreated)
+                    {
+                        float px = (float)(_topRect.Left + pt.x * sc2);
+                        float py = (float)(_topRect.Bottom - pt.y * sc2);
+                        canvas.DrawCircle(px, py, (float)(3.5 / _zoom), pointPaint);
+                    }
                 }
             }
         }
