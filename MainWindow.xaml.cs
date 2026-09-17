@@ -8514,12 +8514,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double px(double x) => _topRect.Left + x * sc;
         double py(double y) => _topRect.Bottom - y * sc;
 
-        // Wenn finalized: zeichne nur die Punkte ohne Cursor-Verfolgung
+        // Wenn finalized: zeichne nur die geklickten Spline-Punkte ohne Cursor-Verfolgung
+        // KEINE gerade Linie zwischen den Kontrollpunkten!
         var ptsToInterpolate = new List<(double x, double y)>(pts);
         if (!finalized && _pfadMouseValid)
             ptsToInterpolate.Add(_pfadMouseMm);
 
         var interpolated = InterpolateFullSpline(ptsToInterpolate, splineMode, tension);
+
+        // Nur die interpolierte Kurve zeichnen (Linien zwischen interpolierten Punkten)
+        // NICHT die direkte Verbindung zwischen Kontrollpunkten!
         for (int i = 1; i < interpolated.Count; i++)
         {
             float x1 = (float)px(interpolated[i - 1].x);
@@ -11606,11 +11610,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
             previewPts.AddRange(_splinePointsBeingCreated);
 
+            // KEINE gerade Linie zwischen Spline-Punkten zeichnen! Nur die interpolierte Kurve!
             if (previewPts.Count >= 1)
             {
+                // Nur die interpolierte Kurve zeichnen, nicht die direkten Verbindungen
                 DrawSplinePreviewSk(canvas, previewPts,
                                     _splineModeBeingCreated, _splineTensionBeingCreated, finalized: true);
             }
+            // Ende: Es sollte KEINE andere Zeichnung nach DrawSplinePreviewSk sein!
         }
 
     }
