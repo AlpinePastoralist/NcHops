@@ -83,6 +83,7 @@ public partial class MainWindow : Window
     private List<(double x, double y)> _splinePointsBeingCreated = [];
     private string _splineModeBeingCreated = "Catmull-Rom";
     private double _splineTensionBeingCreated = 0.5;
+    private bool _splineFinalized = false;  // Markiert ob Spline fertig ist
 
     // ── Rechteck-Werkzeug ────────────────────────────────────────
     private bool             _rktDragging  = false;
@@ -1678,8 +1679,8 @@ public partial class MainWindow : Window
         RegenerateGCodeFromHistory();
         HistoryList.SelectedIndex = _history.Count - 1;
 
-        // Vorschau beendet - Punkte leeren
-        _splinePointsBeingCreated.Clear();
+        // Orange Linie bleibt sichtbar als feste Linie (nicht mehr als Vorschau)
+        _splineFinalized = true;
 
         // Benutzer kann mit Linien/Bögen/Splines weitermachen
         SetActiveTool(CanvasTool.PfadLinie);
@@ -7772,8 +7773,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 }
                 else if (_activeTool == CanvasTool.PfadBogen && _pfadBogenWaiting)
                 { _pfadBogenWaiting = false; DrawSkia?.InvalidateVisual(); }
-                else if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count > 0)
-                { _splinePointsBeingCreated.Clear(); DrawSkia?.InvalidateVisual(); }
+                else if ((_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count > 0) || _splineFinalized)
+                { _splinePointsBeingCreated.Clear(); _splineFinalized = false; DrawSkia?.InvalidateVisual(); }
                 else if ((_activeTool == CanvasTool.VCarveTextSk) && _isTextDragging)
                 { _isTextDragging = false; ClearTextRubberBand(); }
                 else if (_activeTool == CanvasTool.Rechteck && _rktDragging)
@@ -8081,6 +8082,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _pfadMouseValid = false;
             _pfadBogenWaiting = false;
             _splinePointsBeingCreated.Clear();  // Clearen wenn Spline-Werkzeug verlassen wird
+            _splineFinalized = false;
         }
 
         _activeTool = tool;
@@ -8485,7 +8487,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     }
 
     private void DrawSplinePreviewSk(SKCanvas canvas, List<(double x, double y)> pts,
-                                     string splineMode, double tension)
+                                     string splineMode, double tension, bool finalized = false)
     {
         if (pts.Count < 2) return;
 
@@ -8501,12 +8503,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         double px(double x) => _topRect.Left + x * sc;
         double py(double y) => _topRect.Bottom - y * sc;
 
-        // Erstelle temporäre Liste mit aktuellem Mauszeiger als letztem Punkt
-        var ptsWithMouse = new List<(double x, double y)>(pts);
-        if (_pfadMouseValid)
-            ptsWithMouse.Add(_pfadMouseMm);
+        // Wenn finalized: zeichne nur die Punkte ohne Cursor-Verfolgung
+        var ptsToInterpolate = new List<(double x, double y)>(pts);
+        if (!finalized && _pfadMouseValid)
+            ptsToInterpolate.Add(_pfadMouseMm);
 
-        var interpolated = InterpolateFullSpline(ptsWithMouse, splineMode, tension);
+        var interpolated = InterpolateFullSpline(ptsToInterpolate, splineMode, tension);
         for (int i = 1; i < interpolated.Count; i++)
         {
             float x1 = (float)px(interpolated[i - 1].x);
@@ -11521,7 +11523,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 if (previewPts.Count >= 1)
                 {
                     DrawSplinePreviewSk(canvas, previewPts,
-                                        _splineModeBeingCreated, _splineTensionBeingCreated);
+                                        _splineModeBeingCreated, _splineTensionBeingCreated, _splineFinalized);
                 }
 
                 // Markiere ALLE eingeklickten Spline-Punkte (auch wenn nur 1)
