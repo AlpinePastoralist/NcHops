@@ -1707,19 +1707,10 @@ public partial class MainWindow : Window
         if (pts.Count < 2) return new();
         if (pts.Count == 2)
         {
-            // Mit nur 2 Punkten: Gerade Linie mit Zwischen-Punkte
-            var result = new List<(double x, double y)> { pts[0] };
-            double dx = pts[1].x - pts[0].x;
-            double dy = pts[1].y - pts[0].y;
-            double dist = Math.Sqrt(dx * dx + dy * dy);
-            int steps = Math.Max(10, (int)Math.Ceiling(dist / segmentLength));
-
-            for (int s = 1; s <= steps; s++)
-            {
-                double t = (double)s / steps;
-                result.Add((pts[0].x + t * dx, pts[0].y + t * dy));
-            }
-            return result;
+            // Mit 2 Punkten: Auch Catmull-Rom mit wiederholten Kontrollpunkten (sanfte Kurve)
+            // Behandle wie 3 Punkte mit Cursor als 3ter Punkt
+            var temp3 = new List<(double x, double y)> { pts[0], pts[1], pts[1] };
+            return InterpolateFullSpline(temp3, splineMode, tension, segmentLength);
         }
         if (pts.Count == 3)
         {
