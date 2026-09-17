@@ -8111,6 +8111,13 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _splineFinalized = false;
         }
 
+        // Auch Spline-Punkte leeren wenn von Spline zu anderen Pfad-Werkzeugen wechselt
+        if (_activeTool == CanvasTool.PfadSpline && tool is not CanvasTool.PfadSpline && tool is (CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen))
+        {
+            _splinePointsBeingCreated.Clear();
+            _splineFinalized = false;
+        }
+
         _activeTool = tool;
         var active   = new System.Windows.Media.SolidColorBrush(
                            System.Windows.Media.Color.FromArgb(0xCC, 0xDD, 0xD0, 0xB0));
