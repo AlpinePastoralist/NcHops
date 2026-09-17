@@ -8111,8 +8111,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _splineFinalized = false;
         }
 
-        // Auch Spline-Punkte leeren wenn von Spline zu anderen Pfad-Werkzeugen wechselt
-        if (_activeTool == CanvasTool.PfadSpline && tool is not CanvasTool.PfadSpline && tool is (CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen))
+        // Auch Spline-Punkte leeren wenn von Spline zu anderen Pfad-Werkzeugen wechselt (aber NICHT wenn bereits fertig)
+        if (_activeTool == CanvasTool.PfadSpline && tool is not CanvasTool.PfadSpline && tool is (CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen) && !_splineFinalized)
         {
             _splinePointsBeingCreated.Clear();
             _splineFinalized = false;
