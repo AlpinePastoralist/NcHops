@@ -11587,6 +11587,43 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
+        // Fertige Spline-Linie IMMER zeichnen (auch wenn Cursor außerhalb)
+        if (_splineFinalized && _splinePointsBeingCreated.Count >= 1 && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty)
+        {
+            var previewPts = new List<(double x, double y)>();
+
+            // Finde den direkten Vorgänger-Punkt
+            if (_history.Count > 0)
+            {
+                for (int i = _history.Count - 1; i >= 0; i--)
+                {
+                    if (_history[i].Params is PfadPunktParams p && p.Typ != PfadPunktTyp.Spline)
+                    {
+                        (double x, double y) pt;
+                        if (p.Bezugspunkt == "Letzter Punkt" && i > 0)
+                        {
+                            var prevPt = GetPointAtIndex(i - 1);
+                            pt = prevPt.HasValue ? (prevPt.Value.x + p.XRel, prevPt.Value.y + p.YRel) : (p.XRel, p.YRel);
+                        }
+                        else
+                        {
+                            pt = GCodeGenerator.ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, WorkX, WorkY);
+                        }
+                        previewPts.Add(pt);
+                        break;
+                    }
+                }
+            }
+
+            previewPts.AddRange(_splinePointsBeingCreated);
+
+            if (previewPts.Count >= 1)
+            {
+                DrawSplinePreviewSk(canvas, previewPts,
+                                    _splineModeBeingCreated, _splineTensionBeingCreated, finalized: true);
+            }
+        }
+
     }
 
     // ── Template-Image zeichnen ──────────────────────────────────────
