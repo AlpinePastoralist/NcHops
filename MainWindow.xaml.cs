@@ -1653,12 +1653,8 @@ public partial class MainWindow : Window
 
         _suppressNextAutoFit = true;
 
-        var interpolatedPts = InterpolateFullSpline(_splinePointsBeingCreated,
-                                                     _splineModeBeingCreated,
-                                                     _splineTensionBeingCreated,
-                                                     segmentLength);
-
-        foreach (var pt in interpolatedPts)
+        // Speichere nur die geklickten Punkte als Spline (nicht die interpolierten)
+        foreach (var pt in _splinePointsBeingCreated)
         {
             double xRel = Math.Round(pt.x, 3);
             double yRel = Math.Round(pt.y, 3);
@@ -1669,17 +1665,21 @@ public partial class MainWindow : Window
                 Vorschub: 0, VorschubFz: 0,
                 Radiuskorrektur: "Mittig",
                 Bezugspunkt: "Unten links",
-                Typ: PfadPunktTyp.Linie
+                Typ: PfadPunktTyp.Spline,
+                SplineModus: _splineModeBeingCreated,
+                SplineTension: _splineTensionBeingCreated
             );
             p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
-            _history.Add(new HistoryEntry($"Pfad Linie (Spline) #{PfadPunktNummer(_history.Count)}",
+            _history.Add(new HistoryEntry($"Pfad Spline #{PfadPunktNummer(_history.Count)}",
                 $"X={p.XRel} Y={p.YRel}", p, level: 1));
         }
 
         RegenerateGCodeFromHistory();
         HistoryList.SelectedIndex = _history.Count - 1;
 
-        _splinePointsBeingCreated.Clear();
+        // Orange Vorschaulinie bleibt sichtbar - nicht clearen!
+        // _splinePointsBeingCreated.Clear();
+
         SetActiveTool(CanvasTool.Select);
         DrawSkia?.InvalidateVisual();
     }
