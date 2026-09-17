@@ -1681,7 +1681,8 @@ public partial class MainWindow : Window
         // Orange Vorschaulinie bleibt sichtbar - nicht clearen!
         // _splinePointsBeingCreated.Clear();
 
-        SetActiveTool(CanvasTool.Select);
+        // Benutzer kann mit Linien/Bögen/Splines weitermachen
+        SetActiveTool(CanvasTool.PfadLinie);
         DrawSkia?.InvalidateVisual();
     }
 
@@ -8075,7 +8076,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         // Pfad-Vorschau und Bogen-Warte-Zustand abbrechen wenn Werkzeug wechselt
         bool leavingPfad = _activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline
                            && tool is not (CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline);
-        if (leavingPfad) { _pfadMouseValid = false; _pfadBogenWaiting = false; }
+        if (leavingPfad)
+        {
+            _pfadMouseValid = false;
+            _pfadBogenWaiting = false;
+            _splinePointsBeingCreated.Clear();  // Clearen wenn Spline-Werkzeug verlassen wird
+        }
 
         _activeTool = tool;
         var active   = new System.Windows.Media.SolidColorBrush(
