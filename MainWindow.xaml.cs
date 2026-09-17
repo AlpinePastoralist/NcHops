@@ -1622,6 +1622,15 @@ public partial class MainWindow : Window
         DrawSkia?.InvalidateVisual();
     }
 
+    private void OnPfadEigSplineSegmentLenKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Return && _activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 2)
+        {
+            OnSplineFinish(null, null);
+            e.Handled = true;
+        }
+    }
+
     private void OnSplineFinish(object sender, RoutedEventArgs e)
     {
         if (_splinePointsBeingCreated.Count < 2)
