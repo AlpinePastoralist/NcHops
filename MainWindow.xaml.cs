@@ -1198,6 +1198,19 @@ public partial class MainWindow : Window
 
     // ── Pfad-Klick-Werkzeuge: Punkt per Canvas-Klick setzen ─────
 
+    private (double x, double y)? GetPointAtIndex(int idx)
+    {
+        if (idx < 0 || idx >= _history.Count) return null;
+        if (_history[idx].Params is not PfadPunktParams p) return null;
+
+        if (p.Bezugspunkt == "Letzter Punkt" && idx > 0)
+        {
+            var prev = GetPointAtIndex(idx - 1);
+            return prev.HasValue ? (prev.Value.x + p.XRel, prev.Value.y + p.YRel) : null;
+        }
+        return GCodeGenerator.ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, WorkX, WorkY);
+    }
+
     private (double x, double y)? GetLastPfadAbsPoint()
     {
         var chain = new List<PfadPunktParams>();
@@ -11520,13 +11533,31 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 // Kurvenvorschau bereits nach 1. Spline-Punkt
                 var previewPts = new List<(double x, double y)>();
 
-                // Finde den letzten Punkt in der History VOR den Spline-Punkten
-                if (_history.Count > 0 && _history[^1].Params is PfadPunktParams lastEntry && lastEntry.Typ != PfadPunktTyp.Spline)
+                // Finde den direkten Vorgänger-Punkt (Startpunkt oder letzter Linie/Bogenpunkt)
+                if (_history.Count > 0)
                 {
-                    // Es gibt einen Nicht-Spline-Punkt als letzten Eintrag - verwende diesen als Startpunkt
-                    var lastPt = GetLastPfadAbsPoint();
-                    if (lastPt.HasValue)
-                        previewPts.Add(lastPt.Value);
+                    // Finde den letzten Nicht-Spline-Punkt
+                    for (int i = _history.Count - 1; i >= 0; i--)
+                    {
+                        if (_history[i].Params is PfadPunktParams p && p.Typ != PfadPunktTyp.Spline)
+                        {
+                            // Berechne die Position dieses Punktes
+                            (double x, double y) pt;
+                            if (p.Bezugspunkt == "Letzter Punkt" && i > 0)
+                            {
+                                // Relativer Punkt - berechne Position vom vorherigen Punkt
+                                var prevPt = GetPointAtIndex(i - 1);
+                                pt = prevPt.HasValue ? (prevPt.Value.x + p.XRel, prevPt.Value.y + p.YRel) : (p.XRel, p.YRel);
+                            }
+                            else
+                            {
+                                // Absolute Koordinaten
+                                pt = GCodeGenerator.ConvertBezugspunkt(p.Bezugspunkt, p.XRel, p.YRel, WorkX, WorkY);
+                            }
+                            previewPts.Add(pt);
+                            break;
+                        }
+                    }
                 }
 
                 // Füge Spline-Punkte hinzu
