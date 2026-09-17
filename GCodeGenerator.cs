@@ -1375,7 +1375,9 @@ public static class GCodeGenerator
         bool hasBogen = arcMids.Skip(1).Any(m => m.HasValue);
 
         // Geschlossener Pfad: erster und letzter Punkt identisch (< 0.01 mm)
-        bool closed = pts.Count >= 3 &&
+        // Aber nicht wenn der Pfad Spline-Punkte enthält (sollten nicht automatisch geschlossen werden)
+        bool hasSpline = path.Any(p => p.Typ == PfadPunktTyp.Spline);
+        bool closed = !hasSpline && pts.Count >= 3 &&
             Math.Sqrt(Math.Pow(pts[0].x - pts[^1].x, 2) + Math.Pow(pts[0].y - pts[^1].y, 2)) < 0.01;
 
         // Corner rounding: Startpunkt-R als globaler Fallback, Einzelpunkte können überschreiben
