@@ -190,4 +190,5 @@ public record PfadPunktParams(
     double XMid = 0, double YMid = 0,
     string BogenModus = "Pfeilhöhe", // "Bogenmitte" | "Radius" | "Pfeilhöhe"
     string SplineModus = "Catmull-Rom", // "Catmull-Rom" | "Bézier"
-    double SplineTension = 0.5); // Catmull-Rom Spannung (0.0-1.0)
+    double SplineTension = 0.5, // Catmull-Rom Spannung (0.0-1.0)
+    double SplineSegmentLength = 0.5); // Segmentlänge für G-Code (mm)

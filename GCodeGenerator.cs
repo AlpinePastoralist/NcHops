@@ -1334,7 +1334,7 @@ public static class GCodeGenerator
         {
             if (path[i].Typ == PfadPunktTyp.Spline)
             {
-                var splinePts = InterpolateSplineSegment(pts, i - 1, path[i].SplineModus, path[i].SplineTension);
+                var splinePts = InterpolateSplineSegment(pts, i - 1, path[i].SplineModus, path[i].SplineTension, path[i].SplineSegmentLength);
                 if (splinePts.Count > 1)
                 {
                     pts.RemoveAt(i);
@@ -2520,7 +2520,7 @@ public static class GCodeGenerator
 
     // Diskretisiere Spline-Segment in Linien-Punkte
     private static List<(double x, double y)> InterpolateSplineSegment(
-        List<(double x, double y)> allPts, int segIdx, string splineMode, double splineTension)
+        List<(double x, double y)> allPts, int segIdx, string splineMode, double splineTension, double segmentLength = 0.5)
     {
         var result = new List<(double x, double y)>();
 
@@ -2537,7 +2537,7 @@ public static class GCodeGenerator
 
             // Quadratische Bézier mit 3 Kontrollpunkten
             int steps = Math.Max(5, (int)Math.Ceiling(Math.Sqrt(
-                Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2)) / 0.5));
+                Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2)) / segmentLength));
 
             for (int i = 1; i <= steps; i++)
             {
@@ -2561,7 +2561,7 @@ public static class GCodeGenerator
             var p3 = segIdx < n - 2 ? allPts[segIdx + 2] : allPts[segIdx + 1];
 
             int steps = Math.Max(5, (int)Math.Ceiling(Math.Sqrt(
-                Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2)) / 0.5));
+                Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2)) / segmentLength));
 
             for (int i = 1; i <= steps; i++)
             {

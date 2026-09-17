@@ -1667,7 +1667,8 @@ public partial class MainWindow : Window
                 Bezugspunkt: "Unten links",
                 Typ: PfadPunktTyp.Spline,
                 SplineModus: _splineModeBeingCreated,
-                SplineTension: _splineTensionBeingCreated
+                SplineTension: _splineTensionBeingCreated,
+                SplineSegmentLength: segmentLength
             );
             p = (PfadPunktParams)AdjustParamsToNullpunkt(p);
             _history.Add(new HistoryEntry($"Pfad Spline #{PfadPunktNummer(_history.Count)}",
