@@ -1678,8 +1678,8 @@ public partial class MainWindow : Window
         RegenerateGCodeFromHistory();
         HistoryList.SelectedIndex = _history.Count - 1;
 
-        // Orange Vorschaulinie bleibt sichtbar - nicht clearen!
-        // _splinePointsBeingCreated.Clear();
+        // Vorschau beendet - Punkte leeren
+        _splinePointsBeingCreated.Clear();
 
         // Benutzer kann mit Linien/Bögen/Splines weitermachen
         SetActiveTool(CanvasTool.PfadLinie);

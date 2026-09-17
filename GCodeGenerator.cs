@@ -1334,19 +1334,37 @@ public static class GCodeGenerator
         {
             if (path[i].Typ == PfadPunktTyp.Spline)
             {
-                var splinePts = InterpolateSplineSegment(pts, i - 1, path[i].SplineModus, path[i].SplineTension, path[i].SplineSegmentLength);
-                if (splinePts.Count > 1)
+                // Finde alle aufeinanderfolgenden Spline-Punkte
+                int splineStart = i;
+                while (splineStart > 1 && path[splineStart - 1].Typ == PfadPunktTyp.Spline)
+                    splineStart--;
+
+                // Interpoliere alle Spline-Punkte zusammen
+                var splinePtsList = new List<(double x, double y)>();
+                for (int k = splineStart - 1; k <= i; k++)
+                    splinePtsList.Add(pts[k]);
+
+                var interpolated = InterpolateFullSplineMultiple(splinePtsList, path[i].SplineModus, path[i].SplineTension, path[i].SplineSegmentLength);
+
+                if (interpolated.Count > 1)
                 {
-                    pts.RemoveAt(i);
-                    splineTypes.RemoveAt(i);
-                    for (int j = 0; j < splinePts.Count - 1; j++)
+                    // Entferne alle Spline-Punkte
+                    for (int k = i; k >= splineStart; k--)
                     {
-                        pts.Insert(i, splinePts[j]);
-                        splineTypes.Insert(i, (i, PfadPunktTyp.Linie));
+                        pts.RemoveAt(k);
+                        splineTypes.RemoveAt(k);
+                        if (k < arcMids.Count) arcMids.RemoveAt(k);
                     }
-                    pts.Insert(i + splinePts.Count - 1, splinePts[^1]);
-                    splineTypes.Insert(i + splinePts.Count - 1, (i, PfadPunktTyp.Linie));
+
+                    // Füge interpolierte Punkte ein
+                    for (int j = 0; j < interpolated.Count; j++)
+                    {
+                        pts.Insert(splineStart, interpolated[j]);
+                        splineTypes.Insert(splineStart, (splineStart, PfadPunktTyp.Linie));
+                        if (splineStart < arcMids.Count) arcMids.Insert(splineStart, null);
+                    }
                 }
+                i = splineStart - 1;
             }
         }
 
@@ -2519,6 +2537,54 @@ public static class GCodeGenerator
     }
 
     // Diskretisiere Spline-Segment in Linien-Punkte
+    private static List<(double x, double y)> InterpolateFullSplineMultiple(
+        List<(double x, double y)> pts, string splineMode, double tension, double segmentLength = 0.5)
+    {
+        if (pts.Count < 2) return new();
+        if (pts.Count == 2)
+        {
+            var result = new List<(double x, double y)> { pts[0] };
+            double dx = pts[1].x - pts[0].x;
+            double dy = pts[1].y - pts[0].y;
+            double dist = Math.Sqrt(dx * dx + dy * dy);
+            int steps = Math.Max(10, (int)Math.Ceiling(dist / segmentLength));
+
+            for (int s = 1; s <= steps; s++)
+            {
+                double t = (double)s / steps;
+                result.Add((pts[0].x + t * dx, pts[0].y + t * dy));
+            }
+            return result;
+        }
+
+        // 3+ Punkte: alle zusammen interpolieren
+        var fullResult = new List<(double x, double y)> { pts[0] };
+        int n = pts.Count;
+        double maxTension = 0.0;
+
+        for (int i = 0; i < n - 1; i++)
+        {
+            var p1 = pts[i];
+            var p2 = pts[i + 1];
+            var p0 = i > 0 ? pts[i - 1] : pts[i];
+            var p3 = i < n - 2 ? pts[i + 2] : pts[i + 1];
+
+            double dx = p2.x - p1.x;
+            double dy = p2.y - p1.y;
+            double dist = Math.Sqrt(dx * dx + dy * dy);
+            int steps = Math.Max(10, (int)Math.Ceiling(dist / segmentLength));
+
+            for (int s = 1; s <= steps; s++)
+            {
+                double t = (double)s / steps;
+                var pt = CatmullRomPoint(p0, p1, p2, p3, t, maxTension);
+                fullResult.Add(pt);
+            }
+        }
+
+        return fullResult;
+    }
+
     private static List<(double x, double y)> InterpolateSplineSegment(
         List<(double x, double y)> allPts, int segIdx, string splineMode, double splineTension, double segmentLength = 0.5)
     {
