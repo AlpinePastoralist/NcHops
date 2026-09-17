@@ -11497,8 +11497,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     DrawBogenPreview(canvas, p1.Value, _pfadBogenEndAbs, _pfadMouseMm, lt2);
             }
 
-            // Live-Spline-Vorschau und Punkt-Markierungen
-            if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 1)
+            // Live-Spline-Vorschau und Punkt-Markierungen (auch nach Finalisierung sichtbar)
+            if (_splinePointsBeingCreated.Count >= 1)
             {
                 // Kurvenvorschau bereits nach 1. Spline-Punkt
                 var previewPts = new List<(double x, double y)>();
