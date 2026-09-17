@@ -11517,7 +11517,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
 
             // Live-Spline-Vorschau und Punkt-Markierungen (auch nach Finalisierung sichtbar)
-            if (_splinePointsBeingCreated.Count >= 1)
+            // KEINE geraden Linien zwischen Spline-Punkten! Nur die interpolierte Kurve!
+            if (_splinePointsBeingCreated.Count >= 1 && !_splineFinalized)
             {
                 // Kurvenvorschau bereits nach 1. Spline-Punkt
                 var previewPts = new List<(double x, double y)>();
@@ -11556,24 +11557,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 if (previewPts.Count >= 1)
                 {
                     DrawSplinePreviewSk(canvas, previewPts,
-                                        _splineModeBeingCreated, _splineTensionBeingCreated, _splineFinalized);
+                                        _splineModeBeingCreated, _splineTensionBeingCreated, finalized: false);
                 }
 
-                // Markiere Spline-Punkte NUR wenn noch nicht fertig
-                if (!_splineFinalized)
+                // Markiere Spline-Punkte
+                using var pointPaint = new SKPaint
                 {
-                    using var pointPaint = new SKPaint
-                    {
-                        Color = new SKColor(255, 165, 0, 220),
-                        Style = SKPaintStyle.Fill,
-                        IsAntialias = true
-                    };
-                    foreach (var pt in _splinePointsBeingCreated)
-                    {
-                        float px = (float)(_topRect.Left + pt.x * sc2);
-                        float py = (float)(_topRect.Bottom - pt.y * sc2);
-                        canvas.DrawCircle(px, py, (float)(3.5 / _zoom), pointPaint);
-                    }
+                    Color = new SKColor(255, 165, 0, 220),
+                    Style = SKPaintStyle.Fill,
+                    IsAntialias = true
+                };
+                foreach (var pt in _splinePointsBeingCreated)
+                {
+                    float px = (float)(_topRect.Left + pt.x * sc2);
+                    float py = (float)(_topRect.Bottom - pt.y * sc2);
+                    canvas.DrawCircle(px, py, (float)(3.5 / _zoom), pointPaint);
                 }
             }
         }
