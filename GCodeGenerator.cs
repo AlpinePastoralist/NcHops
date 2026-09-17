@@ -1356,12 +1356,12 @@ public static class GCodeGenerator
                         if (k < arcMids.Count) arcMids.RemoveAt(k);
                     }
 
-                    // Füge interpolierte Punkte ein
+                    // Füge interpolierte Punkte ein (in korrekter Reihenfolge)
                     for (int j = 0; j < interpolated.Count; j++)
                     {
-                        pts.Insert(splineStart, interpolated[j]);
-                        splineTypes.Insert(splineStart, (splineStart, PfadPunktTyp.Linie));
-                        if (splineStart < arcMids.Count) arcMids.Insert(splineStart, null);
+                        pts.Insert(splineStart + j, interpolated[j]);
+                        splineTypes.Insert(splineStart + j, (splineStart, PfadPunktTyp.Linie));
+                        if (splineStart + j <= arcMids.Count) arcMids.Insert(splineStart + j, null);
                     }
                 }
                 i = splineStart - 1;
