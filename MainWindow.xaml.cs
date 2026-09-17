@@ -1,4 +1,5 @@
 ﻿using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -1620,7 +1621,28 @@ public partial class MainWindow : Window
         DrawSkia?.InvalidateVisual();
     }
 
-    private void FinalizePfadSpline()
+    private void OnSplineFinish(object sender, RoutedEventArgs e)
+    {
+        if (_splinePointsBeingCreated.Count < 2)
+        {
+            MessageBox.Show("Mindestens 2 Spline-Punkte erforderlich.", "Fehler",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (!double.TryParse(PfadEigSplineSegmentLen.Text, NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out var segmentLen)
+            || segmentLen <= 0)
+        {
+            MessageBox.Show("Ungültige Segmentlänge.", "Fehler",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        FinalizePfadSpline(segmentLen);
+    }
+
+    private void FinalizePfadSpline(double segmentLength = 0.5)
     {
         if (_splinePointsBeingCreated.Count < 2)
         {
@@ -1633,7 +1655,8 @@ public partial class MainWindow : Window
 
         var interpolatedPts = InterpolateFullSpline(_splinePointsBeingCreated,
                                                      _splineModeBeingCreated,
-                                                     _splineTensionBeingCreated);
+                                                     _splineTensionBeingCreated,
+                                                     segmentLength);
 
         foreach (var pt in interpolatedPts)
         {
@@ -1662,7 +1685,8 @@ public partial class MainWindow : Window
     }
 
     private List<(double x, double y)> InterpolateFullSpline(List<(double x, double y)> pts,
-                                                               string splineMode, double tension)
+                                                               string splineMode, double tension,
+                                                               double segmentLength = 0.5)
     {
         if (pts.Count < 2) return new();
         if (pts.Count == 2)
@@ -1672,7 +1696,7 @@ public partial class MainWindow : Window
             double dx = pts[1].x - pts[0].x;
             double dy = pts[1].y - pts[0].y;
             double dist = Math.Sqrt(dx * dx + dy * dy);
-            int steps = Math.Max(10, (int)Math.Ceiling(dist / 0.5));
+            int steps = Math.Max(10, (int)Math.Ceiling(dist / segmentLength));
 
             for (int s = 1; s <= steps; s++)
             {
@@ -1694,7 +1718,7 @@ public partial class MainWindow : Window
             var p3 = pts[2];
 
             double dist1 = Math.Sqrt(Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2));
-            int steps1 = Math.Max(15, (int)Math.Ceiling(dist1 / 0.5));
+            int steps1 = Math.Max(15, (int)Math.Ceiling(dist1 / segmentLength));
 
             result.Add(p1);
             for (int s = 1; s <= steps1; s++)
@@ -1711,7 +1735,7 @@ public partial class MainWindow : Window
             p3 = pts[2];  // Wiederhole Cursor als Kontrollpunkt
 
             double dist2 = Math.Sqrt(Math.Pow(p2.x - p1.x, 2) + Math.Pow(p2.y - p1.y, 2));
-            int steps2 = Math.Max(15, (int)Math.Ceiling(dist2 / 0.5));
+            int steps2 = Math.Max(15, (int)Math.Ceiling(dist2 / segmentLength));
 
             for (int s = 1; s <= steps2; s++)
             {
@@ -1740,7 +1764,7 @@ public partial class MainWindow : Window
             double dx = p2.x - p1.x;
             double dy = p2.y - p1.y;
             double dist = Math.Sqrt(dx * dx + dy * dy);
-            int steps = Math.Max(10, (int)Math.Ceiling(dist / 0.5));
+            int steps = Math.Max(10, (int)Math.Ceiling(dist / segmentLength));
 
             for (int s = 1; s <= steps; s++)
             {
@@ -7764,7 +7788,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
             case Key.Return:
                 if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 2)
-                { FinalizePfadSpline(); e.Handled = true; }
+                {
+                    double segmentLen = 0.5;
+                    if (double.TryParse(PfadEigSplineSegmentLen.Text, NumberStyles.Float,
+                                       System.Globalization.CultureInfo.InvariantCulture, out var len))
+                        segmentLen = Math.Max(0.1, len);
+                    FinalizePfadSpline(segmentLen);
+                    e.Handled = true;
+                }
                 break;
         }
     }
@@ -8070,6 +8101,23 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         BtnToolPfadLinie.Background   = tool == CanvasTool.PfadLinie  ? active : inactive;
         BtnToolPfadKurve.Background   = tool == CanvasTool.PfadBogen  ? active : inactive;
         BtnToolPfadSpline.Background  = tool == CanvasTool.PfadSpline ? active : inactive;
+
+        // Spline-Panel nur sichtbar wenn Spline-Werkzeug aktiv ist
+        if (tool == CanvasTool.PfadSpline)
+        {
+            TabEigenschaften.IsSelected = true;
+            PnlPfadStart.Visibility = Visibility.Visible;
+            PnlPfadEigStartOnly.Visibility = Visibility.Collapsed;
+            PnlPfadEigBezug.Visibility = Visibility.Collapsed;
+            PnlPfadEigBogenMid.Visibility = Visibility.Collapsed;
+            PnlPfadEigVerrundung.Visibility = Visibility.Collapsed;
+            PnlPfadEigSpline.Visibility = Visibility.Visible;
+            PfadEigTitel.Text = "Pfad – Spline";
+        }
+        else if (leavingPfad)
+        {
+            PnlPfadEigSpline.Visibility = Visibility.Collapsed;
+        }
         BtnToolRechteck.Background    = tool == CanvasTool.Rechteck  ? active : inactive;
         BtnToolKreis.Background       = tool == CanvasTool.Kreis     ? active : inactive;
         BtnToolNEck.Background        = tool == CanvasTool.NEck      ? active : inactive;

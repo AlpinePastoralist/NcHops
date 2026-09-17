@@ -1332,6 +1332,15 @@
                                              KeyDown="OnPfadEigKeyDown"/>
                                 </StackPanel>
 
+                                <!-- Spline: Segmentlänge und Fertig-Button -->
+                                <StackPanel x:Name="PnlPfadEigSpline" Visibility="Collapsed">
+                                    <TextBlock Text="Segmentlänge (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="PfadEigSplineSegmentLen" Text="0.5" Margin="0,0,0,10"
+                                             LostFocus="OnPfadEigLostFocus"
+                                             TextChanged="OnPfadEigTextChanged"/>
+                                    <Button Content="Spline fertig" Click="OnSplineFinish" Margin="0,0,0,6"/>
+                                </StackPanel>
+
                             </StackPanel>
 
                             <!-- Pfad geschlossen: Endpunkt-Eigenschaften (nur sichtbar wenn Start gewählt + Pfad geschlossen) -->
