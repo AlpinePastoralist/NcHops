@@ -11511,10 +11511,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 // Kurvenvorschau bereits nach 1. Spline-Punkt
                 var previewPts = new List<(double x, double y)>();
 
-                // Versuche Start-Punkt hinzuzufügen
-                var lastPt = GetLastPfadAbsPoint();
-                if (lastPt.HasValue)
-                    previewPts.Add(lastPt.Value);
+                // Finde den letzten Punkt in der History VOR den Spline-Punkten
+                if (_history.Count > 0 && _history[^1].Params is PfadPunktParams lastEntry && lastEntry.Typ != PfadPunktTyp.Spline)
+                {
+                    // Es gibt einen Nicht-Spline-Punkt als letzten Eintrag - verwende diesen als Startpunkt
+                    var lastPt = GetLastPfadAbsPoint();
+                    if (lastPt.HasValue)
+                        previewPts.Add(lastPt.Value);
+                }
 
                 // Füge Spline-Punkte hinzu
                 previewPts.AddRange(_splinePointsBeingCreated);
