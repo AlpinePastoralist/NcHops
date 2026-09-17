@@ -1639,7 +1639,11 @@ public partial class MainWindow : Window
     {
         if (e.Key == Key.Return && _activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 2)
         {
-            OnSplineFinish(null, null);
+            double segmentLen = 0.5;
+            if (double.TryParse(PfadEigSplineSegmentLen.Text, NumberStyles.Float,
+                               System.Globalization.CultureInfo.InvariantCulture, out var len))
+                segmentLen = Math.Max(0.1, len);
+            FinalizePfadSpline(segmentLen);
             e.Handled = true;
         }
     }
