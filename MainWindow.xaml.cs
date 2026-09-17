@@ -12476,14 +12476,17 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                         arcMidsC.Add(null);
                 }
 
-                // Verrundungen pro Punkt
-                var verrC = chain.Select(c => c.p.Verrundung).ToList();
+                // Spline-Punkte aus der Kette entfernen - sie sollten NICHT mit geraden Linien verbunden werden!
+                var chainForCornerArcs = chain.Where(c => c.p.Typ != PfadPunktTyp.Spline).ToList();
+
+                // Verrundungen pro Punkt (nur für Nicht-Spline-Punkte)
+                var verrC = chainForCornerArcs.Select(c => c.p.Verrundung).ToList();
                 bool hasVerrC = verrC.Any(v => v > 1e-10);
 
-                // Verrundungs-Vorverarbeitung: Ecken einfügen
+                // Verrundungs-Vorverarbeitung: Ecken einfügen (NICHT für Spline-Punkte!)
                 var drawPts  = pts;
                 var drawMids = arcMidsC;
-                if (hasVerrC)
+                if (hasVerrC && chainForCornerArcs.Count > 0)
                     (drawPts, drawMids) = GCodeGenerator.InsertLineCornerArcs(
                         new List<(double x, double y)>(pts), arcMidsC, verrC, closed: false);
 
