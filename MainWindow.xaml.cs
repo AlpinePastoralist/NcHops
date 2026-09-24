@@ -7789,14 +7789,23 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             case Key.Z when !ctrl: SetActiveTool(_activeTool == CanvasTool.Zoom ? CanvasTool.Select : CanvasTool.Zoom); e.Handled = true; break;
             case Key.Back:
             {
-                // Letzten Pfad-Punkt entfernen (Zoom-Ansicht beibehalten)
-                int last = _history.Count - 1;
-                if (last >= 0 && _history[last].Params is PfadPunktParams)
+                // Backspace: Während Spline-Erstellung letzten Punkt löschen
+                if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count > 0)
                 {
-                    _suppressNextAutoFit = true;
-                    _history.RemoveAt(last);
-                    UpdatePfadMenuState();
+                    _splinePointsBeingCreated.RemoveAt(_splinePointsBeingCreated.Count - 1);
                     DrawSkia?.InvalidateVisual();
+                }
+                // Ansonsten: Letzten Pfad-Punkt entfernen (Zoom-Ansicht beibehalten)
+                else
+                {
+                    int last = _history.Count - 1;
+                    if (last >= 0 && _history[last].Params is PfadPunktParams)
+                    {
+                        _suppressNextAutoFit = true;
+                        _history.RemoveAt(last);
+                        UpdatePfadMenuState();
+                        DrawSkia?.InvalidateVisual();
+                    }
                 }
                 e.Handled = true; break;
             }
@@ -7845,15 +7854,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 e.Handled = true; break;
             case Key.D0 or Key.NumPad0 when ctrl: ZoomTo100();    e.Handled = true; break;
             case Key.D1 or Key.NumPad1 when ctrl: ZoomTo1to1();   e.Handled = true; break;
-
-            case Key.Back:
-                if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count > 0)
-                {
-                    _splinePointsBeingCreated.RemoveAt(_splinePointsBeingCreated.Count - 1);
-                    DrawSkia?.InvalidateVisual();
-                    e.Handled = true;
-                }
-                break;
 
             case Key.Return:
                 if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 2)
