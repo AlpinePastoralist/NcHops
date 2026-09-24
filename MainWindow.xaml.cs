@@ -165,6 +165,7 @@ public partial class MainWindow : Window
     // ── Template-Image (Schablone) ────────────────────────────────────────
     private TemplateImage? _templateImage;
     private int _templateImageDragAnchor = -1;  // Welcher Ankerpunkt wird gerade gezogen (-1 = keiner)
+    private bool _showTemplateContextMenu = false;  // Kontextmenü für Template anzeigen
 
     // ── G-Code Zeilenmarkierung ───────────────────────────────────
     private int _highlightGCodeLine = -1;   // Caret-Zeile
@@ -745,7 +746,6 @@ public partial class MainWindow : Window
             {
                 _templateImage.UpdateAnchorPoints();
                 DrawSkia.InvalidateVisual();
-                MessageBox.Show("Schablone geladen. Verwenden Sie das Verschieben-Werkzeug um die Ankerpunkte zu adjustieren.", "Schablone geladen", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {
@@ -758,6 +758,59 @@ public partial class MainWindow : Window
             MessageBox.Show($"Fehler beim Laden der Schablone: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             _templateImage = null;
         }
+    }
+
+    private void OnCanvasContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        // Menü nur öffnen, wenn auf das Bild geklickt wurde
+        if (!_showTemplateContextMenu)
+        {
+            e.Handled = true;
+            CanvasGrid.ContextMenu.IsOpen = false;
+        }
+    }
+
+    private void OnTemplateRotateCW(object sender, RoutedEventArgs e)
+    {
+        if (_templateImage != null)
+        {
+            _templateImage.RotateCW();
+            DrawSkia?.InvalidateVisual();
+        }
+    }
+
+    private void OnTemplateRotateCCW(object sender, RoutedEventArgs e)
+    {
+        if (_templateImage != null)
+        {
+            _templateImage.RotateCCW();
+            DrawSkia?.InvalidateVisual();
+        }
+    }
+
+    private void OnTemplateFlipH(object sender, RoutedEventArgs e)
+    {
+        if (_templateImage != null)
+        {
+            _templateImage.FlipH();
+            DrawSkia?.InvalidateVisual();
+        }
+    }
+
+    private void OnTemplateFlipV(object sender, RoutedEventArgs e)
+    {
+        if (_templateImage != null)
+        {
+            _templateImage.FlipV();
+            DrawSkia?.InvalidateVisual();
+        }
+    }
+
+    private void OnTemplateRemove(object sender, RoutedEventArgs e)
+    {
+        _templateImage = null;
+        _templateImageDragAnchor = -1;
+        DrawSkia?.InvalidateVisual();
     }
 
     private void OnSpeichern(object sender, RoutedEventArgs e)
@@ -7793,6 +7846,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             case Key.D0 or Key.NumPad0 when ctrl: ZoomTo100();    e.Handled = true; break;
             case Key.D1 or Key.NumPad1 when ctrl: ZoomTo1to1();   e.Handled = true; break;
 
+            case Key.Back:
+                if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count > 0)
+                {
+                    _splinePointsBeingCreated.RemoveAt(_splinePointsBeingCreated.Count - 1);
+                    DrawSkia?.InvalidateVisual();
+                    e.Handled = true;
+                }
+                break;
+
             case Key.Return:
                 if (_activeTool == CanvasTool.PfadSpline && _splinePointsBeingCreated.Count >= 2)
                 {
@@ -9684,6 +9746,40 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
         }
 
+        // Template-Image: Rechtsklick für Kontextmenü (nur auf Bildfläche)
+        if (_templateImage?.Bitmap != null && e.ChangedButton == MouseButton.Right)
+        {
+            var screenPt = e.GetPosition(CanvasGrid);
+            double mmX = (screenPt.X - _panX) / _zoom;
+            double mmY = (screenPt.Y - _panY) / _zoom;
+
+            double sc = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
+            double canvasMmX = (mmX - _topRect.Left) / sc;
+            double canvasMmY = (_topRect.Bottom - mmY) / sc;
+
+            // Überprüfe, ob Klick innerhalb der Bildbegrenzung liegt
+            double left = _templateImage.X - _templateImage.Width / 2;
+            double right = _templateImage.X + _templateImage.Width / 2;
+            double bottom = _templateImage.Y - _templateImage.Height / 2;
+            double top = _templateImage.Y + _templateImage.Height / 2;
+
+            if (canvasMmX >= left && canvasMmX <= right && canvasMmY >= bottom && canvasMmY <= top)
+            {
+                _showTemplateContextMenu = true;
+                e.Handled = true;
+                return;
+            }
+        }
+        _showTemplateContextMenu = false;
+
+        // Rechtsklick außerhalb des Bildes - kein Menü, aber Pan erlauben
+        if (e.ChangedButton == MouseButton.Right && !_showTemplateContextMenu)
+        {
+            if (CanvasGrid.ContextMenu != null)
+                CanvasGrid.ContextMenu.IsOpen = false;
+            // Nicht e.Handled setzen, damit Pan-Logik weitermacht!
+        }
+
         // Template-Image: Ankerpunkt mit Move-Werkzeug vergrößern/verschieben
         if (_activeTool == CanvasTool.Move && _templateImage?.Bitmap != null && e.ChangedButton == MouseButton.Left)
         {
@@ -10353,9 +10449,11 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;
         }
 
-        // Pan starten: Rechtsklick immer, Linksklick beim Hand-Werkzeug
+        // Pan starten: Rechtsklick immer, Mitteltaste immer, Linksklick beim Hand-Werkzeug oder mit Ctrl
         bool startPan = e.ChangedButton == MouseButton.Right
-                        || (e.ChangedButton == MouseButton.Left && _activeTool == CanvasTool.Hand);
+                        || e.ChangedButton == MouseButton.Middle
+                        || (e.ChangedButton == MouseButton.Left && _activeTool == CanvasTool.Hand)
+                        || (e.ChangedButton == MouseButton.Left && (Keyboard.Modifiers & ModifierKeys.Control) != 0);
         if (!startPan) return;
         _isPanning = true;
         _panStart  = e.GetPosition(CanvasGrid);
@@ -10367,6 +10465,21 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
 
     private void OnCanvasMouseUp(object sender, MouseButtonEventArgs e)
     {
+        // Pan beendet (Rechtsklick, Mitteltaste, oder Ctrl+Linksklick) - ZUERST überprüfen!
+        if (_isPanning && (e.ChangedButton == MouseButton.Right || e.ChangedButton == MouseButton.Middle || e.ChangedButton == MouseButton.Left))
+        {
+            _isPanning = false;
+            CanvasGrid.ReleaseMouseCapture();
+            CanvasGrid.Cursor = _activeTool switch
+            {
+                CanvasTool.Hand         => Cursors.Hand,
+                CanvasTool.Zoom         => Cursors.Cross,
+                CanvasTool.VCarveTextSk => Cursors.Cross,
+                _                       => Cursors.Arrow,
+            };
+            return;
+        }
+
         if (e.ChangedButton == MouseButton.Left)
         {
             // Template-Image: Ankerpunkt-Drag beendet
@@ -10533,16 +10646,6 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             return;
         }
-        if (e.ChangedButton != MouseButton.Right || !_isPanning) return;
-        _isPanning = false;
-        CanvasGrid.ReleaseMouseCapture();
-        CanvasGrid.Cursor = _activeTool switch
-        {
-            CanvasTool.Hand         => Cursors.Hand,
-            CanvasTool.Zoom         => Cursors.Cross,
-            CanvasTool.VCarveTextSk => Cursors.Cross,
-            _                       => Cursors.Arrow,
-        };
     }
 
     private void OnCanvasMouseMove(object sender, MouseEventArgs e)
@@ -11650,11 +11753,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         canvas.Save();
         canvas.Translate(centerX, centerY);
         canvas.RotateDegrees((float)_templateImage.Rotation);
+
+        // Spiegelung anwenden (vor Translation für korrekte Skalierung)
+        if (_templateImage.FlipHorizontal)
+            canvas.Scale(-1, 1);
+        if (_templateImage.FlipVertical)
+            canvas.Scale(1, -1);
+
+        // Jetzt zum Ursprung verschieben und zeichnen
         canvas.Translate(-dstWidth / 2, -dstHeight / 2);
 
-        var src = new SKRect(0, 0, bitmap.Width, bitmap.Height);
+        // Direktes Skalieren des Bitmap auf die richtige Größe
         var dst = new SKRect(0, 0, dstWidth, dstHeight);
-        canvas.DrawBitmap(bitmap, src, dst, paint);
+        canvas.DrawBitmap(bitmap, dst, paint);
         canvas.Restore();
 
         // 9 Ankerpunkte zeichnen
