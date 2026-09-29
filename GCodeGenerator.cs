@@ -525,11 +525,13 @@ public static class GCodeGenerator
 
         sb.AppendLine($"G00 X{F(cx + rEntry)} Y{F(cy)}");
         double curZ = 0;
-        double lastAngle = 0; // Endwinkel der letzten Schruppspirale (Position am Ende der Schleife)
+        double lastAngle = 0;  // Endwinkel der letzten Schruppspirale (Position am Ende der Schleife)
+        double entryAngle = 0; // Winkel des Helix-Eintauchpunkts, wechselt pro Tiefenstufe um 180°
 
         while (curZ > depth)
         {
             double nextZ = Math.Max(depth, curZ - zStep);
+            double hx = rEntry * Math.Cos(entryAngle), hy = rEntry * Math.Sin(entryAngle);
 
             // Helikal eintauchen von curZ nach nextZ im Gegenlauf (G02 = CW)
             if (zPerRev > 1e-6)
@@ -540,8 +542,8 @@ public static class GCodeGenerator
                     double zEnd = Math.Max(nextZ, z - zPerRev);
                     double zMid = (z + zEnd) / 2.0;
                     // Voller Kreis als zwei Halbkreise (Start = Ende wird sonst u.a. von Estlcam als Nullbogen gelesen)
-                    sb.AppendLine($"G02 X{F(cx - rEntry)} Y{F(cy)} Z{F(zMid)} I{F(-rEntry)} J0 F{(int)p.Vorschub}");
-                    sb.AppendLine($"G02 X{F(cx + rEntry)} Y{F(cy)} Z{F(zEnd)} I{F(rEntry)} J0 F{(int)p.Vorschub}");
+                    sb.AppendLine($"G02 X{F(cx - hx)} Y{F(cy - hy)} Z{F(zMid)} I{F(-hx)} J{F(-hy)} F{(int)p.Vorschub}");
+                    sb.AppendLine($"G02 X{F(cx + hx)} Y{F(cy + hy)} Z{F(zEnd)} I{F(hx)} J{F(hy)} F{(int)p.Vorschub}");
                     z = zEnd;
                 }
             }
@@ -553,8 +555,7 @@ public static class GCodeGenerator
 
             // Archimedische Spirale von rEntry nach maxRoughR im Gegenlauf (CW = neg. Winkel)
             // Segmente pro Umdrehung aus Sehnentoleranz, damit die Kurve bei großen Radien glatt bleibt
-            double endAngle = 0; // Winkel, bei dem die Spirale endet = Start des Abschlusskreises
-            lastAngle = 0;
+            double endAngle = entryAngle; // Winkel, bei dem die Spirale endet = Start des Abschlusskreises
             if (maxRoughR > rEntry)
             {
                 const double chordalTol = 0.05; // mm – max. Abstand Sehne/Kreisbogen
@@ -563,34 +564,34 @@ public static class GCodeGenerator
                 int segPerRev = Math.Min(maxSegsPerRev, (int)Math.Ceiling(2.0 * Math.PI / maxAngleRad));
                 double totalRevs = (maxRoughR - rEntry) / step;
                 int totalSegs = Math.Min(2000, Math.Max(segPerRev, (int)Math.Ceiling(totalRevs * segPerRev)));
-                endAngle = -2.0 * Math.PI * totalRevs; // CW
-                lastAngle = endAngle;
+                double spiralSweep = 2.0 * Math.PI * totalRevs; // CW
+                endAngle = entryAngle - spiralSweep;
                 for (int i = 1; i <= totalSegs; i++)
                 {
                     double t       = (double)i / totalSegs;
                     double spiralR = rEntry + (maxRoughR - rEntry) * t;
-                    double angle   = endAngle * t;
+                    double angle   = entryAngle - spiralSweep * t;
                     sb.AppendLine($"G01 X{F(cx + spiralR * Math.Cos(angle))} Y{F(cy + spiralR * Math.Sin(angle))} F{(int)p.Vorschub}");
                 }
             }
-            else
-            {
-                sb.AppendLine($"G01 X{F(cx + maxRoughR)} Y{F(cy)} F{(int)p.Vorschub}");
-            }
+            // sonst: rEntry == maxRoughR, der Helixkreis ist bereits der Abschlusskreis
+            lastAngle = endAngle;
             // Abschlusskreis bei maxRoughR ab Spiralende (stellt vollständige Abdeckung sicher),
             // als zwei Halbkreise: Endpunkt → gegenüberliegender Punkt → Endpunkt
             double ex = maxRoughR * Math.Cos(endAngle), ey = maxRoughR * Math.Sin(endAngle);
             sb.AppendLine($"G02 X{F(cx - ex)} Y{F(cy - ey)} I{F(-ex)} J{F(-ey)} F{(int)p.Vorschub}");
             sb.AppendLine($"G02 X{F(cx + ex)} Y{F(cy + ey)} I{F(ex)} J{F(ey)} F{(int)p.Vorschub}");
 
-            // Für nächste Tiefenstufe zurück zum Eintauchpunkt (im geräumten Bereich):
-            // Spirale nach innen, CW weiter von endAngle bis zum nächsten Vielfachen von 2π (= Winkel 0)
+            // Für nächste Tiefenstufe zum neuen Eintauchpunkt (im geräumten Bereich), gegenüber
+            // dem letzten Eintauchpunkt: Spirale nach innen, CW weiter von endAngle bis entryAngle + 180°
             if (curZ > depth)
             {
+                double nextEntry = entryAngle + Math.PI;
                 if (maxRoughR > rEntry)
                 {
                     double twoPi   = 2.0 * Math.PI;
-                    double target  = -twoPi * Math.Ceiling(-endAngle / twoPi + 1e-9);
+                    // größter Winkel ≡ nextEntry (mod 2π) unterhalb von endAngle
+                    double target  = nextEntry + twoPi * Math.Floor((endAngle - nextEntry) / twoPi - 1e-9);
                     double sweep   = endAngle - target;              // > 0, CW-Winkelweg
                     if (sweep < Math.PI) { target -= twoPi; sweep += twoPi; } // nicht zu steil
                     int segs = Math.Max(8, (int)Math.Ceiling(sweep / (2.5 * Math.PI / 180.0)));
@@ -607,8 +608,10 @@ public static class GCodeGenerator
                 }
                 else
                 {
-                    sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
+                    // Halbkreis auf dem Helixkreis zur Gegenseite
+                    sb.AppendLine($"G02 X{F(cx - hx)} Y{F(cy - hy)} I{F(-hx)} J{F(-hy)} F{(int)p.Vorschub}");
                 }
+                entryAngle = nextEntry;
             }
         }
 
