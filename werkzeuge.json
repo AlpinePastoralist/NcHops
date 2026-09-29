@@ -25,13 +25,13 @@
     "BildPfad": "0e89dc063f0248a1a25f9eec3e57b23b.jpg",
     "Durchmesser": 16,
     "Schneidenwinkel": 180,
-    "ZZustellung": 4,
+    "ZZustellung": 5,
     "Eintauchwinkel": 20,
     "VorschubFxy": 3000,
     "VorschubFz": 2000,
     "Drehzahl": 18000,
     "RaeumzustellungXY": 75,
-    "Geaendert": "2026-08-08T14:25:06.4757881+02:00"
+    "Geaendert": "2026-09-29T09:55:24.5106245+02:00"
   },
   {
     "Nr": 3,
@@ -117,5 +117,22 @@
     "Drehzahl": 8000,
     "RaeumzustellungXY": 75,
     "Geaendert": "2026-08-08T13:56:03.4408075+02:00"
+  },
+  {
+    "Nr": 7,
+    "Typ": 1,
+    "Name": "Bohrer 3mm",
+    "DisplayName": "7. Bohrer 3mm",
+    "ListLabel": "7. Bohrer 3mm (Bohrer)",
+    "BildPfad": null,
+    "Durchmesser": 3,
+    "Schneidenwinkel": 180,
+    "ZZustellung": 7,
+    "Eintauchwinkel": 90,
+    "VorschubFxy": 0,
+    "VorschubFz": 2000,
+    "Drehzahl": 8000,
+    "RaeumzustellungXY": 75,
+    "Geaendert": "2026-09-29T16:32:51.6104123+02:00"
   }
 ]
