@@ -535,8 +535,12 @@ public static class GCodeGenerator
                 double z = curZ;
                 while (z > nextZ)
                 {
-                    z = Math.Max(nextZ, z - zPerRev);
-                    sb.AppendLine($"G02 X{F(cx + rEntry)} Y{F(cy)} Z{F(z)} I{F(-rEntry)} J0 F{(int)p.Vorschub}");
+                    double zEnd = Math.Max(nextZ, z - zPerRev);
+                    double zMid = (z + zEnd) / 2.0;
+                    // Voller Kreis als zwei Halbkreise (Start = Ende wird sonst u.a. von Estlcam als Nullbogen gelesen)
+                    sb.AppendLine($"G02 X{F(cx - rEntry)} Y{F(cy)} Z{F(zMid)} I{F(-rEntry)} J0 F{(int)p.Vorschub}");
+                    sb.AppendLine($"G02 X{F(cx + rEntry)} Y{F(cy)} Z{F(zEnd)} I{F(rEntry)} J0 F{(int)p.Vorschub}");
+                    z = zEnd;
                 }
             }
             else
@@ -569,7 +573,8 @@ public static class GCodeGenerator
             }
             // Abschlusskreis bei maxRoughR (stellt vollständige Abdeckung sicher)
             sb.AppendLine($"G01 X{F(cx + maxRoughR)} Y{F(cy)} F{(int)p.Vorschub}");
-            sb.AppendLine($"G02 X{F(cx + maxRoughR)} Y{F(cy)} I{F(-maxRoughR)} J0 F{(int)p.Vorschub}");
+            sb.AppendLine($"G02 X{F(cx - maxRoughR)} Y{F(cy)} I{F(-maxRoughR)} J0 F{(int)p.Vorschub}");
+            sb.AppendLine($"G02 X{F(cx + maxRoughR)} Y{F(cy)} I{F(maxRoughR)} J0 F{(int)p.Vorschub}");
 
             // Für nächste Tiefenstufe zurück zum Eintauchpunkt (im geräumten Bereich)
             if (curZ > depth)
@@ -580,7 +585,8 @@ public static class GCodeGenerator
         sb.AppendLine(Sz());
         sb.AppendLine($"G00 X{F(cx + Rm)} Y{F(cy)}");
         sb.AppendLine($"G01 Z{F(depth)} F{(int)p.VorschubFz}");
-        sb.AppendLine($"G02 X{F(cx + Rm)} Y{F(cy)} I{F(-Rm)} J0 F{(int)p.Vorschub}");
+        sb.AppendLine($"G02 X{F(cx - Rm)} Y{F(cy)} I{F(-Rm)} J0 F{(int)p.Vorschub}");
+        sb.AppendLine($"G02 X{F(cx + Rm)} Y{F(cy)} I{F(Rm)} J0 F{(int)p.Vorschub}");
 
         sb.AppendLine(Sz());
         return sb.ToString();
