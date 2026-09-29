@@ -514,8 +514,9 @@ public static class GCodeGenerator
         double roughRm   = Rm - allowance;
         double maxRoughR = roughRm > 0 ? roughRm : Rm;
 
-        // Eintauchradius: erster Kreisschritt, auf Rm begrenzt
-        double rEntry   = Math.Min(step, maxRoughR);
+        // Eintauchradius: erster Kreisschritt, auf Rm begrenzt und kleiner als der Fräserradius,
+        // damit die Helix die Mitte mit räumt und kein Mittelstumpf stehen bleibt
+        double rEntry   = Math.Min(Math.Min(step, 0.9 * r), maxRoughR);
         double angleRad = Math.PI / 180.0 * Math.Abs(p.Eintauchwinkel);
         // Z-Absenkung pro Helix-Umdrehung (Eintauchwinkel)
         double zPerRev  = p.Eintauchwinkel > 0.01
@@ -524,6 +525,7 @@ public static class GCodeGenerator
 
         sb.AppendLine($"G00 X{F(cx + rEntry)} Y{F(cy)}");
         double curZ = 0;
+        double lastAngle = 0; // Endwinkel der letzten Schruppspirale (Position am Ende der Schleife)
 
         while (curZ > depth)
         {
@@ -549,12 +551,10 @@ public static class GCodeGenerator
             }
             curZ = nextZ;
 
-            // Mittenfreischnitt: Durchmesserbahn räumt den Mittelstumpf
-            sb.AppendLine($"G01 X{F(cx - rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
-            sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
-
             // Archimedische Spirale von rEntry nach maxRoughR im Gegenlauf (CW = neg. Winkel)
             // Segmente pro Umdrehung aus Sehnentoleranz, damit die Kurve bei großen Radien glatt bleibt
+            double endAngle = 0; // Winkel, bei dem die Spirale endet = Start des Abschlusskreises
+            lastAngle = 0;
             if (maxRoughR > rEntry)
             {
                 const double chordalTol = 0.05; // mm – max. Abstand Sehne/Kreisbogen
@@ -563,30 +563,74 @@ public static class GCodeGenerator
                 int segPerRev = Math.Min(maxSegsPerRev, (int)Math.Ceiling(2.0 * Math.PI / maxAngleRad));
                 double totalRevs = (maxRoughR - rEntry) / step;
                 int totalSegs = Math.Min(2000, Math.Max(segPerRev, (int)Math.Ceiling(totalRevs * segPerRev)));
+                endAngle = -2.0 * Math.PI * totalRevs; // CW
+                lastAngle = endAngle;
                 for (int i = 1; i <= totalSegs; i++)
                 {
                     double t       = (double)i / totalSegs;
                     double spiralR = rEntry + (maxRoughR - rEntry) * t;
-                    double angle   = -2.0 * Math.PI * totalRevs * t; // CW
+                    double angle   = endAngle * t;
                     sb.AppendLine($"G01 X{F(cx + spiralR * Math.Cos(angle))} Y{F(cy + spiralR * Math.Sin(angle))} F{(int)p.Vorschub}");
                 }
             }
-            // Abschlusskreis bei maxRoughR (stellt vollständige Abdeckung sicher)
-            sb.AppendLine($"G01 X{F(cx + maxRoughR)} Y{F(cy)} F{(int)p.Vorschub}");
-            sb.AppendLine($"G02 X{F(cx - maxRoughR)} Y{F(cy)} I{F(-maxRoughR)} J0 F{(int)p.Vorschub}");
-            sb.AppendLine($"G02 X{F(cx + maxRoughR)} Y{F(cy)} I{F(maxRoughR)} J0 F{(int)p.Vorschub}");
+            else
+            {
+                sb.AppendLine($"G01 X{F(cx + maxRoughR)} Y{F(cy)} F{(int)p.Vorschub}");
+            }
+            // Abschlusskreis bei maxRoughR ab Spiralende (stellt vollständige Abdeckung sicher),
+            // als zwei Halbkreise: Endpunkt → gegenüberliegender Punkt → Endpunkt
+            double ex = maxRoughR * Math.Cos(endAngle), ey = maxRoughR * Math.Sin(endAngle);
+            sb.AppendLine($"G02 X{F(cx - ex)} Y{F(cy - ey)} I{F(-ex)} J{F(-ey)} F{(int)p.Vorschub}");
+            sb.AppendLine($"G02 X{F(cx + ex)} Y{F(cy + ey)} I{F(ex)} J{F(ey)} F{(int)p.Vorschub}");
 
-            // Für nächste Tiefenstufe zurück zum Eintauchpunkt (im geräumten Bereich)
+            // Für nächste Tiefenstufe zurück zum Eintauchpunkt (im geräumten Bereich):
+            // Spirale nach innen, CW weiter von endAngle bis zum nächsten Vielfachen von 2π (= Winkel 0)
             if (curZ > depth)
-                sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
+            {
+                if (maxRoughR > rEntry)
+                {
+                    double twoPi   = 2.0 * Math.PI;
+                    double target  = -twoPi * Math.Ceiling(-endAngle / twoPi + 1e-9);
+                    double sweep   = endAngle - target;              // > 0, CW-Winkelweg
+                    if (sweep < Math.PI) { target -= twoPi; sweep += twoPi; } // nicht zu steil
+                    int segs = Math.Max(8, (int)Math.Ceiling(sweep / (2.5 * Math.PI / 180.0)));
+                    for (int i = 1; i <= segs; i++)
+                    {
+                        double t     = (double)i / segs;
+                        // Smoothstep: Radiusänderung an beiden Enden 0 → tangential aus dem
+                        // Abschlusskreis heraus und tangential in den Helixkreis hinein
+                        double s     = t * t * (3.0 - 2.0 * t);
+                        double rr    = maxRoughR + (rEntry - maxRoughR) * s;
+                        double angle = endAngle - sweep * t;
+                        sb.AppendLine($"G01 X{F(cx + rr * Math.Cos(angle))} Y{F(cy + rr * Math.Sin(angle))} F{(int)p.Vorschub}");
+                    }
+                }
+                else
+                {
+                    sb.AppendLine($"G01 X{F(cx + rEntry)} Y{F(cy)} F{(int)p.Vorschub}");
+                }
+            }
         }
 
-        // Schlichten: voller Radius im Gegenlauf (G02 = CW = rechts herum)
-        sb.AppendLine(Sz());
-        sb.AppendLine($"G00 X{F(cx + Rm)} Y{F(cy)}");
-        sb.AppendLine($"G01 Z{F(depth)} F{(int)p.VorschubFz}");
-        sb.AppendLine($"G02 X{F(cx - Rm)} Y{F(cy)} I{F(-Rm)} J0 F{(int)p.Vorschub}");
-        sb.AppendLine($"G02 X{F(cx + Rm)} Y{F(cy)} I{F(Rm)} J0 F{(int)p.Vorschub}");
+        // Schlichten ohne Austauchen: auf Endtiefe per Spirale (Smoothstep, tangential an beiden Enden)
+        // über 180° CW von maxRoughR auf Rm, dann voller Kreis bei Rm im Gegenlauf (G02 = CW)
+        double finAngle = lastAngle;
+        if (Rm - maxRoughR > 1e-6)
+        {
+            const int segs = 72; // 2.5° pro Segment
+            for (int i = 1; i <= segs; i++)
+            {
+                double t     = (double)i / segs;
+                double s     = t * t * (3.0 - 2.0 * t);
+                double rr    = maxRoughR + (Rm - maxRoughR) * s;
+                double angle = lastAngle - Math.PI * t;
+                sb.AppendLine($"G01 X{F(cx + rr * Math.Cos(angle))} Y{F(cy + rr * Math.Sin(angle))} F{(int)p.Vorschub}");
+            }
+            finAngle = lastAngle - Math.PI;
+        }
+        double fx = Rm * Math.Cos(finAngle), fy = Rm * Math.Sin(finAngle);
+        sb.AppendLine($"G02 X{F(cx - fx)} Y{F(cy - fy)} I{F(-fx)} J{F(-fy)} F{(int)p.Vorschub}");
+        sb.AppendLine($"G02 X{F(cx + fx)} Y{F(cy + fy)} I{F(fx)} J{F(fy)} F{(int)p.Vorschub}");
 
         sb.AppendLine(Sz());
         return sb.ToString();
