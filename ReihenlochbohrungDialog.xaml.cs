@@ -6,11 +6,13 @@ namespace NCHops;
 public partial class ReihenlochbohrungDialog : Window
 {
     public ReihenlochbohrungParams? Result { get; private set; }
+    private readonly ReihenlochbohrungParams? _prefill;
 
     public ReihenlochbohrungDialog(double defaultZ, ReihenlochbohrungParams? prefill = null,
                                    IReadOnlyList<Werkzeug>? werkzeuge = null)
     {
         InitializeComponent();
+        _prefill = prefill;
         if (werkzeuge?.Count > 0)
         {
             CbWerkzeug.ItemsSource = werkzeuge;
@@ -49,7 +51,13 @@ public partial class ReihenlochbohrungDialog : Window
             Bohrtiefe:  double.Parse(TxtBohrtiefe.Text, inv),
             Zustellung: w?.ZZustellung ?? 10,
             VorschubFz: w?.VorschubFz ?? 500,
-            Drehzahl:   w?.Drehzahl ?? 20000
+            Drehzahl:   w?.Drehzahl ?? 20000,
+            // Bohrart aus dem bestehenden Eintrag übernehmen (wird im Eigenschaften-Panel gesetzt)
+            IstKreistasche: _prefill?.IstKreistasche ?? false,
+            TascheD:        _prefill?.TascheD ?? 0,
+            Vorschub:       w?.VorschubFxy ?? 3000,
+            Eintauchwinkel: w?.Eintauchwinkel ?? 3,
+            Faktor:         w != null ? w.RaeumzustellungXY / 100.0 : 0.5
         );
         DialogResult = true;
     }
@@ -61,4 +69,11 @@ public record ReihenlochbohrungParams(
     double StartX, double StartY,
     int CountX, int CountY,
     double SpacingX, double SpacingY,
-    double Diameter, double Bohrtiefe, double Zustellung, double VorschubFz, double Drehzahl);
+    double Diameter, double Bohrtiefe, double Zustellung, double VorschubFz, double Drehzahl,
+    // Bohrart Kreistasche: jedes Loch wird als Kreistasche mit TascheD gefräst (statt gebohrt)
+    bool IstKreistasche = false, double TascheD = 0,
+    double Vorschub = 3000, double Eintauchwinkel = 3, double Faktor = 0.5)
+{
+    /// <summary>Tatsächlicher Lochdurchmesser (Taschendurchmesser bzw. Bohrerdurchmesser).</summary>
+    public double LochD => IstKreistasche && TascheD > Diameter ? TascheD : Diameter;
+}

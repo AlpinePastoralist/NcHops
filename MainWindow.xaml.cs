@@ -50,7 +50,7 @@ public partial class MainWindow : Window
     private int _nullpunktPosition = 6; // 0-8: Oben-Links bis Unten-Rechts (Standard: Unten-Links)
 
     // ── Aktives Werkzeug ─────────────────────────────────────────
-    private enum CanvasTool { Select, Hand, Zoom, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, PfadSpline, Rechteck, Kreis, NEck }
+    private enum CanvasTool { Select, Hand, Zoom, VCarveTextSk, Move, Pfeil, Vermassen, PfadStart, PfadLinie, PfadBogen, PfadSpline, Rechteck, Kreis, NEck, Reihenloch }
     private CanvasTool _activeTool    = CanvasTool.Select;
     private bool       _isZoomDragging = false;
     private Point      _zoomDragStart;
@@ -122,8 +122,25 @@ public partial class MainWindow : Window
     private (double x, double y) _pfadSegDragP2;         // Abs-Position p2 bei Drag-Start
     private (double x, double y) _pfadSegDragMouse;      // Maus-Abs bei Drag-Start
 
+    // ── Reihenlochbohrung-Werkzeug (Anker + Pfeile X/Y) ──────────
+    private const double RlbStdAbstand = 32.0;   // Standard-Lochabstand (System 32)
+    private const double RlbStdAbstandTasche = 64.0; // Standard-Lochabstand bei Bohrart Kreistasche
+    private const double RlbStdTascheD = 35.0;   // Standard-Durchmesser Kreistasche (Topfband)
+    private const double RlbStdTiefe   = -13.0;  // Standard-Bohrtiefe
+    private int    _rlbIdx  = -1;                // History-Idx der bearbeiteten Lochreihe
+    private int    _rlbDrag = 0;                 // 0 = keiner, 1 = Anker, 2 = Pfeil X, 3 = Pfeil Y
+    private ReihenlochbohrungParams? _rlbPreview; // Vorschau während des Ziehens
+    private (double x, double y) _rlbDragMouse;  // Maus (Standard-mm) bei Drag-Start
+    private (double x, double y) _rlbDragRef;    // Anker bzw. Pfeilspitze (Standard-mm) bei Drag-Start
+    private double _rlbArrowTip;                 // aktuelle Pfeilspitze (X bzw. Y) während des Ziehens
+    private ReihenlochbohrungParams? _rlbDragOrig; // Lochreihe bei Drag-Start
+
     // ── Vermassen-Werkzeug ───────────────────────────────────────
-    private enum VermKind { Length, ParallelDist, Angle, EdgeDist, EdgeAngle, PointDist, LineToPoint, PointEdgeDist, Coincident, Perpendicular, Parallel, ParallelEdge, PerpendicularEdge, CoincidentCorner }
+    private enum VermKind { Length, ParallelDist, Angle, EdgeDist, EdgeAngle, PointDist, LineToPoint, PointEdgeDist, Coincident, Perpendicular, Parallel, ParallelEdge, PerpendicularEdge, CoincidentCorner,
+                            KreisDurchmesser, KreisRadius, KreisKantenDist }
+    // Kreis-Bemassungen: P2Idx = History-Index des Kreises (P1Idx = -1).
+    //   KreisDurchmesser/KreisRadius: Offset = Winkel (rad) der Masslinie ab Kreismitte
+    //   KreisKantenDist: Abstand Kreismitte → Werkstückkante (Edge), Offset wie PointEdgeDist
     private enum GeomConstraintMode { None, Coincident, Perpendicular, Parallel }
     private record VermEntry(
         VermKind Kind, int P1Idx, int P2Idx, double Offset, double Value,
@@ -157,6 +174,8 @@ public partial class MainWindow : Window
     private int                _geomFirstIdx2  = -1; // zweiter Punkt des ersten Segments
     private int                _selectedGeomIdx = -1; // gewähltes Geom-Constraint-Symbol (-1 = keines)
     private int _vermPtIdx      = -1;  // erster gewählter Punkt (PointDist / LineToPoint)
+    private int _vermKreisIdx   = -1;  // gewählter Kreis (History-Idx) für Kreis-Bemassungen
+    private int _vermHoverKreis = -1;  // gehoverter Kreis (History-Idx)
     private int _vermEditIdx  = -1;   // Index in _vermPlaced für State 3/4
     private double _vermDragOffset;   // Vorschau-Offset beim Ziehen (State 3)
     private bool _vermIsHolding = false;  // Maustaste nach 1. Klick gehalten (Drag-Positionierung)
@@ -1510,6 +1529,459 @@ public partial class MainWindow : Window
     private void OnKreisTool(object sender, RoutedEventArgs e)
         => SetActiveTool(_activeTool == CanvasTool.Kreis ? CanvasTool.Select : CanvasTool.Kreis);
 
+    // ── Reihenlochbohrung-Werkzeug ───────────────────────────────
+    // Klick auf freie Fläche erzeugt eine Standard-Bohrung. Der Anker (1. Loch unten links)
+    // verschiebt die ganze Reihe, die Pfeile rechts/oben fügen Bohrungen hinzu: es werden so
+    // viele Löcher erzeugt, wie im Lochabstand bis zur Pfeilspitze Platz haben.
+    // Koordinaten der Hilfsfunktionen: Standard-mm (Werkstück unten links = 0/0).
+
+    private void OnReihenlochTool(object sender, RoutedEventArgs e)
+        => SetActiveTool(_activeTool == CanvasTool.Reihenloch ? CanvasTool.Select : CanvasTool.Reihenloch);
+
+    private static string RlbDetails(ReihenlochbohrungParams p)
+        => $"{p.CountX}×{p.CountY}, Ø{p.LochD}{(p.LochD > p.Diameter ? " Tasche" : "")}, Z={p.Bohrtiefe}";
+
+    // Aktuell bearbeitete Lochreihe (Vorschau während des Ziehens)
+    private ReihenlochbohrungParams? RlbActive()
+    {
+        if (_rlbPreview != null) return _rlbPreview;
+        if (_rlbIdx < 0 || _rlbIdx >= _history.Count) return null;
+        return _history[_rlbIdx].Params as ReihenlochbohrungParams;
+    }
+
+    private (double x, double y) RlbStart(ReihenlochbohrungParams p)
+        => ConvertFromNullpunktCoordinates(p.StartX, p.StartY);
+
+    // Abstand Mittelpunkt letztes Loch → Pfeilspitze im Ruhezustand (immer < Lochabstand,
+    // damit beim Anfassen des Pfeils keine Bohrung dazukommt oder wegfällt)
+    private double RlbArrowLen(ReihenlochbohrungParams p, double spacing)
+        => Math.Min(spacing * 0.9, p.LochD / 2 + 28.0 / _zoom);
+
+    private (double x, double y) RlbArrowTipX(ReihenlochbohrungParams p)
+    {
+        var (sx, sy) = RlbStart(p);
+        return (sx + (p.CountX - 1) * p.SpacingX + RlbArrowLen(p, p.SpacingX), sy);
+    }
+
+    private (double x, double y) RlbArrowTipY(ReihenlochbohrungParams p)
+    {
+        var (sx, sy) = RlbStart(p);
+        return (sx, sy + (p.CountY - 1) * p.SpacingY + RlbArrowLen(p, p.SpacingY));
+    }
+
+    // Anzahl Löcher, die zwischen Start und Pfeilspitze Platz haben (Loch komplett im Werkstück)
+    private static int RlbCountTo(double start, double tip, double spacing, double radius, double work)
+    {
+        if (spacing <= 0) return 1;
+        int n    = (int)Math.Floor((tip - start) / spacing + 1e-9) + 1;
+        int nMax = (int)Math.Floor((work - radius - start) / spacing + 1e-9) + 1;
+        return Math.Max(1, Math.Min(n, nMax));
+    }
+
+    // 0 = nichts, 1 = Anker, 2 = Pfeil X, 3 = Pfeil Y, 4 = Abstand-Y-Anker (2. Loch in Y),
+    // 5 = End-Anker X (letztes Loch in X), 6 = End-Anker Y (letztes Loch in Y, ab 3 Löchern)
+    private int RlbHitHandle(double mmX, double mmY)
+    {
+        var p = RlbActive(); if (p == null) return 0;
+        double tol = 8.0 / _zoom;
+        bool Near((double x, double y) a) => Math.Abs(mmX - a.x) <= tol && Math.Abs(mmY - a.y) <= tol;
+        var (sx, sy) = RlbStart(p);
+        var tx = RlbArrowTipX(p);
+        var ty = RlbArrowTipY(p);
+        if (Near(tx)) return 2;
+        if (Near(ty)) return 3;
+        if (Near((sx, sy))) return 1;
+        if (RlbAnkerPos(p, 1) is { } a1 && Near(a1)) return 4;
+        if (RlbAnkerPos(p, 2) is { } aX && Near(aX)) return 5;
+        if (RlbAnkerPos(p, 3) is { } aY && Near(aY)) return 6;
+        // Pfeilschaft (Strecke letztes Loch → Spitze)
+        double lastX = sx + (p.CountX - 1) * p.SpacingX, lastY = sy + (p.CountY - 1) * p.SpacingY;
+        if (Math.Abs(mmY - sy) <= tol / 2 && mmX >= lastX + p.LochD / 2 && mmX <= tx.x) return 2;
+        if (Math.Abs(mmX - sx) <= tol / 2 && mmY >= lastY + p.LochD / 2 && mmY <= ty.y) return 3;
+        return 0;
+    }
+
+    // Treffer auf ein Loch irgendeiner Lochreihe → History-Idx (-1 = keiner)
+    private int RlbHitHole(double mmX, double mmY)
+    {
+        double tol = 4.0 / _zoom;
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            if (_history[i].Params is not ReihenlochbohrungParams p) continue;
+            var (sx, sy) = RlbStart(p);
+            double r = p.LochD / 2 + tol;
+            for (int iy = 0; iy < p.CountY; iy++)
+            for (int ix = 0; ix < p.CountX; ix++)
+            {
+                double dx = mmX - (sx + ix * p.SpacingX), dy = mmY - (sy + iy * p.SpacingY);
+                if (dx * dx + dy * dy <= r * r) return i;
+            }
+        }
+        return -1;
+    }
+
+    private void RlbMouseDown(double mmX, double mmY)
+    {
+        int handle = RlbHitHandle(mmX, mmY);
+        if (handle == 0)
+        {
+            int hole = RlbHitHole(mmX, mmY);
+            if (hole >= 0)
+            {
+                // Lochreihe anwählen und direkt am Anker verschieben
+                _rlbIdx = hole;
+                HistoryList.SelectedItem = _history[hole];
+                handle = 1;
+            }
+        }
+        if (handle == 0)
+        {
+            AddStandardReihenloch(SnapX(mmX), SnapY(mmY));
+            return;
+        }
+
+        var p = RlbActive()!;
+        _rlbDrag      = handle;
+        _rlbPreview   = p;
+        _rlbDragOrig  = p;
+        _rlbDragMouse = (mmX, mmY);
+        _rlbDragRef   = handle switch
+        {
+            2 => RlbArrowTipX(p),
+            3 => RlbArrowTipY(p),
+            4 => RlbAnkerPos(p, 1) ?? RlbStart(p),
+            5 => RlbAnkerPos(p, 2) ?? RlbStart(p),
+            6 => RlbAnkerPos(p, 3) ?? RlbStart(p),
+            _ => RlbStart(p)
+        };
+        _rlbArrowTip = handle == 3 ? _rlbDragRef.y : _rlbDragRef.x;
+        CanvasGrid.CaptureMouse();
+        CanvasGrid.Cursor = handle switch { 2 or 5 => Cursors.SizeWE, 3 or 4 or 6 => Cursors.SizeNS, _ => Cursors.SizeAll };
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void RlbMouseMove(double mmX, double mmY)
+    {
+        if (_rlbDrag == 0 || _rlbPreview == null)
+        {
+            CanvasGrid.Cursor = RlbHitHandle(mmX, mmY) switch
+            {
+                1 => Cursors.SizeAll, 2 or 5 => Cursors.SizeWE, 3 or 4 or 6 => Cursors.SizeNS,
+                _ => RlbHitHole(mmX, mmY) >= 0 ? Cursors.SizeAll : Cursors.Cross
+            };
+            return;
+        }
+
+        var p = _rlbPreview;
+        double r = p.LochD / 2;
+        var (sx, sy) = RlbStart(p);
+        double dx = mmX - _rlbDragMouse.x, dy = mmY - _rlbDragMouse.y;
+        switch (_rlbDrag)
+        {
+            case 1:
+            {
+                var (nx, ny) = ConvertToNullpunktCoordinates(SnapX(_rlbDragRef.x + dx), SnapY(_rlbDragRef.y + dy));
+                _rlbPreview = p with { StartX = Math.Round(nx, 3), StartY = Math.Round(ny, 3) };
+                break;
+            }
+            case 2:
+                _rlbArrowTip = Math.Max(sx, Math.Min(WorkX, _rlbDragRef.x + dx));
+                _rlbPreview  = p with { CountX = RlbCountTo(sx, _rlbArrowTip, p.SpacingX, r, WorkX) };
+                break;
+            case 3:
+                _rlbArrowTip = Math.Max(sy, Math.Min(WorkY, _rlbDragRef.y + dy));
+                _rlbPreview  = p with { CountY = RlbCountTo(sy, _rlbArrowTip, p.SpacingY, r, WorkY) };
+                break;
+            case 4:
+            {
+                // Lochabstand Y = Abstand 1. → 2. Loch; Anzahl wie bei Drag-Start, soweit sie ins Werkstück passt
+                var orig = _rlbDragOrig ?? p;
+                double y2 = SnapY(_rlbDragRef.y + dy);
+                double spY = Math.Max(p.LochD + 1, Math.Round(y2 - sy, 1));
+                _rlbPreview = p with
+                {
+                    SpacingY = spY,
+                    CountY   = RlbCountTo(sy, sy + (orig.CountY - 1) * spY, spY, r, WorkY)
+                };
+                break;
+            }
+            case 5:
+            {
+                // Letztes Loch in X verschieben → Anzahl bleibt, Abstand gleichmässig verteilt
+                int n = p.CountX - 1; if (n < 1) break;
+                double xl = Math.Min(WorkX - r, SnapX(_rlbDragRef.x + dx));
+                double spX = Math.Max(p.LochD + 1, Math.Round((xl - sx) / n, 2));
+                _rlbPreview = p with { SpacingX = spX };
+                break;
+            }
+            case 6:
+            {
+                // Letztes Loch in Y verschieben → Anzahl bleibt, Abstand gleichmässig verteilt
+                int n = p.CountY - 1; if (n < 1) break;
+                double yl = Math.Min(WorkY - r, SnapY(_rlbDragRef.y + dy));
+                double spY = Math.Max(p.LochD + 1, Math.Round((yl - sy) / n, 2));
+                _rlbPreview = p with { SpacingY = spY };
+                break;
+            }
+        }
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void CommitRlbDrag()
+    {
+        var final = _rlbPreview;
+        _rlbDrag    = 0;
+        _rlbPreview = null;
+        CanvasGrid.Cursor = Cursors.Cross;
+        if (final != null && _rlbIdx >= 0 && _rlbIdx < _history.Count
+            && _history[_rlbIdx].Params is ReihenlochbohrungParams old && old != final)
+        {
+            int idx = _rlbIdx;
+            _suppressNextAutoFit = true;
+            _history[idx] = new HistoryEntry(_history[idx].Label, RlbDetails(final), final);
+            HistoryList.SelectedItem = _history[idx];
+        }
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void AddStandardReihenloch(double xMm, double yMm)
+    {
+        if (!SicherstellenAktivesWerkzeug()) return;
+        var wz = _aktivesWerkzeug;
+        var (nx, ny) = ConvertToNullpunktCoordinates(xMm, yMm);
+        var p = new ReihenlochbohrungParams(
+            StartX:     Math.Round(nx, 3),
+            StartY:     Math.Round(ny, 3),
+            CountX:     1,
+            CountY:     1,
+            SpacingX:   RlbStdAbstand,
+            SpacingY:   RlbStdAbstand,
+            Diameter:   wz?.Durchmesser ?? 5,
+            Bohrtiefe:  -Math.Min(Math.Abs(RlbStdTiefe), WorkZ),
+            Zustellung: wz?.ZZustellung ?? 10,
+            VorschubFz: wz?.VorschubFz  ?? 500,
+            Drehzahl:   wz?.Drehzahl    ?? 20000,
+            Vorschub:       wz?.VorschubFxy    ?? 3000,
+            Eintauchwinkel: wz?.Eintauchwinkel ?? 3,
+            Faktor:         wz != null ? wz.RaeumzustellungXY / 100.0 : 0.5);
+        _suppressNextAutoFit = true;
+        _history.Add(new HistoryEntry("Reihenlochbohrung", RlbDetails(p), p));
+        _rlbIdx = _history.Count - 1;
+        HistoryList.SelectedItem    = _history[^1];
+        TabEigenschaften.IsSelected = true;
+        DrawSkia?.InvalidateVisual();
+    }
+
+    // Eigenschaften-Panel: Lochabstand X/Y und Bohrtiefe übernehmen
+    private void ApplyReihenlochEig()
+    {
+        if (_eigSuppressUpdate) return;
+        int idx = _history.IndexOf(HistoryList.SelectedItem as HistoryEntry);
+        if (idx < 0 || _history[idx].Params is not ReihenlochbohrungParams p) return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sty = System.Globalization.NumberStyles.Float;
+        string Norm(string s) => s.Replace(',', '.');
+        if (!double.TryParse(Norm(RlbEigAbstandX.Text), sty, inv, out var spX) || spX <= 0) return;
+        if (!double.TryParse(Norm(RlbEigAbstandY.Text), sty, inv, out var spY) || spY <= 0) return;
+        if (!double.TryParse(Norm(RlbEigTiefe.Text),    sty, inv, out var tiefe))          return;
+        bool istTasche = RlbEigKreistasche.IsChecked == true;
+        if (!double.TryParse(Norm(RlbEigTascheD.Text), sty, inv, out var tascheD) || tascheD <= 0)
+            tascheD = p.TascheD;
+
+        // Bohrart umgeschaltet: Standardwerte setzen (Abstände nur, wenn sie noch dem anderen Standard entsprechen)
+        if (istTasche != p.IstKreistasche)
+        {
+            double von  = istTasche ? RlbStdAbstand : RlbStdAbstandTasche;
+            double nach = istTasche ? RlbStdAbstandTasche : RlbStdAbstand;
+            if (spX == von) spX = nach;
+            if (spY == von) spY = nach;
+            if (istTasche && p.TascheD <= 0) tascheD = RlbStdTascheD;
+        }
+
+        // Anzahl beibehalten, aber nur so viele Löcher, wie mit dem neuen Abstand ins Werkstück passen
+        var (sx, sy) = RlbStart(p);
+        var np = p with
+        {
+            SpacingX       = spX,
+            SpacingY       = spY,
+            Bohrtiefe      = tiefe,
+            IstKreistasche = istTasche,
+            TascheD        = Math.Round(tascheD, 3),
+        };
+        double r = np.LochD / 2;
+        np = np with
+        {
+            CountX = RlbCountTo(sx, sx + (p.CountX - 1) * spX, spX, r, WorkX),
+            CountY = RlbCountTo(sy, sy + (p.CountY - 1) * spY, spY, r, WorkY),
+        };
+        if (np == p) return;
+
+        _eigSuppressUpdate = true;
+        try { _history[idx] = new HistoryEntry(_history[idx].Label, RlbDetails(np), np); }
+        finally { _eigSuppressUpdate = false; }
+        _suppressNextAutoFit = true;
+        HistoryList.SelectedItem = _history[idx];
+        DrawSkia?.InvalidateVisual();
+    }
+
+    // Lochreihe auf dem Werkstück zentrieren (horizontal bzw. vertikal, andere Achse bleibt)
+    private void OnRlbEinmittenX(object sender, RoutedEventArgs e) => RlbEinmitten(inX: true);
+    private void OnRlbEinmittenY(object sender, RoutedEventArgs e) => RlbEinmitten(inX: false);
+
+    private void RlbEinmitten(bool inX)
+    {
+        int idx = _history.IndexOf(HistoryList.SelectedItem as HistoryEntry);
+        if (idx < 0 || _history[idx].Params is not ReihenlochbohrungParams p) return;
+        var (sx, sy) = RlbStart(p);
+        if (inX) sx = (WorkX - (p.CountX - 1) * p.SpacingX) / 2;
+        else     sy = (WorkY - (p.CountY - 1) * p.SpacingY) / 2;
+        var (nx, ny) = ConvertToNullpunktCoordinates(sx, sy);
+        var np = p with { StartX = Math.Round(nx, 3), StartY = Math.Round(ny, 3) };
+        if (np == p) return;
+        _suppressNextAutoFit = true;
+        _history[idx] = new HistoryEntry(_history[idx].Label, RlbDetails(np), np);
+        HistoryList.SelectedItem = _history[idx];
+        DrawSkia?.InvalidateVisual();
+    }
+
+    private void OnRlbEigLostFocus(object sender, RoutedEventArgs e) => ApplyReihenlochEig();
+    private void OnRlbEigChanged(object sender, RoutedEventArgs e)   => ApplyReihenlochEig();
+    private void OnRlbEigKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyReihenlochEig(); }
+
+    private void DrawReihenlochOverlay(SKCanvas canvas)
+    {
+        if (WorkX <= 0 || WorkY <= 0) return;
+        (float x, float y) Px(double x, double y) => ((float)x, (float)(WorkY - y));
+
+        float lt = (float)(1.0 / _zoom);
+        using var holePaint = new SKPaint { Color = new SKColor(200, 70, 0, 220),
+            Style = SKPaintStyle.Stroke, StrokeWidth = lt * 1.5f, IsAntialias = true };
+        using var holeFill  = new SKPaint { Color = new SKColor(255, 140, 0, 70),
+            Style = SKPaintStyle.Fill, IsAntialias = true };
+        using var otherPaint = new SKPaint { Color = new SKColor(200, 70, 0, 110),
+            Style = SKPaintStyle.Stroke, StrokeWidth = lt, IsAntialias = true };
+        using var handlePaint = new SKPaint { Color = new SKColor(20, 100, 200),
+            Style = SKPaintStyle.Fill, IsAntialias = true };
+        using var handleLine  = new SKPaint { Color = new SKColor(20, 100, 200),
+            Style = SKPaintStyle.Stroke, StrokeWidth = lt * 2, IsAntialias = true };
+        using var ankerRand   = new SKPaint { Color = SKColors.White,
+            Style = SKPaintStyle.Stroke, StrokeWidth = lt, IsAntialias = true };
+        using var textPaint = new SKPaint { Color = new SKColor(20, 100, 200), IsAntialias = true,
+            TextSize = (float)(11.0 / _zoom), Typeface = SKTypeface.FromFamilyName("Arial") };
+        using var bgPaint   = new SKPaint { Color = new SKColor(255, 255, 255, 200), Style = SKPaintStyle.Fill };
+
+        // Übrige Lochreihen: nur Kontur (anklickbar zum Anwählen)
+        for (int i = 0; i < _history.Count; i++)
+        {
+            if (i == _rlbIdx || _history[i].Params is not ReihenlochbohrungParams op) continue;
+            var (ox, oy) = RlbStart(op);
+            for (int iy = 0; iy < op.CountY; iy++)
+            for (int ix = 0; ix < op.CountX; ix++)
+            {
+                var (cx, cy) = Px(ox + ix * op.SpacingX, oy + iy * op.SpacingY);
+                canvas.DrawCircle(cx, cy, (float)(op.LochD / 2), otherPaint);
+            }
+        }
+
+        var p = RlbActive(); if (p == null) return;
+        var (sx, sy) = RlbStart(p);
+        float rad = (float)(p.LochD / 2);
+        for (int iy = 0; iy < p.CountY; iy++)
+        for (int ix = 0; ix < p.CountX; ix++)
+        {
+            var (cx, cy) = Px(sx + ix * p.SpacingX, sy + iy * p.SpacingY);
+            canvas.DrawCircle(cx, cy, rad, holeFill);
+            canvas.DrawCircle(cx, cy, rad, holePaint);
+        }
+
+        void DrawLabel(float x, float y, string text)
+        {
+            float tw = textPaint.MeasureText(text);
+            float fh = textPaint.TextSize;
+            canvas.DrawRect(x - 3 * lt, y - fh - 2 * lt, tw + 6 * lt, fh + 6 * lt, bgPaint);
+            canvas.DrawText(text, x, y, textPaint);
+        }
+
+        // Pfeil von a nach b, Spitze bei b
+        void DrawArrow((double x, double y) a, (double x, double y) b)
+        {
+            var (ax, ay) = Px(a.x, a.y);
+            var (bx, by) = Px(b.x, b.y);
+            float dx = bx - ax, dy = by - ay;
+            float len = (float)Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1e-4f) return;
+            float ux = dx / len, uy = dy / len;
+            float hl = (float)(9.0 / _zoom), hw = (float)(5.0 / _zoom);
+            canvas.DrawLine(ax, ay, bx - ux * hl, by - uy * hl, handleLine);
+            using var head = new SKPath();
+            head.MoveTo(bx, by);
+            head.LineTo(bx - ux * hl - uy * hw, by - uy * hl + ux * hw);
+            head.LineTo(bx - ux * hl + uy * hw, by - uy * hl - ux * hw);
+            head.Close();
+            canvas.DrawPath(head, handlePaint);
+        }
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double lastX = sx + (p.CountX - 1) * p.SpacingX;
+        double lastY = sy + (p.CountY - 1) * p.SpacingY;
+        double tipX  = _rlbDrag == 2 ? _rlbArrowTip : RlbArrowTipX(p).x;
+        double tipY  = _rlbDrag == 3 ? _rlbArrowTip : RlbArrowTipY(p).y;
+        DrawArrow((lastX + p.LochD / 2, sy), (Math.Max(tipX, lastX + p.LochD / 2), sy));
+        DrawArrow((sx, lastY + p.LochD / 2), (sx, Math.Max(tipY, lastY + p.LochD / 2)));
+
+        var (lx, ly) = Px(tipX, sy);
+        DrawLabel(lx + (float)(6.0 / _zoom), ly + (float)(4.0 / _zoom),
+            $"{p.CountX} × {p.SpacingX.ToString(inv)}");
+        var (vx, vy) = Px(sx, tipY);
+        DrawLabel(vx + (float)(6.0 / _zoom), vy,
+            $"{p.CountY} × {p.SpacingY.ToString(inv)}");
+
+        // Anker (1. Loch unten links)
+        var (hx, hy) = Px(sx, sy);
+        float hs = (float)(5.0 / _zoom);
+        canvas.DrawRect(hx - hs, hy - hs, 2 * hs, 2 * hs, handlePaint);
+        canvas.DrawRect(hx - hs, hy - hs, 2 * hs, 2 * hs, ankerRand);
+        if (_rlbDrag == 1)
+            DrawLabel(hx + (float)(8.0 / _zoom), hy + (float)(16.0 / _zoom),
+                $"X={Math.Round(p.StartX, 2).ToString(inv)}  Y={Math.Round(p.StartY, 2).ToString(inv)}");
+
+        // Abstand-Y-Anker (2. Loch in Y-Richtung): Raute; beim Ziehen immer sichtbar
+        if (p.CountY >= 2 || _rlbDrag == 4)
+        {
+            var (ax, ay) = Px(sx, sy + p.SpacingY);
+            float ds = (float)(6.0 / _zoom);
+            using var raute = new SKPath();
+            raute.MoveTo(ax, ay - ds); raute.LineTo(ax + ds, ay);
+            raute.LineTo(ax, ay + ds); raute.LineTo(ax - ds, ay);
+            raute.Close();
+            using var abstandPaint = new SKPaint { Color = new SKColor(30, 150, 60),
+                Style = SKPaintStyle.Fill, IsAntialias = true };
+            canvas.DrawPath(raute, abstandPaint);
+            canvas.DrawPath(raute, ankerRand);
+            if (_rlbDrag == 4)
+                DrawLabel(ax - (float)(90.0 / _zoom), ay + (float)(4.0 / _zoom),
+                    $"Abstand Y={p.SpacingY.ToString(inv)}");
+        }
+
+        // End-Anker (letztes Loch in X bzw. Y): violetter Kreis mit Punkt
+        using var endPaint = new SKPaint { Color = new SKColor(140, 60, 190),
+            Style = SKPaintStyle.Fill, IsAntialias = true };
+        float er = (float)(5.5 / _zoom);
+        foreach (var (anker, drag) in new[] { (2, 5), (3, 6) })
+        {
+            if (RlbAnkerPos(p, anker) is not { } ep) continue;
+            var (ex, ey) = Px(ep.x, ep.y);
+            canvas.DrawCircle(ex, ey, er, endPaint);
+            canvas.DrawCircle(ex, ey, er, ankerRand);
+            canvas.DrawCircle(ex, ey, er * 0.3f, ankerRand);
+            if (_rlbDrag == drag)
+                DrawLabel(ex + (float)(8.0 / _zoom), ey - (float)(10.0 / _zoom),
+                    drag == 5 ? $"Abstand X={p.SpacingX.ToString(inv)}"
+                              : $"Abstand Y={p.SpacingY.ToString(inv)}");
+        }
+    }
+
     private void ApplyKreisEig()
     {
         if (_eigSuppressUpdate) return;
@@ -2397,6 +2869,224 @@ public partial class MainWindow : Window
         _ => 0
     };
 
+    // ── Kreis-Bemassung (Durchmesser / Radius / Abstand Mitte → Werkstückkante) ──
+
+    private static bool IsKreisVermKind(VermKind k)
+        => k is VermKind.KreisDurchmesser or VermKind.KreisRadius or VermKind.KreisKantenDist;
+
+    // Reihenlochbohrung-Anker werden in der Kreis-Bemassung wie Kreise behandelt.
+    // Kodierung: History-Idx + Anker * RlbAnkerOffset
+    //   Anker 0 = 1. Loch unten links, 1 = 2. Loch in Y (Lochabstand Y),
+    //   Anker 2 = letztes Loch in X, 3 = letztes Loch in Y
+    private const int RlbAnkerOffset  = 1_000_000;
+
+    private static (int histIdx, int anker) DecodeKreisVermIdx(int idx)
+        => idx < 0 ? (idx, 0) : (idx % RlbAnkerOffset, idx / RlbAnkerOffset);
+
+    private bool IsRlbAnkerVermIdx(int idx)
+    {
+        var (h, _) = DecodeKreisVermIdx(idx);
+        return h >= 0 && h < _history.Count && _history[h].Params is ReihenlochbohrungParams;
+    }
+
+    // Mittelpunkt eines Reihenloch-Ankers (Standard-mm), null wenn nicht vorhanden
+    private (double x, double y)? RlbAnkerPos(ReihenlochbohrungParams p, int anker)
+    {
+        var (sx, sy) = RlbStart(p);
+        return anker switch
+        {
+            0                     => (sx, sy),
+            1 when p.CountY >= 2  => (sx, sy + p.SpacingY),
+            2 when p.CountX >= 2  => (sx + (p.CountX - 1) * p.SpacingX, sy),
+            3 when p.CountY >= 3  => (sx, sy + (p.CountY - 1) * p.SpacingY),  // bei 2 Löchern = Anker 1
+            _                     => null
+        };
+    }
+
+    // Mittelpunkt + Radius eines Kreises (History-Idx) in mm, null wenn kein Kreis
+    private (double cx, double cy, double r)? GetKreisGeom(int histIdx)
+    {
+        var (h, anker) = DecodeKreisVermIdx(histIdx);
+        if (h < 0 || h >= _history.Count) return null;
+        if (_history[h].Params is ReihenlochbohrungParams rlb)
+        {
+            var pos = RlbAnkerPos(rlb, anker);
+            return pos == null ? null : (pos.Value.x, pos.Value.y, rlb.LochD / 2);
+        }
+        if (anker != 0 || _history[h].Params is not KreisParams kr) return null;
+        var (cx, cy) = GCodeGenerator.ConvertBezugspunkt(kr.Bezugspunkt, kr.XRel, kr.YRel, WorkX, WorkY);
+        return (cx, cy, kr.Radius);
+    }
+
+    // Treffertest Kreis im Vermassen-Werkzeug: Kontur oder Mittelpunkt (-1 = keiner)
+    private int HitTestKreisVerm(double mmX, double mmY)
+    {
+        double tol = 6.0 / _zoom;
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            foreach (int k in new[] { i + 3 * RlbAnkerOffset, i + 2 * RlbAnkerOffset, i + RlbAnkerOffset, i })
+            {
+                var g = GetKreisGeom(k); if (g == null) continue;
+                double dx = mmX - g.Value.cx, dy = mmY - g.Value.cy;
+                double d = Math.Sqrt(dx*dx + dy*dy);
+                if (Math.Abs(d - g.Value.r) <= tol || d <= tol) return k;
+            }
+        }
+        return -1;
+    }
+
+    // Kantenabstand eines Reihenloch-Ankers anwenden:
+    //   Anker 0 → Lochreihe verschieben
+    //   Anker 1 / 3 (Y-Richtung): oben/unten → Lochabstand Y, links/rechts → Reihe verschieben
+    //   Anker 2     (X-Richtung): links/rechts → Lochabstand X, oben/unten → Reihe verschieben
+    private void ApplyRlbAnkerVerm(VermEntry en, double newVal)
+    {
+        var (h, anker) = DecodeKreisVermIdx(en.P2Idx);
+        if (en.Kind != VermKind.KreisKantenDist || h < 0 || h >= _history.Count
+            || _history[h].Params is not ReihenlochbohrungParams p) return;
+        var pos = RlbAnkerPos(p, anker); if (pos == null) return;
+        var (sx, sy) = RlbStart(p);
+        var (ax, ay) = pos.Value;
+        switch (en.Edge)
+        {
+            case 1: ax = newVal;         break;
+            case 2: ax = WorkX - newVal; break;
+            case 3: ay = newVal;         break;
+            case 4: ay = WorkY - newVal; break;
+            default: return;
+        }
+        bool vertikal = en.Edge is 3 or 4;
+        ReihenlochbohrungParams np;
+        if (anker is 1 or 3 && vertikal)
+        {
+            int n = anker == 1 ? 1 : p.CountY - 1;
+            double spY = Math.Round((ay - sy) / n, 3);
+            if (spY <= p.LochD) return;
+            np = p with { SpacingY = spY };
+        }
+        else if (anker == 2 && !vertikal)
+        {
+            double spX = Math.Round((ax - sx) / (p.CountX - 1), 3);
+            if (spX <= p.LochD) return;
+            np = p with { SpacingX = spX };
+        }
+        else
+        {
+            // Reihe verschieben: Startpunkt um dieselbe Differenz wie der Anker
+            var (nx, ny) = ConvertToNullpunktCoordinates(sx + (ax - pos.Value.x), sy + (ay - pos.Value.y));
+            np = p with { StartX = Math.Round(nx, 3), StartY = Math.Round(ny, 3) };
+        }
+        if (np == p) return;
+        var old = _history[h];
+        bool wasSelected = HistoryList.SelectedItem == old;
+        bool wasSuppressed = _suppressHistoryRegen;
+        _suppressHistoryRegen = true;
+        try { _history[h] = new HistoryEntry(old.Label, RlbDetails(np), np, old.Level); }
+        finally { _suppressHistoryRegen = wasSuppressed; }
+        if (wasSelected) HistoryList.SelectedItem = _history[h];
+    }
+
+    // Endpunkte der Durchmesser-/Radius-Masslinie unter dem Winkel angle (rad)
+    private ((double x, double y) a, (double x, double y) b)? KreisDimLine(int histIdx, bool isRadius, double angle)
+    {
+        var g = GetKreisGeom(histIdx); if (g == null) return null;
+        var (cx, cy, r) = g.Value;
+        double ux = Math.Cos(angle), uy = Math.Sin(angle);
+        var b = (cx + ux*r, cy + uy*r);
+        var a = isRadius ? (cx, cy) : (cx - ux*r, cy - uy*r);
+        return (a, b);
+    }
+
+    // Label-Position Durchmesser/Radius: auf der Masslinie, halbwegs zwischen Mitte und Kontur
+    private (double x, double y)? KreisDimLabelPos(int histIdx, double angle)
+    {
+        var g = GetKreisGeom(histIdx); if (g == null) return null;
+        return (g.Value.cx + Math.Cos(angle) * g.Value.r / 2, g.Value.cy + Math.Sin(angle) * g.Value.r / 2);
+    }
+
+    // Aktueller Ist-Wert einer Kreis-Bemassung
+    private double? KreisVermActual(VermEntry en)
+    {
+        var g = GetKreisGeom(en.P2Idx); if (g == null) return null;
+        return en.Kind switch
+        {
+            VermKind.KreisDurchmesser => 2 * g.Value.r,
+            VermKind.KreisRadius      => g.Value.r,
+            VermKind.KreisKantenDist  => EdgeDistValue(g.Value.cx, g.Value.cy, en.Edge),
+            _                         => null
+        };
+    }
+
+    // Kreis-Bemassung auf die KreisParams anwenden (Radius bzw. Position ändern)
+    private void ApplyKreisVerm(VermEntry en, double newVal)
+    {
+        if (IsRlbAnkerVermIdx(en.P2Idx)) { ApplyRlbAnkerVerm(en, newVal); return; }
+        if (en.P2Idx < 0 || en.P2Idx >= _history.Count || _history[en.P2Idx].Params is not KreisParams kr) return;
+        KreisParams np;
+        switch (en.Kind)
+        {
+            case VermKind.KreisDurchmesser: np = kr with { Radius = Math.Round(newVal / 2, 4) }; break;
+            case VermKind.KreisRadius:      np = kr with { Radius = Math.Round(newVal, 4) };     break;
+            case VermKind.KreisKantenDist:
+            {
+                var (cx, cy) = GCodeGenerator.ConvertBezugspunkt(kr.Bezugspunkt, kr.XRel, kr.YRel, WorkX, WorkY);
+                switch (en.Edge)
+                {
+                    case 1: cx = newVal;         break;
+                    case 2: cx = WorkX - newVal; break;
+                    case 3: cy = newVal;         break;
+                    case 4: cy = WorkY - newVal; break;
+                    default: return;
+                }
+                var (xRel, yRel) = AbsToRel(kr.Bezugspunkt, cx, cy, WorkX, WorkY);
+                np = kr with { XRel = Math.Round(xRel, 3), YRel = Math.Round(yRel, 3) };
+                break;
+            }
+            default: return;
+        }
+        if (np == kr) return;
+        var old = _history[en.P2Idx];
+        bool wasSelected = HistoryList.SelectedItem == old;
+        bool wasSuppressed = _suppressHistoryRegen;
+        _suppressHistoryRegen = true;
+        try { _history[en.P2Idx] = new HistoryEntry(old.Label,
+            $"M={np.XRel}/{np.YRel} R={np.Radius} Z={np.ZTiefe}", np, old.Level); }
+        finally { _suppressHistoryRegen = wasSuppressed; }
+        if (wasSelected) HistoryList.SelectedItem = _history[en.P2Idx];
+    }
+
+    // Kreis gewählt (State 1), Klick ins Freie → Durchmesser (Maus ausserhalb) bzw. Radius (innerhalb)
+    private void PlaceKreisDimAt(double mmX, double mmY)
+    {
+        var g = GetKreisGeom(_vermKreisIdx);
+        // Reihenloch-Anker: nur Kantenabstand möglich → Klick ins Freie bricht ab
+        if (g == null || IsRlbAnkerVermIdx(_vermKreisIdx)) { _vermState = 0; _vermKreisIdx = -1; return; }
+        var (cx, cy, r) = g.Value;
+        bool isRadius = Math.Sqrt((mmX - cx)*(mmX - cx) + (mmY - cy)*(mmY - cy)) < r;
+        _vermActiveKind = isRadius ? VermKind.KreisRadius : VermKind.KreisDurchmesser;
+        _vermP1Idx      = -1;
+        _vermP2Idx      = _vermKreisIdx;
+        _vermActiveEdge = 0;
+        _vermOffset     = Math.Atan2(mmY - cy, mmX - cx);
+        _vermState      = 2;
+        ShowVermTextBox(Math.Round(isRadius ? r : 2 * r, 3), "F3");
+    }
+
+    // Kreis + Kante gewählt → Kantenabstand-Vorschau (State 5)
+    private void StartKreisKantenDist(int kreisIdx, int edge)
+    {
+        var g = GetKreisGeom(kreisIdx); if (g == null) return;
+        _vermKreisIdx   = kreisIdx;
+        _vermActiveEdge = edge;
+        _vermP1Idx      = -1;
+        _vermP2Idx      = kreisIdx;
+        _vermP2Abs      = (g.Value.cx, g.Value.cy);
+        _vermActiveKind = VermKind.KreisKantenDist;
+        _vermOffset     = 0; _vermPtIdx = -1;
+        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1; _vermHoverKreis = -1;
+        _vermState      = 5;
+    }
+
     // Hit-Test: Label einer platzierten Masslinie (Screenkoordinaten in logischen Pixeln)
     private int HitTestVermLabel(double screenX, double screenY)
     {
@@ -2415,6 +3105,16 @@ public partial class MainWindow : Window
     // Label-Position einer VermEntry in mm-Koordinaten
     private (double x, double y)? VermLabelPosMm(VermEntry en)
     {
+        if (en.Kind is VermKind.KreisDurchmesser or VermKind.KreisRadius)
+            return KreisDimLabelPos(en.P2Idx, en.Offset);
+        if (en.Kind == VermKind.KreisKantenDist)
+        {
+            var g = GetKreisGeom(en.P2Idx);
+            if (g == null || en.Edge <= 0) return null;
+            if (en.Edge == 1 || en.Edge == 2)
+                return ((g.Value.cx + (en.Edge == 1 ? 0 : WorkX)) / 2, g.Value.cy + en.Offset);
+            return (g.Value.cx + en.Offset, (g.Value.cy + (en.Edge == 3 ? 0 : WorkY)) / 2);
+        }
         var p1 = GetAbsPosForVerm(en.P1Idx);
         if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) return null;
         var p2 = GetAbsPosForVerm(en.P2Idx); if (p2 == null) return null;
@@ -2504,10 +3204,20 @@ public partial class MainWindow : Window
         for (int i = 0; i < _vermPlaced.Count; i++)
         {
             var en = _vermPlaced[i];
+            if (en.Kind is VermKind.KreisDurchmesser or VermKind.KreisRadius)
+            {
+                var dl = KreisDimLine(en.P2Idx, en.Kind == VermKind.KreisRadius, en.Offset);
+                if (dl != null && DistPointToSegment(mmX, mmY, dl.Value.a.x, dl.Value.a.y,
+                                                     dl.Value.b.x, dl.Value.b.y) <= tol) return i;
+                continue;
+            }
             var p1 = GetPfadAbsAt(en.P1Idx);
-            if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) continue;
-            var p2 = GetPfadAbsAt(en.P2Idx); if (p2 == null) continue;
-            if (en.Kind == VermKind.EdgeDist || en.Kind == VermKind.PointEdgeDist)
+            if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist
+                && en.Kind != VermKind.KreisKantenDist) continue;
+            (double x, double y)? p2 = GetPfadAbsAt(en.P2Idx);
+            if (en.Kind == VermKind.KreisKantenDist && GetKreisGeom(en.P2Idx) is { } kg) p2 = (kg.cx, kg.cy);
+            if (p2 == null) continue;
+            if (en.Kind == VermKind.EdgeDist || en.Kind == VermKind.PointEdgeDist || en.Kind == VermKind.KreisKantenDist)
             {
                 if (en.Edge <= 0) continue;
                 bool isHoriz = (en.Edge == 1 || en.Edge == 2);
@@ -2614,6 +3324,8 @@ public partial class MainWindow : Window
             // 70° angezeigt).
             txt = (GetCurrentActualAngle(en) ?? en.Value).ToString("F2", inv);
         }
+        else if (IsKreisVermKind(en.Kind))
+            txt = Math.Round(KreisVermActual(en) ?? en.Value, 3).ToString("F3", inv);
         else
             txt = en.Value.ToString("F3", inv);
 
@@ -2848,6 +3560,17 @@ public partial class MainWindow : Window
                 if (p1e == null || p2e == null) return en.Offset;
                 return AngleTParam(mmX, mmY, p1e.Value, p2e.Value);
             }
+            case VermKind.KreisDurchmesser:
+            case VermKind.KreisRadius:
+            {
+                var g = GetKreisGeom(en.P2Idx); if (g == null) return en.Offset;
+                return Math.Atan2(mmY - g.Value.cy, mmX - g.Value.cx);
+            }
+            case VermKind.KreisKantenDist:
+            {
+                var g = GetKreisGeom(en.P2Idx); if (g == null) return en.Offset;
+                return (en.Edge == 1 || en.Edge == 2) ? mmY - g.Value.cy : mmX - g.Value.cx;
+            }
             default: return en.Offset;
         }
     }
@@ -3046,7 +3769,8 @@ public partial class MainWindow : Window
             ShowVermTextBox(Math.Round(dist, 3), "F3");
             return;
         }
-        if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist)
+        if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist
+             || _vermActiveKind == VermKind.KreisKantenDist)
             && _vermActiveEdge > 0)
         {
             // Offset = Versatz der Masslinie senkrecht zur Kante (Y für links/rechts, X für oben/unten)
@@ -3124,7 +3848,14 @@ public partial class MainWindow : Window
             double my = inter.Value.y + r * Math.Sin(amid);
             return new Point(mx * _zoom + _panX, (WorkY - my) * _zoom + _panY);
         }
-        else if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist)
+        else if (_vermActiveKind is VermKind.KreisDurchmesser or VermKind.KreisRadius)
+        {
+            var lp = KreisDimLabelPos(_vermP2Idx, _vermOffset);
+            if (lp == null) return new Point(0, 0);
+            return new Point(lp.Value.x * _zoom + _panX, (WorkY - lp.Value.y) * _zoom + _panY);
+        }
+        else if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist
+                  || _vermActiveKind == VermKind.KreisKantenDist)
                  && _vermActiveEdge > 0)
         {
             bool isHoriz = (_vermActiveEdge == 1 || _vermActiveEdge == 2);
@@ -3286,12 +4017,14 @@ public partial class MainWindow : Window
                     ShowVermDiagIfViolated();
                     CloseVermTextBox();
                     _vermState = 0; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermPtIdx = -1;
+                    _vermKreisIdx = -1;
                 }
             }
             else
             {
                 CloseVermTextBox();
                 _vermState = 0; _vermEditIdx = -1; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0;
+                _vermKreisIdx = -1;
             }
             DrawSkia?.InvalidateVisual();
             e.Handled = true;
@@ -3300,7 +4033,8 @@ public partial class MainWindow : Window
         {
             CloseVermTextBox();
             _vermEditIdx = -1;
-            _vermState   = _vermState == 4 ? 0 : (_vermActiveKind == VermKind.ParallelDist || _vermActiveKind == VermKind.Angle ? 5 : 1);
+            _vermState   = _vermState == 4 ? 0 : (_vermActiveKind == VermKind.ParallelDist || _vermActiveKind == VermKind.Angle
+                                                  || _vermActiveKind == VermKind.KreisKantenDist ? 5 : 1);
             DrawSkia?.InvalidateVisual();
             e.Handled = true;
         }
@@ -3353,6 +4087,11 @@ public partial class MainWindow : Window
             case VermKind.Parallel:
                 ApplyAngleConstraint(en.P1Idx, en.P2Idx, en.Q1Idx, en.Q2Idx, 0.0);
                 break;
+            case VermKind.KreisDurchmesser:
+            case VermKind.KreisRadius:
+            case VermKind.KreisKantenDist:
+                ApplyKreisVerm(en, newVal);
+                break;
         }
     }
 
@@ -3363,12 +4102,15 @@ public partial class MainWindow : Window
     {
         _vermPlaced.RemoveAll(en =>
             en.P1Idx == removedIdx || en.P2Idx == removedIdx ||
+            (en.P2Idx >= RlbAnkerOffset && en.P2Idx % RlbAnkerOffset == removedIdx) ||
             en.Q1Idx == removedIdx || en.Q2Idx == removedIdx);
 
         for (int i = 0; i < _vermPlaced.Count; i++)
         {
             var en = _vermPlaced[i];
-            int Adj(int idx) => idx > removedIdx ? idx - 1 : idx;
+            int Adj(int idx) => idx >= RlbAnkerOffset
+                ? (idx % RlbAnkerOffset > removedIdx ? idx - 1 : idx)
+                : (idx > removedIdx ? idx - 1 : idx);
             _vermPlaced[i] = en with {
                 P1Idx = Adj(en.P1Idx),
                 P2Idx = Adj(en.P2Idx),
@@ -3448,6 +4190,10 @@ public partial class MainWindow : Window
             for (int iter = 0; iter < maxIter; iter++)
                 foreach (var en in ordered)
                 {
+                    // Kreis-Bemassungen sind unabhängig von Pfad-Constraints und werden nur beim
+                    // Eingeben direkt angewendet — ihr Wert folgt sonst der Kreis-Geometrie
+                    // (z.B. nach Verschieben/Ändern des Kreises).
+                    if (IsKreisVermKind(en.Kind)) continue;
                     if (!IsDirectionConstraint(en.Kind) && IsEdgeOverridden(en)) continue;
                     ApplyVermNewEntry(en, en.Value);
                 }
@@ -4589,8 +5335,8 @@ public partial class MainWindow : Window
     private void DrawVermassungOverlay(SKCanvas canvas)
     {
         if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
-        bool hasActive = (_vermState == 1 || _vermState == 2 || _vermState == 5) && (_vermP1Idx >= 0 || _vermPtIdx >= 0);
-        bool hasHover  = _activeTool == CanvasTool.Vermassen && (_vermHoverP1 >= 0 || _vermHoverEdge > 0 || _vermHoverPoint >= 0);
+        bool hasActive = (_vermState == 1 || _vermState == 2 || _vermState == 5) && (_vermP1Idx >= 0 || _vermPtIdx >= 0 || _vermKreisIdx >= 0);
+        bool hasHover  = _activeTool == CanvasTool.Vermassen && (_vermHoverP1 >= 0 || _vermHoverEdge > 0 || _vermHoverPoint >= 0 || _vermHoverKreis >= 0);
         if (!hasActive && !hasHover && _vermPlaced.Count == 0) return;
 
         // Gemeinsame Paint-Objekte
@@ -4787,6 +5533,38 @@ public partial class MainWindow : Window
             }
         }
 
+        // Durchmesser-/Radius-Masslinie eines Kreises
+        void DrawKreisDim(int kreisIdx, bool isRadius, double angle, string? labelText)
+        {
+            var dl = KreisDimLine(kreisIdx, isRadius, angle);
+            var g  = GetKreisGeom(kreisIdx);
+            if (dl == null || g == null) return;
+            var (asx, asy) = Px(dl.Value.a.x, dl.Value.a.y);
+            var (bsx, bsy) = Px(dl.Value.b.x, dl.Value.b.y);
+            canvas.DrawLine(asx, asy, bsx, bsy, linePaint);
+            DrawArrowTip(bsx, bsy, asx - bsx, asy - bsy);
+            if (!isRadius) DrawArrowTip(asx, asy, bsx - asx, bsy - asy);
+            // Zentrumsmarkierung
+            var (csx, csy) = Px(g.Value.cx, g.Value.cy);
+            float ck = (float)(3.0 / _zoom);
+            canvas.DrawLine(csx - ck, csy, csx + ck, csy, linePaint);
+            canvas.DrawLine(csx, csy - ck, csx, csy + ck, linePaint);
+            if (labelText != null)
+            {
+                var lp = KreisDimLabelPos(kreisIdx, angle);
+                if (lp != null) { var (lsx, lsy) = Px(lp.Value.x, lp.Value.y); DrawLabel(lsx, lsy, labelText); }
+            }
+        }
+
+        void DrawKreisHighlight(int kreisIdx, SKColor col)
+        {
+            var g = GetKreisGeom(kreisIdx); if (g == null) return;
+            using var kp = new SKPaint { Color = col, Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)(3.5 / _zoom), IsAntialias = true };
+            var (csx, csy) = Px(g.Value.cx, g.Value.cy);
+            canvas.DrawCircle(csx, csy, (float)g.Value.r, kp);
+        }
+
         void DrawEdgeHighlight(int edgeId, SKColor col)
         {
             if (edgeId <= 0) return;
@@ -4865,6 +5643,12 @@ public partial class MainWindow : Window
                     canvas.DrawCircle(hpx, hpy, hr, hpp);
                 }
             }
+            // Hover-Kreis (state 0 oder 1)
+            if ((_vermState == 0 || _vermState == 1) && _vermHoverKreis >= 0)
+                DrawKreisHighlight(_vermHoverKreis, new SKColor(255, 160, 0, 220));
+            // Gewählter Kreis (state 1 / 2 / 5)
+            if (_vermState >= 1 && _vermState <= 5 && _vermKreisIdx >= 0)
+                DrawKreisHighlight(_vermKreisIdx, new SKColor(30, 120, 220, 200));
             // Aktiver Punkt (state 1, Punkt-Modus)
             if (_vermState == 1 && _vermPtIdx >= 0)
             {
@@ -4887,13 +5671,36 @@ public partial class MainWindow : Window
              || en.Kind == VermKind.ParallelEdge || en.Kind == VermKind.PerpendicularEdge
              || en.Kind == VermKind.CoincidentCorner) continue;
 
-            var p1abs = GetPfadAbsAt(en.P1Idx);
-            if (p1abs == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) continue;
-            var p2abs = GetPfadAbsAt(en.P2Idx); if (p2abs == null) continue;
-
             bool hideLabel = isVermActive && ei == _vermEditIdx && (_vermState == 3 || _vermState == 4);
             double drawOffset = (isVermActive && _vermState == 3 && ei == _vermEditIdx)
                 ? _vermDragOffset : en.Offset;
+
+            // Kreis-Bemassungen: Wert folgt der aktuellen Kreis-Geometrie
+            if (IsKreisVermKind(en.Kind))
+            {
+                var cur = KreisVermActual(en); if (cur == null) continue;
+                double curVal = Math.Round(cur.Value, 3);
+                if (Math.Abs(curVal - en.Value) > 0.0005)
+                    _vermPlaced[ei] = en = en with { Value = curVal };
+                if (en.Kind == VermKind.KreisKantenDist)
+                {
+                    var g = GetKreisGeom(en.P2Idx);
+                    string? lblK = hideLabel ? null : curVal.ToString("F2", inv) + " mm";
+                    if (g != null && en.Edge > 0)
+                        DrawEdgeDist(g.Value.cx, g.Value.cy, en.Edge, drawOffset, lblK);
+                }
+                else
+                {
+                    bool isRad = en.Kind == VermKind.KreisRadius;
+                    string? lblK = hideLabel ? null : (isRad ? "R " : "Ø ") + curVal.ToString("F2", inv);
+                    DrawKreisDim(en.P2Idx, isRad, drawOffset, lblK);
+                }
+                continue;
+            }
+
+            var p1abs = GetPfadAbsAt(en.P1Idx);
+            if (p1abs == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) continue;
+            var p2abs = GetPfadAbsAt(en.P2Idx); if (p2abs == null) continue;
 
             if (en.Kind == VermKind.Length)
             {
@@ -4998,8 +5805,32 @@ public partial class MainWindow : Window
             DrawOneLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y,
                 previewOff, dl.ToString("F2", inv) + " mm");
         }
+        else if (_vermState == 1 && _vermKreisIdx >= 0 && _vermActiveEdge == 0 && _vermHoverEdge == 0
+                 && !IsRlbAnkerVermIdx(_vermKreisIdx))
+        {
+            // Kreis gewählt: Durchmesser (Maus ausserhalb) bzw. Radius (Maus innerhalb) folgt der Maus
+            var g = GetKreisGeom(_vermKreisIdx);
+            if (g != null)
+            {
+                double mdx = _vermMouseMm.x - g.Value.cx, mdy = _vermMouseMm.y - g.Value.cy;
+                bool isRad = Math.Sqrt(mdx*mdx + mdy*mdy) < g.Value.r;
+                double val = isRad ? g.Value.r : 2 * g.Value.r;
+                DrawKreisDim(_vermKreisIdx, isRad, Math.Atan2(mdy, mdx),
+                    (isRad ? "R " : "Ø ") + val.ToString("F2", inv));
+            }
+        }
+        else if (_vermState == 2 && _vermKreisIdx >= 0
+            && _vermActiveKind is VermKind.KreisDurchmesser or VermKind.KreisRadius)
+        {
+            DrawKreisDim(_vermKreisIdx, _vermActiveKind == VermKind.KreisRadius, _vermOffset, null);
+        }
+        else if (_vermState == 2 && _vermActiveKind == VermKind.KreisKantenDist && _vermActiveEdge > 0 && _vermP2Idx >= 0)
+        {
+            DrawEdgeDist(_vermP2Abs.x, _vermP2Abs.y, _vermActiveEdge, _vermOffset, null);
+        }
         else if (_vermState == 5
-            && (_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist)
+            && (_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist
+                || _vermActiveKind == VermKind.KreisKantenDist)
             && _vermActiveEdge > 0 && _vermP2Idx >= 0)
         {
             // EdgeDist/PointEdgeDist-Vorschau: Masslinie folgt der Maus
@@ -6249,6 +7080,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     {
         ResetGCodeButton(); // Ausstehende Änderungen des vorherigen Eintrags verwerfen
         var entry = HistoryList.SelectedItem as HistoryEntry;
+        if (!_eigSuppressUpdate && entry?.Params is not ReihenlochbohrungParams)
+            PnlReihenloch.Visibility = Visibility.Collapsed;
         if (entry?.Params is GraviereParams p)
         {
             // Visibility nur ändern wenn kein Apply läuft (sonst verliert EigText den Fokus)
@@ -6505,6 +7338,29 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             if (!NEckEigZZust.IsKeyboardFocused) NEckEigZZust.Text = ne.ZZustellung.ToString(inv);
             NEckModusNut.IsChecked     = !ne.IsTasche;
             NEckModusTasche.IsChecked  = ne.IsTasche;
+            _eigSuppressUpdate = false;
+        }
+        else if (entry?.Params is ReihenlochbohrungParams rlb)
+        {
+            if (!_eigSuppressUpdate)
+            {
+                TbEigKein.Visibility       = Visibility.Collapsed;
+                PnlGravieren.Visibility    = Visibility.Collapsed;
+                PnlPfadStart.Visibility    = Visibility.Collapsed;
+                PnlPfadEndPunkt.Visibility = Visibility.Collapsed;
+                PnlRechteck.Visibility     = Visibility.Collapsed;
+                PnlKreis.Visibility        = Visibility.Collapsed;
+                PnlNEck.Visibility         = Visibility.Collapsed;
+                PnlReihenloch.Visibility   = Visibility.Visible;
+            }
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            _eigSuppressUpdate = true;
+            if (!RlbEigAbstandX.IsKeyboardFocused) RlbEigAbstandX.Text = rlb.SpacingX.ToString(inv);
+            if (!RlbEigAbstandY.IsKeyboardFocused) RlbEigAbstandY.Text = rlb.SpacingY.ToString(inv);
+            if (!RlbEigTiefe.IsKeyboardFocused)    RlbEigTiefe.Text    = rlb.Bohrtiefe.ToString(inv);
+            RlbEigKreistasche.IsChecked = rlb.IstKreistasche;
+            if (!RlbEigTascheD.IsKeyboardFocused)
+                RlbEigTascheD.Text = (rlb.TascheD > 0 ? rlb.TascheD : RlbStdTascheD).ToString(inv);
             _eigSuppressUpdate = false;
         }
         else if (!_eigSuppressUpdate)
@@ -7274,6 +8130,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
     {
         UpdateEigenschaften();
         HighlightHistoryEntry(HistoryList.SelectedItem as HistoryEntry);
+        if (_activeTool == CanvasTool.Reihenloch && _rlbDrag == 0)
+        {
+            _rlbIdx = HistoryList.SelectedItem is HistoryEntry { Params: ReihenlochbohrungParams } se
+                ? _history.IndexOf(se) : -1;
+            DrawSkia?.InvalidateVisual();
+        }
     }
 
     // ── Verlauf: Doppelklick → Bearbeiten ───────────────────────
@@ -7827,13 +8689,27 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 DeleteSelectedHistory();
                 e.Handled = true; break;
 
+            // Reihenlochbohrung: aktive Lochreihe (Anker sichtbar) löschen
+            case Key.Delete when _activeTool == CanvasTool.Reihenloch && RlbActive() != null:
+            {
+                int idx = _rlbIdx;
+                _rlbDrag = 0; _rlbPreview = null; _rlbIdx = -1;
+                if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture();
+                _suppressNextAutoFit = true;
+                _history.RemoveAt(idx);
+                DrawSkia?.InvalidateVisual();
+                e.Handled = true; break;
+            }
+
             case Key.Escape:
                 if (_activeTool == CanvasTool.Vermassen)
                 {
                     CloseVermTextBox();
                     _vermEditIdx = -1;
-                    if (_vermState == 5) { _vermQ1Idx = -1; _vermQ2Idx = -1; _vermState = 1; }
-                    else if (_vermState >= 1) { _vermIsHolding = false; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermState = 0; if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture(); }
+                    if (_vermState == 5 && _vermActiveKind == VermKind.KreisKantenDist)
+                    { _vermActiveEdge = 0; _vermP2Idx = -1; _vermState = 1; }   // zurück zu „Kreis gewählt"
+                    else if (_vermState == 5) { _vermQ1Idx = -1; _vermQ2Idx = -1; _vermState = 1; }
+                    else if (_vermState >= 1) { _vermIsHolding = false; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermKreisIdx = -1; _vermState = 0; if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture(); }
                     else _vermState = 0;
                     DrawSkia?.InvalidateVisual();
                 }
@@ -7849,6 +8725,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 { _kreisDragging = false; CloseKreisDurchmesserBox(); ClearKreisRubberBand(); DrawSkia?.InvalidateVisual(); }
                 else if (_activeTool == CanvasTool.NEck && _neckDragging)
                 { _neckDragging = false; ClearNEckRubberBand(); DrawSkia?.InvalidateVisual(); }
+                else if (_activeTool == CanvasTool.Reihenloch && _rlbDrag != 0)
+                {
+                    _rlbDrag = 0; _rlbPreview = null;
+                    if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture();
+                    DrawSkia?.InvalidateVisual();
+                }
                 else
                     SetActiveTool(CanvasTool.Select);
                 e.Handled = true; break;
@@ -8173,6 +9055,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             CloseVermTextBox();
             _vermState = 0; _vermIsHolding = false; _vermP1Idx = -1; _vermP2Idx = -1;
             _vermQ1Idx = -1; _vermQ2Idx = -1; _vermEditIdx = -1; _vermActiveEdge = 0;
+            _vermKreisIdx = -1; _vermHoverKreis = -1;
             _geomMode = GeomConstraintMode.None; _geomFirstIdx = -1; _geomFirstIdx2 = -1;
             _selectedGeomIdx = -1;
             UpdateGeomModeButtons();
@@ -8203,6 +9086,12 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         BtnToolRechteck.Background    = tool == CanvasTool.Rechteck  ? active : inactive;
         BtnToolKreis.Background       = tool == CanvasTool.Kreis     ? active : inactive;
         BtnToolNEck.Background        = tool == CanvasTool.NEck      ? active : inactive;
+        BtnToolReihenloch.Background  = tool == CanvasTool.Reihenloch ? active : inactive;
+        if (tool == CanvasTool.Reihenloch)
+            _rlbIdx = HistoryList.SelectedItem is HistoryEntry { Params: ReihenlochbohrungParams } se
+                ? _history.IndexOf(se) : -1;
+        else
+        { _rlbDrag = 0; _rlbPreview = null; }
         CanvasGrid.Cursor = tool switch
         {
             CanvasTool.Hand         => Cursors.Hand,
@@ -8215,6 +9104,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             CanvasTool.Rechteck     => Cursors.Cross,
             CanvasTool.Kreis        => Cursors.Cross,
             CanvasTool.NEck         => Cursors.Cross,
+            CanvasTool.Reihenloch   => Cursors.Cross,
             _                       => Cursors.Arrow,   // Move: context-sensitive (see MouseMove)
         };
         DrawSkia?.InvalidateVisual();
@@ -8707,6 +9597,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 CanvasTool.Rechteck     => Cursors.Cross,
                 CanvasTool.Kreis        => Cursors.Cross,
                 CanvasTool.NEck         => Cursors.Cross,
+                CanvasTool.Reihenloch   => Cursors.Cross,
                 _                       => Cursors.Arrow,
             };
 
@@ -8813,6 +9704,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 CanvasTool.Rechteck     => Cursors.Cross,
                 CanvasTool.Kreis        => Cursors.Cross,
                 CanvasTool.NEck         => Cursors.Cross,
+                CanvasTool.Reihenloch   => Cursors.Cross,
                 _                       => Cursors.Arrow,
             };
 
@@ -9889,6 +10781,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             return;
         }
 
+        // Reihenlochbohrung-Werkzeug: Klick = neue Bohrung, Anker/Pfeile ziehen
+        if (_activeTool == CanvasTool.Reihenloch && e.ChangedButton == MouseButton.Left
+            && Keyboard.Modifiers != ModifierKeys.Control)
+        {
+            var pos = e.GetPosition(CanvasGrid);
+            RlbMouseDown((pos.X - _panX) / _zoom, WorkY - (pos.Y - _panY) / _zoom);
+            e.Handled = true;
+            return;
+        }
+
         // Pfeil-Werkzeug: einzelne Pfad-Punkte und Segment-Mittelpunkte verschieben
         if (_activeTool == CanvasTool.Pfeil && e.ChangedButton == MouseButton.Left)
         {
@@ -10315,6 +11217,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     CanvasGrid.CaptureMouse();
                     DrawSkia?.InvalidateVisual();
                 }
+                else if (HitTestKreisVerm(vmx, vmy) is int krHit && krHit >= 0)
+                {
+                    // 3c. Klick auf Kreis → Durchmesser/Radius (Klick ins Freie) oder Kantenabstand (Klick auf Kante)
+                    _vermKreisIdx = krHit;
+                    _vermP1Idx = -1; _vermP2Idx = -1; _vermPtIdx = -1; _vermActiveEdge = 0;
+                    _vermIsHolding = false;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1; _vermHoverEdge = 0; _vermHoverKreis = -1;
+                    _vermState = 1;
+                    DrawSkia?.InvalidateVisual();
+                }
                 else
                 {
                     int edgeHit = HitTestWorkpieceEdge(vmx, vmy);
@@ -10330,6 +11242,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             else if (_vermState == 1)
             {
+                // Kreis gewählt: Klick auf Kante → Kantenabstand, sonst Durchmesser/Radius platzieren
+                if (_vermKreisIdx >= 0 && _vermActiveEdge == 0)
+                {
+                    int edgeHitK = HitTestWorkpieceEdge(vmx, vmy);
+                    if (edgeHitK > 0) StartKreisKantenDist(_vermKreisIdx, edgeHitK);
+                    else              PlaceKreisDimAt(vmx, vmy);
+                    DrawSkia?.InvalidateVisual();
+                    e.Handled = true; return;
+                }
                 // EdgeDist/EdgeAngle/PointEdgeDist: Kante bereits gewählt, jetzt Segment oder Punkt wählen
                 if (_vermActiveEdge > 0 && _vermP1Idx < 0)
                 {
@@ -10358,6 +11279,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                         _vermOffset = 0;
                         _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0;
                         _vermState = 5;
+                        DrawSkia?.InvalidateVisual();
+                        e.Handled = true; return;
+                    }
+                    // Kreis geklickt → Abstand Kreismitte → Kante
+                    int krHitE = HitTestKreisVerm(vmx, vmy);
+                    if (krHitE >= 0)
+                    {
+                        StartKreisKantenDist(krHitE, _vermActiveEdge);
                         DrawSkia?.InvalidateVisual();
                         e.Handled = true; return;
                     }
@@ -10503,6 +11432,15 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 var savedTool = _activeTool;
                 SetActiveTool(savedTool);               // Tool-Highlight sichern
                 StartEditExistingTextField(reopenIdx);  // Editor mit neuer Grösse wieder öffnen
+                e.Handled = true;
+                return;
+            }
+
+            // Reihenlochbohrung: Anker-/Pfeil-Drag beendet
+            if (_activeTool == CanvasTool.Reihenloch && _rlbDrag != 0)
+            {
+                if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture();
+                CommitRlbDrag();
                 e.Handled = true;
                 return;
             }
@@ -10678,6 +11616,14 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _pfadMouseMm    = noSnap ? (rawX, rawY) : (SnapX(rawX), SnapY(rawY));
             _pfadMouseValid = true;
             DrawSkia?.InvalidateVisual();
+            return;
+        }
+
+        // Reihenlochbohrung-Werkzeug: Anker/Pfeile ziehen, Hover-Cursor
+        if (_activeTool == CanvasTool.Reihenloch && !_isPanning)
+        {
+            var pos = e.GetPosition(CanvasGrid);
+            RlbMouseMove((pos.X - _panX) / _zoom, WorkY - (pos.Y - _panY) / _zoom);
             return;
         }
 
@@ -10874,23 +11820,34 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             {
                 int ptHit  = HitTestPfadPointOrRktPoint(vmx, vmy);
                 var hit    = ptHit < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
-                int edgeHit = hit.Item1 < 0 && ptHit < 0 ? HitTestWorkpieceEdge(vmx, vmy) : 0;
+                int krHit  = hit.Item1 < 0 && ptHit < 0 ? HitTestKreisVerm(vmx, vmy) : -1;
+                int edgeHit = hit.Item1 < 0 && ptHit < 0 && krHit < 0 ? HitTestWorkpieceEdge(vmx, vmy) : 0;
                 if (ptHit != _vermHoverPoint || hit.Item1 != _vermHoverP1 ||
-                    hit.Item2 != _vermHoverP2 || edgeHit != _vermHoverEdge)
+                    hit.Item2 != _vermHoverP2 || edgeHit != _vermHoverEdge || krHit != _vermHoverKreis)
                 {
                     _vermHoverPoint = ptHit;
                     _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2; _vermHoverEdge = edgeHit;
+                    _vermHoverKreis = krHit;
                     DrawSkia?.InvalidateVisual();
                 }
             }
             else if (_vermState == 1 || _vermState == 5)
             {
                 // Im Warte-Modus (state 1, nicht haltend): Hover für 2. Auswahl aktualisieren
-                if (_vermState == 1 && !_vermIsHolding)
+                if (_vermState == 1 && _vermKreisIdx >= 0)
+                {
+                    // Kreis gewählt: nur Werkstückkanten als 2. Auswahl hervorheben
+                    _vermHoverPoint = -1; _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverKreis = -1;
+                    _vermHoverEdge = HitTestWorkpieceEdge(vmx, vmy);
+                }
+                else if (_vermState == 1 && !_vermIsHolding)
                 {
                     _vermHoverPoint = HitTestPfadPointOrRktPoint(vmx, vmy);
                     var hit = _vermHoverPoint < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
                     _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2;
+                    // Kante bereits gewählt → Kreise als 2. Auswahl hervorheben
+                    _vermHoverKreis = _vermActiveEdge > 0 && hit.Item1 < 0 && _vermHoverPoint < 0
+                        ? HitTestKreisVerm(vmx, vmy) : -1;
                     if (_vermActiveEdge == 0)
                         _vermHoverEdge = hit.Item1 < 0 && _vermHoverPoint < 0
                             ? HitTestWorkpieceEdge(vmx, vmy) : 0;
@@ -11571,6 +12528,8 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             DrawPfadChainBBoxes(canvas);
         else if (_activeTool == CanvasTool.Pfeil)
             DrawPfadPunkteDots(canvas);
+        else if (_activeTool == CanvasTool.Reihenloch)
+            DrawReihenlochOverlay(canvas);
 
         DrawVermassungOverlay(canvas);
         DrawTextLineSegmentsSk(canvas);
@@ -12926,20 +13885,23 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             }
             else if (entry.Params is KreisParams kp)
             {
-                var (cx, cy) = MmToPx(kp.XRel, kp.YRel);
+                // Beim Verschieben die Vorschau-Parameter verwenden (wie die durchgezogene Kontur)
+                if (_previewKreisParams != null && HistoryList.SelectedItem == entry) kp = _previewKreisParams;
+                var (kmx, kmy) = GCodeGenerator.ConvertBezugspunkt(kp.Bezugspunkt, kp.XRel, kp.YRel, wx, wy);
+                var (cx, cy) = MmToPx(kmx, kmy);
                 float r = (float)(kp.Radius * scale);
                 canvas.DrawCircle(cx, cy, r, outlinePaint);
             }
             else if (entry.Params is NEckParams np)
             {
-                var (cx, cy) = MmToPx(np.XRel, np.YRel);
-                float r = (float)(np.Radius * scale);
+                if (np.Ecken < 3) continue;
+                // Eckpunkte in mm wie in GCodeGenerator.NEck (Bezugspunkt + Rotation), dann in Pixel
+                var (cxMm, cyMm) = GCodeGenerator.ConvertBezugspunkt(np.Bezugspunkt, np.XRel, np.YRel, wx, wy);
                 using var path = new SKPath();
                 for (int i = 0; i < np.Ecken; i++)
                 {
-                    double angle = 2 * Math.PI * i / np.Ecken - Math.PI / 2;
-                    float px = (float)(cx + r * Math.Cos(angle));
-                    float py = (float)(cy + r * Math.Sin(angle));
+                    double angle = 2 * Math.PI * i / np.Ecken + np.RotationGrad * Math.PI / 180.0 - Math.PI / 2;
+                    var (px, py) = MmToPx(cxMm + np.Radius * Math.Cos(angle), cyMm + np.Radius * Math.Sin(angle));
                     if (i == 0) path.MoveTo(px, py);
                     else path.LineTo(px, py);
                 }

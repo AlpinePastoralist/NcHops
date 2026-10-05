@@ -111,12 +111,25 @@ public static class GCodeGenerator
 
         var depth = -Math.Abs(p.Bohrtiefe);
         var step = Math.Abs(p.Zustellung);
+        // Bohrart Kreistasche: nur wenn die Tasche grösser als der Fräser ist, sonst normal bohren
+        bool tasche = p.IstKreistasche && p.TascheD > p.Diameter;
+        if (tasche) sb.AppendLine($"(Bohrart: Kreistasche D={F(p.TascheD)})");
         for (int iy = 0; iy < p.CountY; iy++)
         {
             for (int ix = 0; ix < p.CountX; ix++)
             {
                 var x = p.StartX + ix * p.SpacingX;
                 var y = p.StartY + iy * p.SpacingY;
+                if (tasche)
+                {
+                    sb.Append(Kreistasche(new KreistascheParams(
+                        XRel: x, YRel: y, Durchmesser: p.TascheD,
+                        ZTiefe: p.Bohrtiefe, ZZustellung: step > 0 ? step : 2,
+                        Eintauchwinkel: p.Eintauchwinkel, FraeserD: p.Diameter, Faktor: p.Faktor,
+                        Vorschub: p.Vorschub, VorschubFz: p.VorschubFz, Drehzahl: p.Drehzahl,
+                        Bezugspunkt: "Unten links"), 0, 0));
+                    continue;
+                }
                 sb.AppendLine($"(Bohrung: X={x} Y={y})");
                 sb.AppendLine($"G00 X{F(x)} Y{F(y)}");
 

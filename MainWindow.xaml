@@ -785,6 +785,19 @@
                                              Stroke="White" StrokeThickness="1.5" Fill="Transparent"/>
                                 </Viewbox>
                             </Button>
+                            <Button x:Name="BtnToolReihenloch"
+                                    Style="{StaticResource ToolPalBtn}"
+                                    Click="OnReihenlochTool"
+                                    ToolTip="Reihenlochbohrung – Klick = Bohrung, Anker = verschieben, Pfeile ziehen = weitere Löcher">
+                                <Viewbox Width="16" Height="16">
+                                    <Canvas Width="16" Height="16">
+                                        <Ellipse Canvas.Left="1"  Canvas.Top="10" Width="5" Height="5" Stroke="White" StrokeThickness="1.3"/>
+                                        <Ellipse Canvas.Left="10" Canvas.Top="10" Width="5" Height="5" Stroke="White" StrokeThickness="1.3"/>
+                                        <Ellipse Canvas.Left="1"  Canvas.Top="1"  Width="5" Height="5" Stroke="White" StrokeThickness="1.3"/>
+                                        <Ellipse Canvas.Left="10" Canvas.Top="1"  Width="5" Height="5" Stroke="White" StrokeThickness="1.3"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
                         </StackPanel>
                     </Border>
                     <!-- Vermassen-Toolbar (rechts, schwebend, nur sichtbar wenn Vermassen aktiv) -->
@@ -1705,6 +1718,72 @@
                                         <TextBox x:Name="KrEigZZust" LostFocus="OnKrEigLostFocus" KeyDown="OnKrEigKeyDown"/>
                                     </StackPanel>
                                 </Grid>
+
+                            </StackPanel>
+
+                            <!-- ── Reihenlochbohrung ── -->
+                            <StackPanel x:Name="PnlReihenloch" Visibility="Collapsed">
+
+                                <TextBlock Text="Reihenlochbohrung" FontWeight="Bold" FontSize="13"
+                                           Margin="0,0,0,8"
+                                           Foreground="{StaticResource TextDarkBrush}"/>
+
+                                <!-- Lochabstand X / Y -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Lochabstand X (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RlbEigAbstandX" LostFocus="OnRlbEigLostFocus" KeyDown="OnRlbEigKeyDown"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Lochabstand Y (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RlbEigAbstandY" LostFocus="OnRlbEigLostFocus" KeyDown="OnRlbEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Bohrtiefe -->
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Bohrtiefe (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RlbEigTiefe" LostFocus="OnRlbEigLostFocus" KeyDown="OnRlbEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Bohrart: Kreistasche -->
+                                <TextBlock Text="Bohrart:" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="RlbEigKreistasche" Grid.Column="0" Content="Kreistasche"
+                                              VerticalAlignment="Bottom" Margin="0,0,0,3"
+                                              Checked="OnRlbEigChanged" Unchecked="OnRlbEigChanged"/>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Durchmesser (mm):" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="RlbEigTascheD" IsEnabled="{Binding IsChecked, ElementName=RlbEigKreistasche}"
+                                                 LostFocus="OnRlbEigLostFocus" KeyDown="OnRlbEigKeyDown"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button Content="In X-Richtung einmitten" Click="OnRlbEinmittenX"
+                                            Padding="10,3" Margin="0,0,8,0"
+                                            ToolTip="Lochreihe horizontal auf dem Werkstück zentrieren"/>
+                                    <Button Content="In Y-Richtung einmitten" Click="OnRlbEinmittenY"
+                                            Padding="10,3"
+                                            ToolTip="Lochreihe vertikal auf dem Werkstück zentrieren"/>
+                                </StackPanel>
 
                             </StackPanel>
 
