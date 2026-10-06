@@ -137,10 +137,15 @@ public partial class MainWindow : Window
 
     // ── Vermassen-Werkzeug ───────────────────────────────────────
     private enum VermKind { Length, ParallelDist, Angle, EdgeDist, EdgeAngle, PointDist, LineToPoint, PointEdgeDist, Coincident, Perpendicular, Parallel, ParallelEdge, PerpendicularEdge, CoincidentCorner,
-                            KreisDurchmesser, KreisRadius, KreisKantenDist }
+                            KreisDurchmesser, KreisRadius, KreisKantenDist,
+                            RktSeite, RktKantenDist }
     // Kreis-Bemassungen: P2Idx = History-Index des Kreises (P1Idx = -1).
     //   KreisDurchmesser/KreisRadius: Offset = Winkel (rad) der Masslinie ab Kreismitte
     //   KreisKantenDist: Abstand Kreismitte → Werkstückkante (Edge), Offset wie PointEdgeDist
+    // Rechteck-Bemassungen: P2Idx = History-Index des Rechtecks + Seite * RlbAnkerOffset (P1Idx = -1),
+    //   Seite 0=unten 1=rechts 2=oben 3=links (siehe GetRektSeiten).
+    //   RktSeite: Länge der Seite (Breite bzw. Höhe), Offset = Versatz der Masslinie wie Length
+    //   RktKantenDist: Abstand Seite → parallele Werkstückkante (Edge), Offset wie EdgeDist
     private enum GeomConstraintMode { None, Coincident, Perpendicular, Parallel }
     private record VermEntry(
         VermKind Kind, int P1Idx, int P2Idx, double Offset, double Value,
@@ -176,6 +181,7 @@ public partial class MainWindow : Window
     private int _vermPtIdx      = -1;  // erster gewählter Punkt (PointDist / LineToPoint)
     private int _vermKreisIdx   = -1;  // gewählter Kreis (History-Idx) für Kreis-Bemassungen
     private int _vermHoverKreis = -1;  // gehoverter Kreis (History-Idx)
+    private int _vermRktIdx     = -1;  // gewählte Rechteck-Seite (History-Idx + Seite * RlbAnkerOffset)
     private int _vermEditIdx  = -1;   // Index in _vermPlaced für State 3/4
     private double _vermDragOffset;   // Vorschau-Offset beim Ziehen (State 3)
     private bool _vermIsHolding = false;  // Maustaste nach 1. Klick gehalten (Drag-Positionierung)
@@ -3087,6 +3093,163 @@ public partial class MainWindow : Window
         _vermState      = 5;
     }
 
+    // ── Rechteck-Bemassung (Seitenlänge / Abstand Seite → Werkstückkante) ──
+
+    private static bool IsRktVermKind(VermKind k)
+        => k is VermKind.RktSeite or VermKind.RktKantenDist;
+
+    // Kodierte Rechteck-Seite (History-Idx + Seite * RlbAnkerOffset) aus Hover-/Hit-Kodierung
+    private static int RktVermIdx(int histIdx, int side) => histIdx + side * RlbAnkerOffset;
+
+    // Endpunkte einer Rechteck-Seite (mm), null wenn kein Rechteck
+    private ((double x, double y) a, (double x, double y) b)? GetRktSeiteGeom(int rktVermIdx)
+    {
+        var (h, side) = DecodeKreisVermIdx(rktVermIdx);
+        if (h < 0 || h >= _history.Count || side < 0 || side > 3
+            || _history[h].Params is not RechteckParams rp) return null;
+        var (x1, y1, x2, y2) = GetRektSeiten(rp)[side];
+        return ((x1, y1), (x2, y2));
+    }
+
+    private (double x, double y)? RktSeiteMitte(int rktVermIdx)
+    {
+        var g = GetRktSeiteGeom(rktVermIdx); if (g == null) return null;
+        return ((g.Value.a.x + g.Value.b.x) / 2, (g.Value.a.y + g.Value.b.y) / 2);
+    }
+
+    // Seite 0/2 (unten/oben) ist horizontal → parallel zu Kante 3/4; Seite 1/3 → Kante 1/2
+    private static bool RktSeiteParallelZuKante(int side, int edge)
+        => side is 0 or 2 ? edge is 3 or 4 : edge is 1 or 2;
+
+    // Aktueller Ist-Wert einer Rechteck-Bemassung
+    private double? RktVermActual(VermEntry en)
+    {
+        var g = GetRktSeiteGeom(en.P2Idx); if (g == null) return null;
+        var (a, b) = g.Value;
+        return en.Kind switch
+        {
+            VermKind.RktSeite      => Math.Sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)),
+            VermKind.RktKantenDist => EdgeDistValue((a.x + b.x) / 2, (a.y + b.y) / 2, en.Edge),
+            _                      => null
+        };
+    }
+
+    // True, wenn die Seite side des Rechtecks h über eine Kantenabstand-Bemassung fixiert ist
+    private bool IsRktSeiteKantenBemasst(int h, int side)
+        => _vermPlaced.Any(e => e.Kind == VermKind.RktKantenDist && e.P2Idx == RktVermIdx(h, side));
+
+    // Rechteck-Bemassung auf die RechteckParams anwenden.
+    //   RktSeite: Breite/Höhe ändern. Fix bleibt die linke bzw. untere Seite — ausser nur die
+    //             gegenüberliegende Seite ist zur Werkstückkante bemasst, dann bleibt diese fix.
+    //   RktKantenDist: Rechteck verschieben. Ist die gegenüberliegende Seite ebenfalls zur
+    //             Werkstückkante bemasst, wird stattdessen nur diese Seite verschoben (Grösse ändert).
+    private void ApplyRktVerm(VermEntry en, double newVal)
+    {
+        var (h, side) = DecodeKreisVermIdx(en.P2Idx);
+        if (h < 0 || h >= _history.Count || _history[h].Params is not RechteckParams rp) return;
+        var (left, bottom, w, ht) = RechteckBoundsInMm(rp);
+        double right = left + w, top = bottom + ht;
+        bool horizSeite = side is 0 or 2;
+        switch (en.Kind)
+        {
+            case VermKind.RktSeite:
+                if (horizSeite)
+                {
+                    if (IsRktSeiteKantenBemasst(h, 1) && !IsRktSeiteKantenBemasst(h, 3)) left = right - newVal;
+                    else right = left + newVal;
+                }
+                else
+                {
+                    if (IsRktSeiteKantenBemasst(h, 2) && !IsRktSeiteKantenBemasst(h, 0)) bottom = top - newVal;
+                    else top = bottom + newVal;
+                }
+                break;
+            case VermKind.RktKantenDist:
+            {
+                if (!RktSeiteParallelZuKante(side, en.Edge)) return;
+                double target = en.Edge switch
+                {
+                    1 => newVal,
+                    2 => WorkX - newVal,
+                    3 => newVal,
+                    _ => WorkY - newVal,
+                };
+                int gegenSeite = (side + 2) % 4;
+                bool resize = IsRktSeiteKantenBemasst(h, gegenSeite);
+                double cur = side switch { 0 => bottom, 1 => right, 2 => top, _ => left };
+                double d = target - cur;
+                switch (side)
+                {
+                    case 0: bottom += d; if (!resize) top   += d; break;
+                    case 1: right  += d; if (!resize) left  += d; break;
+                    case 2: top    += d; if (!resize) bottom += d; break;
+                    default: left  += d; if (!resize) right += d; break;
+                }
+                break;
+            }
+            default: return;
+        }
+        double nw = right - left, nh = top - bottom;
+        if (nw <= 0.001 || nh <= 0.001) return;
+        var (refX, refY) = BezugAbsPos(rp.Bezugspunkt, left, bottom, nw, nh);
+        var (xRel, yRel) = AbsToRel(rp.Bezugspunkt, refX, refY, WorkX, WorkY);
+        var np = rp with
+        {
+            XRel   = Math.Round(xRel, 3), YRel  = Math.Round(yRel, 3),
+            Breite = Math.Round(nw, 3),   Hoehe = Math.Round(nh, 3),
+        };
+        if (np == rp) return;
+        var old = _history[h];
+        bool wasSelected = HistoryList.SelectedItem == old;
+        bool wasSuppressed = _suppressHistoryRegen;
+        _suppressHistoryRegen = true;
+        try { _history[h] = new HistoryEntry(old.Label,
+            $"X={np.XRel} Y={np.YRel}, {np.Breite}×{np.Hoehe}, Z={np.ZTiefe}", np, old.Level); }
+        finally { _suppressHistoryRegen = wasSuppressed; }
+        if (wasSelected) HistoryList.SelectedItem = _history[h];
+    }
+
+    // Rechteck-Seite gewählt (State 1), Klick ins Freie → Seitenlänge platzieren
+    private void PlaceRktSeiteAt(double mmX, double mmY)
+    {
+        var g = GetRktSeiteGeom(_vermRktIdx);
+        if (g == null) { _vermState = 0; _vermRktIdx = -1; return; }
+        _vermP1Abs      = g.Value.a;
+        _vermP2Abs      = g.Value.b;
+        _vermActiveKind = VermKind.RktSeite;
+        _vermP1Idx      = -1;
+        _vermP2Idx      = _vermRktIdx;
+        _vermActiveEdge = 0;
+        _vermOffset     = VermSignedOffset(mmX, mmY, _vermP1Abs, _vermP2Abs);
+        _vermState      = 2;
+        ShowVermTextBox(Math.Round(VermSegmentLength(), 3), "F3");
+    }
+
+    // Rechteck-Seite + parallele Kante gewählt → Kantenabstand-Vorschau (State 5)
+    private bool StartRktKantenDist(int rktVermIdx, int edge)
+    {
+        var (_, side) = DecodeKreisVermIdx(rktVermIdx);
+        if (!RktSeiteParallelZuKante(side, edge)) return false;
+        var m = RktSeiteMitte(rktVermIdx); if (m == null) return false;
+        _vermRktIdx     = rktVermIdx;
+        _vermActiveEdge = edge;
+        _vermP1Idx      = -1;
+        _vermP2Idx      = rktVermIdx;
+        _vermP2Abs      = m.Value;
+        _vermActiveKind = VermKind.RktKantenDist;
+        _vermOffset     = 0; _vermPtIdx = -1;
+        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1; _vermHoverKreis = -1;
+        _vermState      = 5;
+        return true;
+    }
+
+    // Treffertest Rechteck-Seite im Vermassen-Werkzeug (-1 = keine)
+    private int HitTestRktVerm(double mmX, double mmY)
+    {
+        var (h, side) = HitTestRktSide(mmX, mmY);
+        return h >= 0 ? RktVermIdx(h, side) : -1;
+    }
+
     // Hit-Test: Label einer platzierten Masslinie (Screenkoordinaten in logischen Pixeln)
     private int HitTestVermLabel(double screenX, double screenY)
     {
@@ -3114,6 +3277,22 @@ public partial class MainWindow : Window
             if (en.Edge == 1 || en.Edge == 2)
                 return ((g.Value.cx + (en.Edge == 1 ? 0 : WorkX)) / 2, g.Value.cy + en.Offset);
             return (g.Value.cx + en.Offset, (g.Value.cy + (en.Edge == 3 ? 0 : WorkY)) / 2);
+        }
+        if (en.Kind == VermKind.RktSeite)
+        {
+            var g = GetRktSeiteGeom(en.P2Idx); if (g == null) return null;
+            var (a, b) = g.Value;
+            double dx = b.x - a.x, dy = b.y - a.y;
+            double len = Math.Sqrt(dx*dx + dy*dy); if (len < 1e-9) return null;
+            return ((a.x + b.x)/2 - dy/len * en.Offset, (a.y + b.y)/2 + dx/len * en.Offset);
+        }
+        if (en.Kind == VermKind.RktKantenDist)
+        {
+            var m = RktSeiteMitte(en.P2Idx);
+            if (m == null || en.Edge <= 0) return null;
+            if (en.Edge == 1 || en.Edge == 2)
+                return ((m.Value.x + (en.Edge == 1 ? 0 : WorkX)) / 2, m.Value.y + en.Offset);
+            return (m.Value.x + en.Offset, (m.Value.y + (en.Edge == 3 ? 0 : WorkY)) / 2);
         }
         var p1 = GetAbsPosForVerm(en.P1Idx);
         if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist) return null;
@@ -3211,13 +3390,25 @@ public partial class MainWindow : Window
                                                      dl.Value.b.x, dl.Value.b.y) <= tol) return i;
                 continue;
             }
+            if (en.Kind == VermKind.RktSeite)
+            {
+                var rs = GetRktSeiteGeom(en.P2Idx); if (rs == null) continue;
+                var (ra, rb) = rs.Value;
+                double rdx = rb.x - ra.x, rdy = rb.y - ra.y;
+                double rl = Math.Sqrt(rdx*rdx + rdy*rdy); if (rl < 1e-9) continue;
+                double onx = -rdy/rl * en.Offset, ony = rdx/rl * en.Offset;
+                if (DistPointToSegment(mmX, mmY, ra.x + onx, ra.y + ony, rb.x + onx, rb.y + ony) <= tol) return i;
+                continue;
+            }
             var p1 = GetPfadAbsAt(en.P1Idx);
             if (p1 == null && en.Kind != VermKind.EdgeDist && en.Kind != VermKind.PointEdgeDist
-                && en.Kind != VermKind.KreisKantenDist) continue;
+                && en.Kind != VermKind.KreisKantenDist && en.Kind != VermKind.RktKantenDist) continue;
             (double x, double y)? p2 = GetPfadAbsAt(en.P2Idx);
             if (en.Kind == VermKind.KreisKantenDist && GetKreisGeom(en.P2Idx) is { } kg) p2 = (kg.cx, kg.cy);
+            if (en.Kind == VermKind.RktKantenDist) p2 = RktSeiteMitte(en.P2Idx);
             if (p2 == null) continue;
-            if (en.Kind == VermKind.EdgeDist || en.Kind == VermKind.PointEdgeDist || en.Kind == VermKind.KreisKantenDist)
+            if (en.Kind == VermKind.EdgeDist || en.Kind == VermKind.PointEdgeDist || en.Kind == VermKind.KreisKantenDist
+                || en.Kind == VermKind.RktKantenDist)
             {
                 if (en.Edge <= 0) continue;
                 bool isHoriz = (en.Edge == 1 || en.Edge == 2);
@@ -3326,6 +3517,8 @@ public partial class MainWindow : Window
         }
         else if (IsKreisVermKind(en.Kind))
             txt = Math.Round(KreisVermActual(en) ?? en.Value, 3).ToString("F3", inv);
+        else if (IsRktVermKind(en.Kind))
+            txt = Math.Round(RktVermActual(en) ?? en.Value, 3).ToString("F3", inv);
         else
             txt = en.Value.ToString("F3", inv);
 
@@ -3571,6 +3764,16 @@ public partial class MainWindow : Window
                 var g = GetKreisGeom(en.P2Idx); if (g == null) return en.Offset;
                 return (en.Edge == 1 || en.Edge == 2) ? mmY - g.Value.cy : mmX - g.Value.cx;
             }
+            case VermKind.RktSeite:
+            {
+                var g = GetRktSeiteGeom(en.P2Idx); if (g == null) return en.Offset;
+                return VermSignedOffset(mmX, mmY, g.Value.a, g.Value.b);
+            }
+            case VermKind.RktKantenDist:
+            {
+                var m = RktSeiteMitte(en.P2Idx); if (m == null) return en.Offset;
+                return (en.Edge == 1 || en.Edge == 2) ? mmY - m.Value.y : mmX - m.Value.x;
+            }
             default: return en.Offset;
         }
     }
@@ -3770,7 +3973,7 @@ public partial class MainWindow : Window
             return;
         }
         if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist
-             || _vermActiveKind == VermKind.KreisKantenDist)
+             || _vermActiveKind == VermKind.KreisKantenDist || _vermActiveKind == VermKind.RktKantenDist)
             && _vermActiveEdge > 0)
         {
             // Offset = Versatz der Masslinie senkrecht zur Kante (Y für links/rechts, X für oben/unten)
@@ -3855,7 +4058,7 @@ public partial class MainWindow : Window
             return new Point(lp.Value.x * _zoom + _panX, (WorkY - lp.Value.y) * _zoom + _panY);
         }
         else if ((_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist
-                  || _vermActiveKind == VermKind.KreisKantenDist)
+                  || _vermActiveKind == VermKind.KreisKantenDist || _vermActiveKind == VermKind.RktKantenDist)
                  && _vermActiveEdge > 0)
         {
             bool isHoriz = (_vermActiveEdge == 1 || _vermActiveEdge == 2);
@@ -4017,14 +4220,14 @@ public partial class MainWindow : Window
                     ShowVermDiagIfViolated();
                     CloseVermTextBox();
                     _vermState = 0; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermPtIdx = -1;
-                    _vermKreisIdx = -1;
+                    _vermKreisIdx = -1; _vermRktIdx = -1;
                 }
             }
             else
             {
                 CloseVermTextBox();
                 _vermState = 0; _vermEditIdx = -1; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0;
-                _vermKreisIdx = -1;
+                _vermKreisIdx = -1; _vermRktIdx = -1;
             }
             DrawSkia?.InvalidateVisual();
             e.Handled = true;
@@ -4034,7 +4237,8 @@ public partial class MainWindow : Window
             CloseVermTextBox();
             _vermEditIdx = -1;
             _vermState   = _vermState == 4 ? 0 : (_vermActiveKind == VermKind.ParallelDist || _vermActiveKind == VermKind.Angle
-                                                  || _vermActiveKind == VermKind.KreisKantenDist ? 5 : 1);
+                                                  || _vermActiveKind == VermKind.KreisKantenDist
+                                                  || _vermActiveKind == VermKind.RktKantenDist ? 5 : 1);
             DrawSkia?.InvalidateVisual();
             e.Handled = true;
         }
@@ -4091,6 +4295,10 @@ public partial class MainWindow : Window
             case VermKind.KreisRadius:
             case VermKind.KreisKantenDist:
                 ApplyKreisVerm(en, newVal);
+                break;
+            case VermKind.RktSeite:
+            case VermKind.RktKantenDist:
+                ApplyRktVerm(en, newVal);
                 break;
         }
     }
@@ -4193,7 +4401,7 @@ public partial class MainWindow : Window
                     // Kreis-Bemassungen sind unabhängig von Pfad-Constraints und werden nur beim
                     // Eingeben direkt angewendet — ihr Wert folgt sonst der Kreis-Geometrie
                     // (z.B. nach Verschieben/Ändern des Kreises).
-                    if (IsKreisVermKind(en.Kind)) continue;
+                    if (IsKreisVermKind(en.Kind) || IsRktVermKind(en.Kind)) continue;
                     if (!IsDirectionConstraint(en.Kind) && IsEdgeOverridden(en)) continue;
                     ApplyVermNewEntry(en, en.Value);
                 }
@@ -5335,7 +5543,7 @@ public partial class MainWindow : Window
     private void DrawVermassungOverlay(SKCanvas canvas)
     {
         if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
-        bool hasActive = (_vermState == 1 || _vermState == 2 || _vermState == 5) && (_vermP1Idx >= 0 || _vermPtIdx >= 0 || _vermKreisIdx >= 0);
+        bool hasActive = (_vermState == 1 || _vermState == 2 || _vermState == 5) && (_vermP1Idx >= 0 || _vermPtIdx >= 0 || _vermKreisIdx >= 0 || _vermRktIdx >= 0);
         bool hasHover  = _activeTool == CanvasTool.Vermassen && (_vermHoverP1 >= 0 || _vermHoverEdge > 0 || _vermHoverPoint >= 0 || _vermHoverKreis >= 0);
         if (!hasActive && !hasHover && _vermPlaced.Count == 0) return;
 
@@ -5565,6 +5773,16 @@ public partial class MainWindow : Window
             canvas.DrawCircle(csx, csy, (float)g.Value.r, kp);
         }
 
+        void DrawRktSeiteHighlight(int rktVermIdx, SKColor col)
+        {
+            var g = GetRktSeiteGeom(rktVermIdx); if (g == null) return;
+            using var rpnt = new SKPaint { Color = col, Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)(3.5 / _zoom), IsAntialias = true, StrokeCap = SKStrokeCap.Round };
+            var (ax, ay) = Px(g.Value.a.x, g.Value.a.y);
+            var (bx, by) = Px(g.Value.b.x, g.Value.b.y);
+            canvas.DrawLine(ax, ay, bx, by, rpnt);
+        }
+
         void DrawEdgeHighlight(int edgeId, SKColor col)
         {
             if (edgeId <= 0) return;
@@ -5649,6 +5867,9 @@ public partial class MainWindow : Window
             // Gewählter Kreis (state 1 / 2 / 5)
             if (_vermState >= 1 && _vermState <= 5 && _vermKreisIdx >= 0)
                 DrawKreisHighlight(_vermKreisIdx, new SKColor(30, 120, 220, 200));
+            // Gewählte Rechteck-Seite (state 1 / 2 / 5)
+            if (_vermState >= 1 && _vermState <= 5 && _vermRktIdx >= 0)
+                DrawRktSeiteHighlight(_vermRktIdx, new SKColor(30, 120, 220, 200));
             // Aktiver Punkt (state 1, Punkt-Modus)
             if (_vermState == 1 && _vermPtIdx >= 0)
             {
@@ -5695,6 +5916,25 @@ public partial class MainWindow : Window
                     string? lblK = hideLabel ? null : (isRad ? "R " : "Ø ") + curVal.ToString("F2", inv);
                     DrawKreisDim(en.P2Idx, isRad, drawOffset, lblK);
                 }
+                continue;
+            }
+
+            // Rechteck-Bemassungen: Wert folgt der aktuellen Rechteck-Geometrie
+            if (IsRktVermKind(en.Kind))
+            {
+                var cur = RktVermActual(en); if (cur == null) continue;
+                double curVal = Math.Round(cur.Value, 3);
+                if (Math.Abs(curVal - en.Value) > 0.0005)
+                    _vermPlaced[ei] = en = en with { Value = curVal };
+                string? lblR = hideLabel ? null : curVal.ToString("F2", inv) + " mm";
+                if (en.Kind == VermKind.RktKantenDist)
+                {
+                    var m = RktSeiteMitte(en.P2Idx);
+                    if (m != null && en.Edge > 0)
+                        DrawEdgeDist(m.Value.x, m.Value.y, en.Edge, drawOffset, lblR);
+                }
+                else if (GetRktSeiteGeom(en.P2Idx) is { } rs)
+                    DrawOneLine(rs.a.x, rs.a.y, rs.b.x, rs.b.y, drawOffset, lblR);
                 continue;
             }
 
@@ -5824,13 +6064,29 @@ public partial class MainWindow : Window
         {
             DrawKreisDim(_vermKreisIdx, _vermActiveKind == VermKind.KreisRadius, _vermOffset, null);
         }
-        else if (_vermState == 2 && _vermActiveKind == VermKind.KreisKantenDist && _vermActiveEdge > 0 && _vermP2Idx >= 0)
+        else if (_vermState == 1 && _vermRktIdx >= 0 && _vermActiveEdge == 0 && _vermHoverEdge == 0)
+        {
+            // Rechteck-Seite gewählt: Seitenlänge folgt der Maus
+            if (GetRktSeiteGeom(_vermRktIdx) is { } rs)
+            {
+                double rdx = rs.b.x - rs.a.x, rdy = rs.b.y - rs.a.y;
+                DrawOneLine(rs.a.x, rs.a.y, rs.b.x, rs.b.y,
+                    VermSignedOffset(_vermMouseMm.x, _vermMouseMm.y, rs.a, rs.b),
+                    Math.Sqrt(rdx*rdx + rdy*rdy).ToString("F2", inv) + " mm");
+            }
+        }
+        else if (_vermState == 2 && _vermActiveKind == VermKind.RktSeite && _vermRktIdx >= 0)
+        {
+            DrawOneLine(_vermP1Abs.x, _vermP1Abs.y, _vermP2Abs.x, _vermP2Abs.y, _vermOffset, null);
+        }
+        else if (_vermState == 2 && _vermActiveKind is VermKind.KreisKantenDist or VermKind.RktKantenDist
+                 && _vermActiveEdge > 0 && _vermP2Idx >= 0)
         {
             DrawEdgeDist(_vermP2Abs.x, _vermP2Abs.y, _vermActiveEdge, _vermOffset, null);
         }
         else if (_vermState == 5
             && (_vermActiveKind == VermKind.EdgeDist || _vermActiveKind == VermKind.PointEdgeDist
-                || _vermActiveKind == VermKind.KreisKantenDist)
+                || _vermActiveKind == VermKind.KreisKantenDist || _vermActiveKind == VermKind.RktKantenDist)
             && _vermActiveEdge > 0 && _vermP2Idx >= 0)
         {
             // EdgeDist/PointEdgeDist-Vorschau: Masslinie folgt der Maus
@@ -8706,10 +8962,10 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 {
                     CloseVermTextBox();
                     _vermEditIdx = -1;
-                    if (_vermState == 5 && _vermActiveKind == VermKind.KreisKantenDist)
-                    { _vermActiveEdge = 0; _vermP2Idx = -1; _vermState = 1; }   // zurück zu „Kreis gewählt"
+                    if (_vermState == 5 && _vermActiveKind is VermKind.KreisKantenDist or VermKind.RktKantenDist)
+                    { _vermActiveEdge = 0; _vermP2Idx = -1; _vermState = 1; }   // zurück zu „Kreis/Rechteck-Seite gewählt"
                     else if (_vermState == 5) { _vermQ1Idx = -1; _vermQ2Idx = -1; _vermState = 1; }
-                    else if (_vermState >= 1) { _vermIsHolding = false; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermKreisIdx = -1; _vermState = 0; if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture(); }
+                    else if (_vermState >= 1) { _vermIsHolding = false; _vermP1Idx = -1; _vermQ1Idx = -1; _vermActiveEdge = 0; _vermKreisIdx = -1; _vermRktIdx = -1; _vermState = 0; if (CanvasGrid.IsMouseCaptured) CanvasGrid.ReleaseMouseCapture(); }
                     else _vermState = 0;
                     DrawSkia?.InvalidateVisual();
                 }
@@ -9055,7 +9311,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             CloseVermTextBox();
             _vermState = 0; _vermIsHolding = false; _vermP1Idx = -1; _vermP2Idx = -1;
             _vermQ1Idx = -1; _vermQ2Idx = -1; _vermEditIdx = -1; _vermActiveEdge = 0;
-            _vermKreisIdx = -1; _vermHoverKreis = -1;
+            _vermKreisIdx = -1; _vermHoverKreis = -1; _vermRktIdx = -1;
             _geomMode = GeomConstraintMode.None; _geomFirstIdx = -1; _geomFirstIdx2 = -1;
             _selectedGeomIdx = -1;
             UpdateGeomModeButtons();
@@ -11167,6 +11423,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             // State 0/1: Klick
             if (_vermState == 0)
             {
+                _vermRktIdx = -1;
                 // 1. Klick auf Label einer platzierten Masslinie → Bearbeiten
                 int labelHit = HitTestVermLabel(vpos.X, vpos.Y);
                 if (labelHit >= 0)
@@ -11217,9 +11474,20 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     CanvasGrid.CaptureMouse();
                     DrawSkia?.InvalidateVisual();
                 }
+                else if (HitTestRktVerm(vmx, vmy) is int rktHit && rktHit >= 0)
+                {
+                    // 3c. Klick auf Rechteck-Seite → Seitenlänge (Klick ins Freie) oder Kantenabstand (Klick auf parallele Kante)
+                    _vermRktIdx = rktHit;
+                    _vermKreisIdx = -1;
+                    _vermP1Idx = -1; _vermP2Idx = -1; _vermPtIdx = -1; _vermActiveEdge = 0;
+                    _vermIsHolding = false;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1; _vermHoverEdge = 0; _vermHoverKreis = -1;
+                    _vermState = 1;
+                    DrawSkia?.InvalidateVisual();
+                }
                 else if (HitTestKreisVerm(vmx, vmy) is int krHit && krHit >= 0)
                 {
-                    // 3c. Klick auf Kreis → Durchmesser/Radius (Klick ins Freie) oder Kantenabstand (Klick auf Kante)
+                    // 3d. Klick auf Kreis → Durchmesser/Radius (Klick ins Freie) oder Kantenabstand (Klick auf Kante)
                     _vermKreisIdx = krHit;
                     _vermP1Idx = -1; _vermP2Idx = -1; _vermPtIdx = -1; _vermActiveEdge = 0;
                     _vermIsHolding = false;
@@ -11248,6 +11516,16 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     int edgeHitK = HitTestWorkpieceEdge(vmx, vmy);
                     if (edgeHitK > 0) StartKreisKantenDist(_vermKreisIdx, edgeHitK);
                     else              PlaceKreisDimAt(vmx, vmy);
+                    DrawSkia?.InvalidateVisual();
+                    e.Handled = true; return;
+                }
+                // Rechteck-Seite gewählt: Klick auf parallele Kante → Kantenabstand, sonst Seitenlänge platzieren
+                if (_vermRktIdx >= 0 && _vermActiveEdge == 0)
+                {
+                    int edgeHitR = HitTestWorkpieceEdge(vmx, vmy);
+                    // Nicht parallele Kante → wie Klick ins Freie behandeln
+                    if (edgeHitR == 0 || !StartRktKantenDist(_vermRktIdx, edgeHitR))
+                        PlaceRktSeiteAt(vmx, vmy);
                     DrawSkia?.InvalidateVisual();
                     e.Handled = true; return;
                 }
@@ -11287,6 +11565,13 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     if (krHitE >= 0)
                     {
                         StartKreisKantenDist(krHitE, _vermActiveEdge);
+                        DrawSkia?.InvalidateVisual();
+                        e.Handled = true; return;
+                    }
+                    // Rechteck-Seite geklickt → Abstand Seite → Kante (nur parallele Seiten)
+                    int rktHitE = HitTestRktVerm(vmx, vmy);
+                    if (rktHitE >= 0 && StartRktKantenDist(rktHitE, _vermActiveEdge))
+                    {
                         DrawSkia?.InvalidateVisual();
                         e.Handled = true; return;
                     }
@@ -11818,7 +12103,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _vermMouseMm = (vmx, vmy);
             if (_vermState == 0)
             {
-                int ptHit  = HitTestPfadPointOrRktPoint(vmx, vmy);
+                int ptHit  = HitTestPfadPoint(vmx, vmy);
                 var hit    = ptHit < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
                 int krHit  = hit.Item1 < 0 && ptHit < 0 ? HitTestKreisVerm(vmx, vmy) : -1;
                 int edgeHit = hit.Item1 < 0 && ptHit < 0 && krHit < 0 ? HitTestWorkpieceEdge(vmx, vmy) : 0;
@@ -11834,15 +12119,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             else if (_vermState == 1 || _vermState == 5)
             {
                 // Im Warte-Modus (state 1, nicht haltend): Hover für 2. Auswahl aktualisieren
-                if (_vermState == 1 && _vermKreisIdx >= 0)
+                if (_vermState == 1 && (_vermKreisIdx >= 0 || _vermRktIdx >= 0))
                 {
-                    // Kreis gewählt: nur Werkstückkanten als 2. Auswahl hervorheben
+                    // Kreis/Rechteck-Seite gewählt: nur Werkstückkanten als 2. Auswahl hervorheben
                     _vermHoverPoint = -1; _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverKreis = -1;
                     _vermHoverEdge = HitTestWorkpieceEdge(vmx, vmy);
+                    // Rechteck-Seite: nur parallele Kanten sind bemassbar
+                    if (_vermRktIdx >= 0 && _vermHoverEdge > 0
+                        && !RktSeiteParallelZuKante(DecodeKreisVermIdx(_vermRktIdx).anker, _vermHoverEdge))
+                        _vermHoverEdge = 0;
                 }
                 else if (_vermState == 1 && !_vermIsHolding)
                 {
-                    _vermHoverPoint = HitTestPfadPointOrRktPoint(vmx, vmy);
+                    _vermHoverPoint = HitTestPfadPoint(vmx, vmy);
                     var hit = _vermHoverPoint < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
                     _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2;
                     // Kante bereits gewählt → Kreise als 2. Auswahl hervorheben
