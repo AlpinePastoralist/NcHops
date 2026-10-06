@@ -12842,7 +12842,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
         if (_pfadMouseValid && WorkX > 0 && WorkY > 0 && !_topRect.IsEmpty
             && (_activeTool is CanvasTool.PfadStart or CanvasTool.PfadLinie or CanvasTool.PfadBogen or CanvasTool.PfadSpline
                 or CanvasTool.VCarveTextSk or CanvasTool.VCarveTextSk or CanvasTool.Rechteck
-                || _activeTool == CanvasTool.Kreis))
+                or CanvasTool.Kreis or CanvasTool.NEck))
         {
             double sc2 = Math.Min(_topRect.Width / WorkX, _topRect.Height / WorkY);
             float  cx2 = (float)(_topRect.Left   + _pfadMouseMm.x * sc2);
@@ -13764,6 +13764,30 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 DrawAnchorK(cpx + rPx, cpy);      // rechts (Radius-Griff)
                 DrawAnchorK(cpx,       cpy);       // Mitte
             }
+        }
+
+        // ── N-Eck-Konturen ──
+        foreach (var entry in _history)
+        {
+            if (entry.Params is not NEckParams np || np.Ecken < 3) continue;
+            bool isSelected = HistoryList.SelectedItem == entry;
+            var (ncx, ncy) = GCodeGenerator.ConvertBezugspunkt(np.Bezugspunkt, np.XRel, np.YRel, wx, wy);
+            using var nePath = new SKPath();
+            for (int i = 0; i < np.Ecken; i++)
+            {
+                double angle = 2 * Math.PI * i / np.Ecken + np.RotationGrad * Math.PI / 180.0 - Math.PI / 2;
+                var (px, py) = MmToPx(ncx + np.Radius * Math.Cos(angle), ncy + np.Radius * Math.Sin(angle));
+                if (i == 0) nePath.MoveTo(px, py);
+                else nePath.LineTo(px, py);
+            }
+            nePath.Close();
+            var lineColor = isSelected ? new SKColor(0xFF, 0xA0, 0x00) : new SKColor(80, 80, 80, 200);
+            using var nePaint = new SKPaint
+            {
+                Color = lineColor, Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)(1.0 / _zoom), IsAntialias = true
+            };
+            canvas.DrawPath(nePath, nePaint);
         }
 
         // ── Pfad-Konturen ──
