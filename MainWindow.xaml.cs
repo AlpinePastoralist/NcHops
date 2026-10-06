@@ -181,6 +181,7 @@ public partial class MainWindow : Window
     private int _vermPtIdx      = -1;  // erster gewählter Punkt (PointDist / LineToPoint)
     private int _vermKreisIdx   = -1;  // gewählter Kreis (History-Idx) für Kreis-Bemassungen
     private int _vermHoverKreis = -1;  // gehoverter Kreis (History-Idx)
+    private int _vermHoverRkt   = -1;  // gehoverte Rechteck-Seite (History-Idx + Seite * RlbAnkerOffset)
     private int _vermRktIdx     = -1;  // gewählte Rechteck-Seite (History-Idx + Seite * RlbAnkerOffset)
     private int _vermEditIdx  = -1;   // Index in _vermPlaced für State 3/4
     private double _vermDragOffset;   // Vorschau-Offset beim Ziehen (State 3)
@@ -3089,7 +3090,7 @@ public partial class MainWindow : Window
         _vermP2Abs      = (g.Value.cx, g.Value.cy);
         _vermActiveKind = VermKind.KreisKantenDist;
         _vermOffset     = 0; _vermPtIdx = -1;
-        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1; _vermHoverKreis = -1;
+        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1; _vermHoverKreis = -1; _vermHoverRkt = -1;
         _vermState      = 5;
     }
 
@@ -3238,7 +3239,7 @@ public partial class MainWindow : Window
         _vermP2Abs      = m.Value;
         _vermActiveKind = VermKind.RktKantenDist;
         _vermOffset     = 0; _vermPtIdx = -1;
-        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1; _vermHoverKreis = -1;
+        _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverEdge = 0; _vermHoverPoint = -1; _vermHoverKreis = -1; _vermHoverRkt = -1;
         _vermState      = 5;
         return true;
     }
@@ -5544,7 +5545,7 @@ public partial class MainWindow : Window
     {
         if (_topRect.IsEmpty || WorkX <= 0 || WorkY <= 0) return;
         bool hasActive = (_vermState == 1 || _vermState == 2 || _vermState == 5) && (_vermP1Idx >= 0 || _vermPtIdx >= 0 || _vermKreisIdx >= 0 || _vermRktIdx >= 0);
-        bool hasHover  = _activeTool == CanvasTool.Vermassen && (_vermHoverP1 >= 0 || _vermHoverEdge > 0 || _vermHoverPoint >= 0 || _vermHoverKreis >= 0);
+        bool hasHover  = _activeTool == CanvasTool.Vermassen && (_vermHoverP1 >= 0 || _vermHoverEdge > 0 || _vermHoverPoint >= 0 || _vermHoverKreis >= 0 || _vermHoverRkt >= 0);
         if (!hasActive && !hasHover && _vermPlaced.Count == 0) return;
 
         // Gemeinsame Paint-Objekte
@@ -5864,6 +5865,9 @@ public partial class MainWindow : Window
             // Hover-Kreis (state 0 oder 1)
             if ((_vermState == 0 || _vermState == 1) && _vermHoverKreis >= 0)
                 DrawKreisHighlight(_vermHoverKreis, new SKColor(255, 160, 0, 220));
+            // Hover-Rechteck-Seite (state 0 oder 1)
+            if ((_vermState == 0 || _vermState == 1) && _vermHoverRkt >= 0)
+                DrawRktSeiteHighlight(_vermHoverRkt, new SKColor(255, 160, 0, 220));
             // Gewählter Kreis (state 1 / 2 / 5)
             if (_vermState >= 1 && _vermState <= 5 && _vermKreisIdx >= 0)
                 DrawKreisHighlight(_vermKreisIdx, new SKColor(30, 120, 220, 200));
@@ -9311,7 +9315,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             CloseVermTextBox();
             _vermState = 0; _vermIsHolding = false; _vermP1Idx = -1; _vermP2Idx = -1;
             _vermQ1Idx = -1; _vermQ2Idx = -1; _vermEditIdx = -1; _vermActiveEdge = 0;
-            _vermKreisIdx = -1; _vermHoverKreis = -1; _vermRktIdx = -1;
+            _vermKreisIdx = -1; _vermHoverKreis = -1; _vermHoverRkt = -1; _vermRktIdx = -1;
             _geomMode = GeomConstraintMode.None; _geomFirstIdx = -1; _geomFirstIdx2 = -1;
             _selectedGeomIdx = -1;
             UpdateGeomModeButtons();
@@ -11481,7 +11485,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     _vermKreisIdx = -1;
                     _vermP1Idx = -1; _vermP2Idx = -1; _vermPtIdx = -1; _vermActiveEdge = 0;
                     _vermIsHolding = false;
-                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1; _vermHoverEdge = 0; _vermHoverKreis = -1;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1; _vermHoverEdge = 0; _vermHoverKreis = -1; _vermHoverRkt = -1;
                     _vermState = 1;
                     DrawSkia?.InvalidateVisual();
                 }
@@ -11491,7 +11495,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                     _vermKreisIdx = krHit;
                     _vermP1Idx = -1; _vermP2Idx = -1; _vermPtIdx = -1; _vermActiveEdge = 0;
                     _vermIsHolding = false;
-                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1; _vermHoverEdge = 0; _vermHoverKreis = -1;
+                    _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverPoint = -1; _vermHoverEdge = 0; _vermHoverKreis = -1; _vermHoverRkt = -1;
                     _vermState = 1;
                     DrawSkia?.InvalidateVisual();
                 }
@@ -12103,16 +12107,19 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
             _vermMouseMm = (vmx, vmy);
             if (_vermState == 0)
             {
+                // Reihenfolge wie im Klick-Handler: Punkt → Segment → Rechteck-Seite → Kreis → Kante
                 int ptHit  = HitTestPfadPoint(vmx, vmy);
-                var hit    = ptHit < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
-                int krHit  = hit.Item1 < 0 && ptHit < 0 ? HitTestKreisVerm(vmx, vmy) : -1;
-                int edgeHit = hit.Item1 < 0 && ptHit < 0 && krHit < 0 ? HitTestWorkpieceEdge(vmx, vmy) : 0;
+                var hit    = ptHit < 0 ? HitTestPfadLineSegment(vmx, vmy) : (-1, -1);
+                int rktHit = hit.Item1 < 0 && ptHit < 0 ? HitTestRktVerm(vmx, vmy) : -1;
+                int krHit  = hit.Item1 < 0 && ptHit < 0 && rktHit < 0 ? HitTestKreisVerm(vmx, vmy) : -1;
+                int edgeHit = hit.Item1 < 0 && ptHit < 0 && rktHit < 0 && krHit < 0 ? HitTestWorkpieceEdge(vmx, vmy) : 0;
                 if (ptHit != _vermHoverPoint || hit.Item1 != _vermHoverP1 ||
-                    hit.Item2 != _vermHoverP2 || edgeHit != _vermHoverEdge || krHit != _vermHoverKreis)
+                    hit.Item2 != _vermHoverP2 || edgeHit != _vermHoverEdge || krHit != _vermHoverKreis
+                    || rktHit != _vermHoverRkt)
                 {
                     _vermHoverPoint = ptHit;
                     _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2; _vermHoverEdge = edgeHit;
-                    _vermHoverKreis = krHit;
+                    _vermHoverKreis = krHit; _vermHoverRkt = rktHit;
                     DrawSkia?.InvalidateVisual();
                 }
             }
@@ -12122,7 +12129,7 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 if (_vermState == 1 && (_vermKreisIdx >= 0 || _vermRktIdx >= 0))
                 {
                     // Kreis/Rechteck-Seite gewählt: nur Werkstückkanten als 2. Auswahl hervorheben
-                    _vermHoverPoint = -1; _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverKreis = -1;
+                    _vermHoverPoint = -1; _vermHoverP1 = -1; _vermHoverP2 = -1; _vermHoverKreis = -1; _vermHoverRkt = -1;
                     _vermHoverEdge = HitTestWorkpieceEdge(vmx, vmy);
                     // Rechteck-Seite: nur parallele Kanten sind bemassbar
                     if (_vermRktIdx >= 0 && _vermHoverEdge > 0
@@ -12132,11 +12139,18 @@ private void OnTextfeldTasche (object sender, RoutedEventArgs e) => OpenGraviere
                 else if (_vermState == 1 && !_vermIsHolding)
                 {
                     _vermHoverPoint = HitTestPfadPoint(vmx, vmy);
-                    var hit = _vermHoverPoint < 0 ? HitTestPfadSegmentOrRktSide(vmx, vmy) : (-1, -1);
+                    var hit = _vermHoverPoint < 0 ? HitTestPfadLineSegment(vmx, vmy) : (-1, -1);
                     _vermHoverP1 = hit.Item1; _vermHoverP2 = hit.Item2;
-                    // Kante bereits gewählt → Kreise als 2. Auswahl hervorheben
+                    // Kante bereits gewählt → Kreise und (parallele) Rechteck-Seiten als 2. Auswahl hervorheben
                     _vermHoverKreis = _vermActiveEdge > 0 && hit.Item1 < 0 && _vermHoverPoint < 0
                         ? HitTestKreisVerm(vmx, vmy) : -1;
+                    _vermHoverRkt = -1;
+                    if (_vermActiveEdge > 0 && hit.Item1 < 0 && _vermHoverPoint < 0 && _vermHoverKreis < 0)
+                    {
+                        int rh = HitTestRktVerm(vmx, vmy);
+                        if (rh >= 0 && RktSeiteParallelZuKante(DecodeKreisVermIdx(rh).anker, _vermActiveEdge))
+                            _vermHoverRkt = rh;
+                    }
                     if (_vermActiveEdge == 0)
                         _vermHoverEdge = hit.Item1 < 0 && _vermHoverPoint < 0
                             ? HitTestWorkpieceEdge(vmx, vmy) : 0;
